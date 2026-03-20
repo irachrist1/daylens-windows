@@ -4,6 +4,12 @@ import { IPC } from '@shared/types'
 
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
 const api = {
+  // Window controls — used by the custom TitleBar (needed on Windows frameless)
+  win: {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    maximize: () => ipcRenderer.send('window:maximize'),
+    close: () => ipcRenderer.send('window:close'),
+  },
   db: {
     getToday: () => ipcRenderer.invoke(IPC.DB.GET_TODAY),
     getHistory: (date: string) => ipcRenderer.invoke(IPC.DB.GET_HISTORY, date),

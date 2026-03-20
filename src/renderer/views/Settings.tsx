@@ -21,57 +21,66 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-6 max-w-lg mx-auto">
-      <h1 className="text-lg font-semibold text-[var(--color-text-primary)] mb-6">Settings</h1>
+    <div className="p-7 max-w-lg mx-auto">
+      <p className="section-label mb-1">Settings</p>
+      <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-8">Preferences</h1>
 
-      <div className="flex flex-col gap-5">
-        {/* API key */}
-        <div>
-          <label className="block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1.5">
-            Anthropic API key
-          </label>
-          <input
-            type="password"
-            value={settings.anthropicApiKey}
-            onChange={(e) => setSettings((s) => ({ ...s, anthropicApiKey: e.target.value }))}
-            placeholder="sk-ant-…"
-            className="w-full px-3 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)] font-mono"
-          />
-          <p className="text-[11px] text-[var(--color-text-secondary)] mt-1">
-            Stored in electron-store on your machine. Never sent anywhere except Anthropic.
-          </p>
-        </div>
-
-        {/* Tracking toggle */}
-        <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4">
+        {/* AI section */}
+        <div className="card">
+          <p className="section-label mb-4">AI</p>
           <div>
-            <p className="text-[13px] text-[var(--color-text-primary)]">Enable tracking</p>
-            <p className="text-[11px] text-[var(--color-text-secondary)]">
-              Track active app usage in the background
+            <label className="block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1.5">
+              Anthropic API key
+            </label>
+            <input
+              type="password"
+              value={settings.anthropicApiKey}
+              onChange={(e) => setSettings((s) => ({ ...s, anthropicApiKey: e.target.value }))}
+              placeholder="sk-ant-…"
+              className="w-full px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-high)] text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] outline-none focus:border-[var(--color-accent)] font-mono transition-colors"
+            />
+            <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1.5">
+              Stored locally. Never sent anywhere except Anthropic.
             </p>
           </div>
-          <button
-            onClick={() => setSettings((s) => ({ ...s, trackingEnabled: !s.trackingEnabled }))}
-            className={[
-              'w-10 h-6 rounded-full transition-colors relative',
-              settings.trackingEnabled
-                ? 'bg-[var(--color-accent)]'
-                : 'bg-[var(--color-surface-overlay)]',
-            ].join(' ')}
-          >
-            <span
+        </div>
+
+        {/* General section */}
+        <div className="card">
+          <p className="section-label mb-4">Tracking</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[13px] text-[var(--color-text-primary)] font-medium">Enable tracking</p>
+              <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5">
+                Record active app usage in the background
+              </p>
+            </div>
+            <button
+              onClick={() => setSettings((s) => ({ ...s, trackingEnabled: !s.trackingEnabled }))}
               className={[
-                'absolute top-1 w-4 h-4 rounded-full bg-white transition-transform',
-                settings.trackingEnabled ? 'translate-x-5' : 'translate-x-1',
+                'w-10 h-6 rounded-full transition-colors relative shrink-0',
+                settings.trackingEnabled
+                  ? 'bg-[var(--color-accent)]'
+                  : 'bg-[var(--color-surface-high)]',
               ].join(' ')}
-            />
-          </button>
+            >
+              <span
+                className={[
+                  'absolute top-1 w-4 h-4 rounded-full transition-transform',
+                  settings.trackingEnabled
+                    ? 'translate-x-5 bg-[var(--color-surface)]'
+                    : 'translate-x-1 bg-[var(--color-text-secondary)]',
+                ].join(' ')}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Save */}
         <button
           onClick={handleSave}
-          className="mt-2 px-5 py-2 rounded-md bg-[var(--color-accent)] text-white text-[13px] font-medium hover:opacity-90 transition-opacity self-start"
+          className="px-5 py-2.5 rounded-lg bg-[var(--color-accent)] text-[var(--color-surface)] text-[13px] font-medium hover:opacity-90 transition-opacity self-start"
         >
           {saved ? 'Saved ✓' : 'Save changes'}
         </button>

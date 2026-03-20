@@ -1,17 +1,38 @@
 @import "tailwindcss";
 
-/* Daylens design tokens */
+/*
+  Chromatic Sanctuary — dark mode
+  Adapted from the macOS Daylens design system.
+  Navy-based surfaces, electric blue accent, calm + premium.
+*/
 @theme {
-  --color-surface: #0f0f11;
-  --color-surface-raised: #17171a;
-  --color-surface-overlay: #1e1e22;
-  --color-border: #2a2a2e;
-  --color-text-primary: #f0f0f2;
-  --color-text-secondary: #9090a0;
-  --color-accent: #7c6cfc;
-  --color-accent-dim: #7c6cfc33;
-  --color-focus-green: #22c55e;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  /* Surface hierarchy (deep → raised) */
+  --color-surface-lowest:    #010f20;
+  --color-surface:           #051425;
+  --color-surface-container: #0d1c2e;
+  --color-surface-high:      #122032;
+  --color-surface-card:      #1d2b3d;
+  --color-surface-bright:    #2c3a4d;
+
+  /* Borders */
+  --color-border: #1c2d3e;
+
+  /* Text */
+  --color-text-primary:   #c8dcf4;
+  --color-text-secondary: #5e7a92;
+  --color-text-tertiary:  #3d5568;
+
+  /* Brand accent — electric blue (dark mode) */
+  --color-accent:     #b4c5ff;
+  --color-accent-dim: rgba(180, 197, 255, 0.12);
+
+  /* Category accent — keep legacy names working */
+  --color-surface-raised:   #122032;   /* alias for surface-high */
+  --color-surface-overlay:  #1d2b3d;   /* alias for surface-card */
+  --color-focus-green:      #4fdbc8;   /* tertiary teal */
+
+  /* Font stack */
+  --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
 * {
@@ -28,12 +49,21 @@ body,
   color: var(--color-text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* Scrollbar */
+/* Electron drag region helpers */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Thin, calm scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -43,5 +73,22 @@ body,
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-secondary);
+  background: var(--color-text-tertiary);
+}
+
+/* Card base — used across views */
+.card {
+  background: var(--color-surface-card);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  padding: 16px;
+}
+
+/* Section header — 10pt uppercase label */
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
 }

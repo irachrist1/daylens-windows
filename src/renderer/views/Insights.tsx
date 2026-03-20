@@ -44,22 +44,33 @@ export default function Insights() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)]">
-        <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">Insights</h1>
-        <button
-          onClick={() => ipc.ai.clearHistory().then(() => setMessages([]))}
-          className="text-[12px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
-        >
-          Clear
-        </button>
+      <div className="flex items-center justify-between px-7 py-5 border-b border-[var(--color-border)]">
+        <div>
+          <p className="section-label mb-0.5">AI</p>
+          <h1 className="text-[17px] font-semibold text-[var(--color-text-primary)] tracking-tight leading-none">
+            Insights
+          </h1>
+        </div>
+        {messages.length > 0 && (
+          <button
+            onClick={() => ipc.ai.clearHistory().then(() => setMessages([]))}
+            className="text-[12px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors px-3 py-1.5 rounded-lg hover:bg-[var(--color-surface-high)]"
+          >
+            New chat
+          </button>
+        )}
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4">
+      <div className="flex-1 overflow-y-auto px-7 py-5 flex flex-col gap-4">
         {messages.length === 0 && !loading && (
-          <p className="text-[var(--color-text-secondary)] text-[13px]">
-            Ask anything about your activity — e.g. "How was my focus this week?"
-          </p>
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <div className="text-3xl mb-3 opacity-20">✦</div>
+            <p className="text-[14px] font-medium text-[var(--color-text-primary)] mb-1">Ask about your day</p>
+            <p className="text-[13px] text-[var(--color-text-secondary)]">
+              "How was my focus this week?" · "Which app used most of my time?"
+            </p>
+          </div>
         )}
         {messages.map((m, i) => (
           <div
@@ -68,10 +79,10 @@ export default function Insights() {
           >
             <div
               className={[
-                'px-4 py-2.5 rounded-xl text-[13px] leading-relaxed',
+                'px-4 py-3 rounded-xl text-[13px] leading-relaxed',
                 m.role === 'user'
-                  ? 'bg-[var(--color-accent)] text-white'
-                  : 'bg-[var(--color-surface-raised)] text-[var(--color-text-primary)] border border-[var(--color-border)]',
+                  ? 'bg-[var(--color-accent)] text-[var(--color-surface)]'
+                  : 'bg-[var(--color-surface-card)] text-[var(--color-text-primary)] border border-[var(--color-border)]',
               ].join(' ')}
             >
               {m.content}
@@ -80,7 +91,7 @@ export default function Insights() {
         ))}
         {loading && (
           <div className="self-start">
-            <div className="px-4 py-2.5 rounded-xl bg-[var(--color-surface-raised)] border border-[var(--color-border)] text-[var(--color-text-secondary)] text-[13px]">
+            <div className="px-4 py-3 rounded-xl bg-[var(--color-surface-card)] border border-[var(--color-border)] text-[var(--color-text-secondary)] text-[13px]">
               Thinking…
             </div>
           </div>
@@ -88,8 +99,8 @@ export default function Insights() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="px-6 py-4 border-t border-[var(--color-border)]">
+      {/* Composer */}
+      <div className="px-7 py-4 border-t border-[var(--color-border)]">
         <div className="flex gap-2">
           <input
             type="text"
@@ -98,12 +109,12 @@ export default function Insights() {
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
             placeholder="Ask about your productivity…"
             disabled={loading}
-            className="flex-1 px-3 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+            className="flex-1 px-4 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-card)] text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-50 transition-colors"
           />
           <button
             onClick={handleSend}
             disabled={loading || !input.trim()}
-            className="px-4 py-2 rounded-md bg-[var(--color-accent)] text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-40 transition-opacity"
+            className="px-5 py-2.5 rounded-lg bg-[var(--color-accent)] text-[var(--color-surface)] text-[13px] font-medium hover:opacity-90 disabled:opacity-40 transition-opacity shrink-0"
           >
             Send
           </button>

@@ -17,36 +17,51 @@ export default function History() {
   }, [date])
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">History</h1>
+    <div className="p-7 max-w-3xl mx-auto">
+      <div className="flex items-center justify-between mb-7">
+        <div>
+          <p className="section-label mb-1">History</p>
+          <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">
+            {sessions.length > 0 ? `${sessions.length} sessions` : 'Browse past days'}
+          </h1>
+        </div>
         <input
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
-          className="px-3 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] text-[13px] text-[var(--color-text-primary)] outline-none"
+          className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-card)] text-[13px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] transition-colors"
         />
       </div>
 
       {loading ? (
-        <p className="text-[var(--color-text-secondary)] text-sm">Loading…</p>
+        <div className="flex flex-col gap-px overflow-hidden rounded-xl border border-[var(--color-border)]">
+          {[...Array(8)].map((_, i) => (
+            <div key={i} className="h-12 bg-[var(--color-surface-card)] animate-pulse" />
+          ))}
+        </div>
       ) : sessions.length === 0 ? (
-        <p className="text-[var(--color-text-secondary)] text-sm">No sessions recorded for this date.</p>
+        <div className="card flex flex-col items-center justify-center py-12 text-center">
+          <p className="text-[14px] font-medium text-[var(--color-text-primary)] mb-1">No sessions</p>
+          <p className="text-[13px] text-[var(--color-text-secondary)]">No activity recorded for this date.</p>
+        </div>
       ) : (
-        <div className="flex flex-col gap-1">
-          {sessions.map((s) => (
+        <div className="card p-0 overflow-hidden">
+          {sessions.map((s, i) => (
             <div
               key={s.id}
-              className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-[var(--color-surface-raised)]"
+              className={[
+                'flex items-center gap-3 px-4 py-3 hover:bg-[var(--color-surface-high)] transition-colors',
+                i < sessions.length - 1 ? 'border-b border-[var(--color-border)]' : '',
+              ].join(' ')}
             >
-              <span className="text-[11px] text-[var(--color-text-secondary)] w-20 shrink-0">
+              <span className="text-[11px] text-[var(--color-text-tertiary)] w-[72px] shrink-0 tabular-nums">
                 {formatTime(s.startTime)}
               </span>
-              <div className="w-7 h-7 rounded-md bg-[var(--color-surface-overlay)] flex items-center justify-center text-xs font-semibold text-[var(--color-text-secondary)]">
-                {s.appName.slice(0, 2)}
+              <div className="w-7 h-7 rounded-md bg-[var(--color-surface-high)] flex items-center justify-center text-[11px] font-semibold text-[var(--color-text-secondary)] shrink-0">
+                {s.appName.slice(0, 2).toUpperCase()}
               </div>
               <p className="flex-1 text-[13px] text-[var(--color-text-primary)] truncate">{s.appName}</p>
-              <span className="text-[12px] text-[var(--color-text-secondary)] shrink-0">
+              <span className="text-[12px] text-[var(--color-text-secondary)] shrink-0 tabular-nums">
                 {formatDuration(s.durationSeconds)}
               </span>
             </div>
