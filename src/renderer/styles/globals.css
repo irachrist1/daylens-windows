@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* Daylens design tokens */
+@theme {
+  --color-surface: #0f0f11;
+  --color-surface-raised: #17171a;
+  --color-surface-overlay: #1e1e22;
+  --color-border: #2a2a2e;
+  --color-text-primary: #f0f0f2;
+  --color-text-secondary: #9090a0;
+  --color-accent: #7c6cfc;
+  --color-accent-dim: #7c6cfc33;
+  --color-focus-green: #22c55e;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
