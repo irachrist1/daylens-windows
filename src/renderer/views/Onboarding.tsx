@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
+import { track } from '../lib/analytics'
 
 // ─── Goal definitions ─────────────────────────────────────────────────────────
 
@@ -313,6 +314,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
 
   async function finish(skipApiKey = false) {
     const key = skipApiKey ? '' : apiKey.trim()
+    track('onboarding_completed', { goals: Array.from(goals), api_key_entered: !!key })
+    if (key) track('api_key_saved', {})
     await ipc.settings.set({
       onboardingComplete: true,
       userName: name.trim(),
@@ -336,7 +339,12 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           <Screen1
             name={name}
             onNameChange={setName}
-            onContinue={() => name.trim() && transition(2)}
+            onContinue={() => {
+              if (name.trim()) {
+                track('onboarding_step_completed', { step: 1 })
+                transition(2)
+              }
+            }}
           />
         )}
         {screen === 2 && (
@@ -344,7 +352,10 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
             name={name.trim()}
             goals={goals}
             onGoalToggle={toggleGoal}
-            onContinue={() => transition(3)}
+            onContinue={() => {
+              track('onboarding_step_completed', { step: 2, goals: Array.from(goals) })
+              transition(3)
+            }}
           />
         )}
         {screen === 3 && (

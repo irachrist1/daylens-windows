@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ipc } from '../lib/ipc'
+import { track } from '../lib/analytics'
 import { formatDuration } from '../lib/format'
 import type { AppUsageSummary } from '@shared/types'
 
@@ -233,6 +234,7 @@ export default function Insights() {
   async function handleSend(text?: string) {
     const msg = (text ?? input).trim()
     if (!msg || loading) return
+    track('insight_generated', { message_length: msg.length })
     setInput('')
     setMessages((prev) => [...prev, { role: 'user', content: msg }])
     setLoading(true)

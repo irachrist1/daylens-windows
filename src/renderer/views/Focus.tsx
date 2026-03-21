@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
+import { track } from '../lib/analytics'
 import { dateStringFromMs, formatDuration, formatRelativeDate, formatTime, percentOf, rollingDayBounds } from '../lib/format'
 import type { AppUsageSummary, FocusSession, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
@@ -148,6 +149,7 @@ export default function Focus() {
   async function handleStart() {
     if (active) return
     const id = (await ipc.focus.start(label || undefined)) as number
+    track('focus_session_started', {})
     const session: FocusSession = {
       id,
       startTime:       Date.now(),
@@ -164,6 +166,7 @@ export default function Focus() {
   async function handleStop() {
     if (!active) return
     const completedDuration = elapsed
+    track('focus_session_ended', { duration_seconds: completedDuration, completed: true })
     await ipc.focus.stop(active.id)
     const [updatedRecent, updatedSummaries, updatedLive] = await Promise.all([
       ipc.focus.getRecent(10),

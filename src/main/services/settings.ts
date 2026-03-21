@@ -21,6 +21,8 @@ const DEFAULTS: AppSettings = {
   userName: '',
   userGoals: [],
   dailyFocusGoalHours: 4,
+  firstLaunchDate: 0,
+  feedbackPromptShown: false,
 }
 
 export function getSettings(): AppSettings {
@@ -36,6 +38,8 @@ export function getSettings(): AppSettings {
     userName: (_store.get('userName', '') as string),
     userGoals: (_store.get('userGoals', []) as string[]),
     dailyFocusGoalHours: (_store.get('dailyFocusGoalHours', 4) as number),
+    firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
+    feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
   }
 }
 

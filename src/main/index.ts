@@ -2,6 +2,10 @@
 process.on('uncaughtException', (err) => {
   console.error('[fatal] uncaughtException:', err)
   try {
+    const { capture: analyticsCapture } = require('./services/analytics') as typeof import('./services/analytics')
+    analyticsCapture('crash', { error_name: err.name, error_message: err.message, stack: err.stack })
+  } catch { /* analytics may not be ready */ }
+  try {
     const { dialog: d } = require('electron') as typeof import('electron')
     d.showErrorBox('Daylens crashed', `${err.name}: ${err.message}\n\nPlease restart Daylens.`)
   } catch { /* dialog may not be ready */ }
@@ -12,7 +16,9 @@ process.on('unhandledRejection', (reason) => {
 })
 
 import { BrowserWindow, app, dialog, ipcMain, nativeImage, shell } from 'electron'
+import os from 'node:os'
 import path from 'node:path'
+import { capture, shutdown } from './services/analytics'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
@@ -20,13 +26,14 @@ import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { initDb, closeDb } from './services/database'
-import { initSettings, getSettings } from './services/settings'
-import { startTracking, stopTracking } from './services/tracking'
+import { initSettings, getSettings, setSettings } from './services/settings'
+import { startTracking, stopTracking, trackingStatus } from './services/tracking'
 import { startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { startSync, stopSync, finalizePreviousDay } from './services/syncUploader'
 import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray } from './tray'
+import { initUpdater } from './services/updater'
 
 // Fix macOS path collision with native Swift companion app.
 // Electron defaults userData to ~/Library/Application Support/<productName> which on macOS
@@ -160,12 +167,32 @@ app.on('before-quit', () => {
   stopSync()
   closeDb()
   destroyTray()
+  shutdown()
+})
+
+// Analytics IPC — renderer sends events through main process (network stays in main)
+ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, unknown>) => {
+  capture(event, properties)
 })
 
 app.whenReady()
   .then(async () => {
     await initSettings()
     app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
+
+    // Set firstLaunchDate on first run (used for day-7 feedback prompt)
+    const s = getSettings()
+    if (!s.firstLaunchDate) {
+      await setSettings({ firstLaunchDate: Date.now() })
+    }
+
+    capture('app_launched', {
+      version: app.getVersion(),
+      platform: process.platform,
+      os_version: os.release(),
+      onboarding_complete: getSettings().onboardingComplete,
+    })
+
     initDb()
 
     registerDbHandlers()
@@ -177,6 +204,7 @@ app.whenReady()
 
     mainWindow = createWindow()
     createTray(mainWindow)
+    initUpdater(mainWindow)
 
     startTracking()
     startBrowserTracking()
@@ -187,19 +215,14 @@ app.whenReady()
       try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
     }, 3_000)
 
-    // Deferred 30s — check for newer release
-    setTimeout(async () => {
-      try {
-        const res = await fetch(
-          'https://api.github.com/repos/irachrist1/daylens-windows/releases/latest',
-          { headers: { 'User-Agent': 'daylens-windows' } }
-        )
-        if (!res.ok) return
-        const data = await res.json() as { tag_name: string }
-        const latest = data.tag_name.replace(/^v/, '').replace(/-win$/, '')
-        if (latest !== app.getVersion()) updateAvailable = latest
-      } catch { /* silent */ }
-    }, 30_000)
+    // Deferred 5s — report tracking engine health
+    setTimeout(() => {
+      capture('tracking_engine_status', {
+        status: trackingStatus.moduleSource ? 'ok' : 'error',
+        module_source: trackingStatus.moduleSource,
+        ...(trackingStatus.loadError ? { error_message: trackingStatus.loadError } : {}),
+      })
+    }, 5_000)
 
     // Deferred 10s — background maintenance
     setTimeout(() => {

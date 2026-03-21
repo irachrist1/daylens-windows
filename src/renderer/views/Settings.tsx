@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { ipc } from '../lib/ipc'
+import { track } from '../lib/analytics'
 import { formatDuration, formatTime } from '../lib/format'
 import type { AppSettings, AppTheme } from '@shared/types'
+import FeedbackModal from '../components/FeedbackModal'
 
 interface DebugInfo {
   dbPath: string
@@ -52,9 +54,12 @@ export default function Settings() {
     userName: '',
     userGoals: [],
     dailyFocusGoalHours: 4,
+    firstLaunchDate: 0,
+    feedbackPromptShown: false,
   })
-  const [saved, setSaved]         = useState<string | null>(null)
-  const [debugOpen, setDebugOpen] = useState(false)
+  const [saved, setSaved]               = useState<string | null>(null)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [debugOpen, setDebugOpen]       = useState(false)
   const [debug, setDebug]         = useState<DebugInfo | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [linking, setLinking] = useState(false)
@@ -83,6 +88,7 @@ export default function Settings() {
 
   async function handleApiKeySave() {
     await ipc.settings.set({ anthropicApiKey: settings.anthropicApiKey })
+    if (settings.anthropicApiKey.trim()) track('api_key_saved', {})
     flashSaved(settings.anthropicApiKey.trim() ? 'API key saved' : 'API key cleared')
   }
 
@@ -451,6 +457,15 @@ export default function Settings() {
 
         {/* App version */}
         <AppVersionLine />
+
+        {/* Send feedback */}
+        <button
+          onClick={() => setFeedbackOpen(true)}
+          className="px-5 py-2.5 rounded-lg border border-[var(--color-border)] text-[13px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-accent)] transition-colors self-start"
+        >
+          Send feedback
+        </button>
+        {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
 
         {/* ── Developer Info ──────────────────────────────────────────── */}
         <div

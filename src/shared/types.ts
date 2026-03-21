@@ -67,6 +67,8 @@ export interface AppSettings {
   userName: string
   userGoals: string[]
   dailyFocusGoalHours: number
+  firstLaunchDate: number       // Unix ms — set on first launch, used for day-7 feedback prompt
+  feedbackPromptShown: boolean  // true once the day-7 prompt has been shown
 }
 
 // In-flight session that has not yet been flushed to the DB.

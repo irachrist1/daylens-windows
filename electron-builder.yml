@@ -40,4 +40,7 @@ asarUnpack:
   - "node_modules/@paymoapp/active-window/**"
   - "node_modules/keytar/**"
 
-publish: null
+publish:
+  provider: github
+  owner: irachrist1
+  repo: daylens-windows

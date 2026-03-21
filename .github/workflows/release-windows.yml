@@ -55,7 +55,7 @@ jobs:
           npx vite build --config vite.renderer.config.ts
 
       - name: Package with electron-builder
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

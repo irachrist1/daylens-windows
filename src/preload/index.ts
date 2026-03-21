@@ -56,6 +56,23 @@ const api = {
   shell: {
     openExternal: (url: string) => ipcRenderer.send(IPC.SHELL.OPEN_EXTERNAL, url),
   },
+  analytics: {
+    capture: (event: string, properties: Record<string, unknown>) =>
+      ipcRenderer.send('analytics:capture', event, properties),
+  },
+  updater: {
+    onStatus: (
+      callback: (info: { status: 'available' | 'downloaded'; version: string }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        info: { status: 'available' | 'downloaded'; version: string },
+      ) => callback(info)
+      ipcRenderer.on('update:status', handler)
+      return () => { ipcRenderer.removeListener('update:status', handler) }
+    },
+    install: () => ipcRenderer.send('update:install'),
+  },
 }
 
 contextBridge.exposeInMainWorld('daylens', api)
