@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import path from 'node:path'
 import { SCHEMA_SQL } from '../db/schema'
+import { runMigrations } from '../db/migrations'
 
 let _db: Database.Database | null = null
 
@@ -20,6 +21,9 @@ export function initDb(): void {
 
   // Apply schema (all CREATE TABLE IF NOT EXISTS — safe to run every launch)
   _db.exec(SCHEMA_SQL)
+
+  // Run versioned migrations (adds daily_summaries, etc.)
+  runMigrations()
 
   console.log('[db] initialised at', dbPath)
 }

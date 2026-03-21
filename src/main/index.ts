@@ -9,6 +9,8 @@ import { initDb, closeDb } from './services/database'
 import { initSettings } from './services/settings'
 import { startTracking, stopTracking } from './services/tracking'
 import { startBrowserTracking, stopBrowserTracking } from './services/browser'
+import { startSync, stopSync, finalizePreviousDay } from './services/syncUploader'
+import { computeAllMissingSummaries } from './db/dailySummaries'
 import { createTray, destroyTray } from './tray'
 
 // Fix macOS path collision with native Swift companion app.
@@ -101,6 +103,7 @@ app.on('before-quit', () => {
   isQuitting = true
   stopTracking()
   stopBrowserTracking()
+  stopSync()
   closeDb()
   destroyTray()
 })
@@ -120,6 +123,13 @@ app.whenReady().then(async () => {
 
   startTracking()
   startBrowserTracking()
+  startSync()
+
+  // Compute any missing daily summaries in the background
+  try { computeAllMissingSummaries() } catch (err) { console.warn('[init] daily summaries:', err) }
+
+  // Finalize previous day's snapshot shortly after startup
+  setTimeout(() => finalizePreviousDay(), 30_000)
 })
 
 app.on('window-all-closed', () => {
