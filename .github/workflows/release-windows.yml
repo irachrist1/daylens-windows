@@ -30,11 +30,21 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Stamp version into package.json
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ steps.meta.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Rebuild native modules for Electron
-        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
 
       - name: Build Vite bundles
         shell: bash
@@ -49,14 +59,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate SHA256 checksums
-        shell: bash
-        run: |
-          cd dist-release
-          for f in *.exe; do
-            sha256sum "$f" > "$f.sha256"
-          done
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -69,28 +71,17 @@ jobs:
 
             Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud, no telemetry.
 
-            ### Downloads
+            ### Install
 
-            | File | Description |
-            |------|-------------|
-            | `Daylens-${{ steps.meta.outputs.version }}-x64-Setup.exe` | Windows installer (x64) |
-            | `Daylens-${{ steps.meta.outputs.version }}-Portable.exe` | Portable — no install needed (x64) |
+            1. Download `Daylens-${{ steps.meta.outputs.version }}-Setup.exe` below
+            2. Run it — Windows may show a security warning, click **"More info" → "Run anyway"**
+            3. Daylens launches automatically when done
 
             ### System requirements
             - Windows 10 or later (64-bit)
             - Internet connection only for AI features (Claude API key)
 
-            ### Install
-            1. Download the Setup .exe above
-            2. Run the installer — it will guide you through
-            3. Launch Daylens from the Start menu
-
-            Or use the portable .exe if you prefer not to install.
-
             ### Also available
-            - **macOS**: `brew install --cask daylens` — [macOS releases](https://github.com/irachrist1/daylens/releases)
-
-            SHA256 checksums are attached for verification.
+            - **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)
           files: |
-            dist-release/*.exe
-            dist-release/*.sha256
+            dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe

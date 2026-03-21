@@ -17,30 +17,23 @@ win:
   target:
     - target: nsis
       arch: [x64]
-    - target: portable
-      arch: [x64]
   icon: build/icon.ico
-  artifactName: "Daylens-${version}-${arch}-Setup.${ext}"
+  artifactName: "Daylens-${version}-Setup.${ext}"
 
 nsis:
-  oneClick: false
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.ico
-  uninstallerIcon: build/icon.ico
-  installerHeaderIcon: build/icon.ico
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Daylens
-
-portable:
-  artifactName: "Daylens-${version}-Portable.${ext}"
+  runAfterFinish: true
 
 asar: true
 
-# Native modules
+# Native modules that must be unpacked from the asar archive
 asarUnpack:
   - "node_modules/better-sqlite3/**"
   - "node_modules/@paymoapp/active-window/**"
+  - "node_modules/keytar/**"
 
 publish: null
