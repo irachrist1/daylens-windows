@@ -33,8 +33,8 @@ export default defineConfig({
       // Native addons and electron itself must not be bundled.
       external: ['electron', 'better-sqlite3', '@paymoapp/active-window', 'keytar'],
       output: {
-        // Force output to main.js so it matches package.json "main" field
-        // and doesn't collide with the preload (also index.ts → index.js by default).
+        format: 'cjs',
+        inlineDynamicImports: true,
         entryFileNames: 'main.js',
       },
     },

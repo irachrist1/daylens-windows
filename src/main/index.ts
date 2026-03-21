@@ -24,8 +24,8 @@ if (process.platform === 'darwin') {
   try { app.dock.setIcon(nativeImage.createFromPath(dockIcon)) } catch { /* packaged builds embed the icon */ }
 }
 
-// Handle Squirrel events on Windows (installer lifecycle)
-if (require('electron-squirrel-startup')) app.quit()
+// Production Windows releases ship via NSIS through electron-builder, not Squirrel.
+// Keep startup free of Squirrel-only hooks so packaged builds can boot normally.
 
 // Single-instance lock — prevents duplicate processes on hot-reload
 const gotTheLock = app.requestSingleInstanceLock()
