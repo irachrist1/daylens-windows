@@ -1,13 +1,25 @@
-import { BrowserWindow, app, ipcMain } from 'electron'
+import { BrowserWindow, app, ipcMain, nativeImage } from 'electron'
 import path from 'node:path'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
+import { registerDebugHandlers } from './ipc/debug.handlers'
 import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { initDb, closeDb } from './services/database'
 import { initSettings } from './services/settings'
 import { startTracking, stopTracking } from './services/tracking'
+import { startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { createTray, destroyTray } from './tray'
+
+// Fix macOS path collision with native Swift companion app.
+// Electron defaults userData to ~/Library/Application Support/<productName> which on macOS
+// would be "Daylens" — the same folder the Swift app owns. Must be called before app.whenReady().
+if (process.platform === 'darwin') {
+  app.setPath('userData', path.join(app.getPath('appData'), 'DaylensWindows'))
+  // Set Dock icon from build assets so it shows the app icon during development
+  const dockIcon = path.join(__dirname, '..', '..', 'build', 'icon.png')
+  try { app.dock.setIcon(nativeImage.createFromPath(dockIcon)) } catch { /* packaged builds embed the icon */ }
+}
 
 // Handle Squirrel events on Windows (installer lifecycle)
 if (require('electron-squirrel-startup')) app.quit()
@@ -26,11 +38,15 @@ let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 
 function createWindow(): BrowserWindow {
+  const iconExt = process.platform === 'darwin' ? 'icns' : 'ico'
+  const iconPath = path.join(__dirname, '..', '..', 'build', `icon.${iconExt}`)
+
   const win = new BrowserWindow({
     width: 1100,
     height: 720,
     minWidth: 820,
     minHeight: 580,
+    icon: iconPath,
     // Hidden title bar on both platforms so the renderer owns the full chrome.
     // On macOS the traffic lights are preserved at trafficLightPosition.
     // On Windows this removes the native frame entirely — custom TitleBar handles drag.
@@ -39,7 +55,7 @@ function createWindow(): BrowserWindow {
     // Prevent white flash before the renderer paints
     backgroundColor: '#051425',
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -84,6 +100,7 @@ ipcMain.on('window:close', () => {
 app.on('before-quit', () => {
   isQuitting = true
   stopTracking()
+  stopBrowserTracking()
   closeDb()
   destroyTray()
 })
@@ -93,6 +110,7 @@ app.whenReady().then(async () => {
   initDb()
 
   registerDbHandlers()
+  registerDebugHandlers()
   registerFocusHandlers()
   registerAIHandlers()
   registerSettingsHandlers()
@@ -101,6 +119,7 @@ app.whenReady().then(async () => {
   createTray(mainWindow)
 
   startTracking()
+  startBrowserTracking()
 })
 
 app.on('window-all-closed', () => {

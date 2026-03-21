@@ -2,7 +2,12 @@ import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 import path from 'node:path'
 
+const isStandalone = process.env.STANDALONE_BUILD === '1'
+
 export default defineConfig({
+  // index.html lives in src/renderer/, not the project root
+  root: path.resolve(__dirname, 'src/renderer'),
+  base: './',
   plugins: [tailwindcss()],
   resolve: {
     alias: {
@@ -10,4 +15,10 @@ export default defineConfig({
       '@shared': path.resolve(__dirname, 'src/shared'),
     },
   },
+  ...(isStandalone && {
+    build: {
+      outDir: path.resolve(__dirname, 'dist/renderer/main_window'),
+      emptyOutDir: true,
+    },
+  }),
 })

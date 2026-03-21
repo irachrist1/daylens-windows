@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import {
   getActiveFocusSession,
+  getRecentFocusSessions,
   startFocusSession,
   stopFocusSession,
 } from '../db/queries'
@@ -18,5 +19,9 @@ export function registerFocusHandlers(): void {
 
   ipcMain.handle(IPC.FOCUS.GET_ACTIVE, () => {
     return getActiveFocusSession(getDb())
+  })
+
+  ipcMain.handle(IPC.FOCUS.GET_RECENT, (_e, limit: number = 20) => {
+    return getRecentFocusSessions(getDb(), limit)
   })
 }

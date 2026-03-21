@@ -1,38 +1,88 @@
 @import "tailwindcss";
 
-/*
-  Chromatic Sanctuary — dark mode
-  Adapted from the macOS Daylens design system.
-  Navy-based surfaces, electric blue accent, calm + premium.
-*/
-@theme {
-  /* Surface hierarchy (deep → raised) */
+:root {
+  color-scheme: dark;
+
   --color-surface-lowest:    #010f20;
   --color-surface:           #051425;
   --color-surface-container: #0d1c2e;
   --color-surface-high:      #122032;
   --color-surface-card:      #1d2b3d;
   --color-surface-bright:    #2c3a4d;
-
-  /* Borders */
-  --color-border: #1c2d3e;
-
-  /* Text */
-  --color-text-primary:   #c8dcf4;
-  --color-text-secondary: #5e7a92;
-  --color-text-tertiary:  #3d5568;
-
-  /* Brand accent — electric blue (dark mode) */
-  --color-accent:     #b4c5ff;
-  --color-accent-dim: rgba(180, 197, 255, 0.12);
-
-  /* Category accent — keep legacy names working */
-  --color-surface-raised:   #122032;   /* alias for surface-high */
-  --color-surface-overlay:  #1d2b3d;   /* alias for surface-card */
-  --color-focus-green:      #4fdbc8;   /* tertiary teal */
-
-  /* Font stack */
+  --color-border:            #1c2d3e;
+  --color-text-primary:      #c8dcf4;
+  --color-text-secondary:    #5e7a92;
+  --color-text-tertiary:     #3d5568;
+  --color-accent:            #b4c5ff;
+  --color-accent-dim:        rgba(180, 197, 255, 0.12);
+  --color-surface-raised:    #122032;
+  --color-surface-overlay:   #1d2b3d;
+  --color-focus-green:       #4fdbc8;
   --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --color-hero-gradient:     linear-gradient(135deg, #0f2d5e 0%, #173a73 52%, #1b4a8a 100%);
+  --color-hero-border:       rgba(180, 197, 255, 0.18);
+  --color-pill-bg:           rgba(255, 255, 255, 0.08);
+  --color-icon-tint:         rgba(180, 197, 255, 0.14);
+  --color-icon-bg:           rgba(255, 255, 255, 0.06);
+  --color-bar-gradient:      linear-gradient(90deg, #6c8cff, #b4c5ff);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-surface-lowest:    #eef2fb;
+  --color-surface:           #f3f6fd;
+  --color-surface-container: #e8eef8;
+  --color-surface-high:      #dde5f5;
+  --color-surface-card:      #ffffff;
+  --color-surface-bright:    #ffffff;
+  --color-border:            #cfd9ec;
+  --color-text-primary:      #0d1f38;
+  --color-text-secondary:    #4a6180;
+  --color-text-tertiary:     #7d92ad;
+  --color-accent:            #2563eb;
+  --color-accent-dim:        rgba(37, 99, 235, 0.1);
+  --color-surface-raised:    #dde5f5;
+  --color-surface-overlay:   #ffffff;
+  --color-focus-green:       #0d9488;
+  --color-hero-gradient:     linear-gradient(135deg, #dce8fb 0%, #d3e0f8 50%, #c7d9f8 100%);
+  --color-hero-border:       rgba(37, 99, 235, 0.14);
+  --color-pill-bg:           rgba(13, 31, 56, 0.07);
+  --color-icon-tint:         rgba(37, 99, 235, 0.1);
+  --color-icon-bg:           rgba(13, 31, 56, 0.05);
+  --color-bar-gradient:      linear-gradient(90deg, #2563eb, #60a5fa);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    color-scheme: light;
+
+    --color-surface-lowest:    #eef2fb;
+    --color-surface:           #f3f6fd;
+    --color-surface-container: #e8eef8;
+    --color-surface-high:      #dde5f5;
+    --color-surface-card:      #ffffff;
+    --color-surface-bright:    #ffffff;
+    --color-border:            #cfd9ec;
+    --color-text-primary:      #0d1f38;
+    --color-text-secondary:    #4a6180;
+    --color-text-tertiary:     #7d92ad;
+    --color-accent:            #2563eb;
+    --color-accent-dim:        rgba(37, 99, 235, 0.1);
+    --color-surface-raised:    #dde5f5;
+    --color-surface-overlay:   #ffffff;
+    --color-focus-green:       #0d9488;
+    --color-hero-gradient:     linear-gradient(135deg, #dce8fb 0%, #d3e0f8 50%, #c7d9f8 100%);
+    --color-hero-border:       rgba(37, 99, 235, 0.14);
+    --color-pill-bg:           rgba(13, 31, 56, 0.07);
+    --color-icon-tint:         rgba(37, 99, 235, 0.1);
+    --color-icon-bg:           rgba(13, 31, 56, 0.05);
+    --color-bar-gradient:      linear-gradient(90deg, #2563eb, #60a5fa);
+  }
 }
 
 * {

@@ -7,13 +7,20 @@ import type { ForgeConfig } from '@electron-forge/shared-types'
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    // App name shown in taskbar and window title on Windows
     name: 'Daylens',
     executableName: 'daylens',
+    icon: './build/icon',
+    appCopyright: `Copyright © ${new Date().getFullYear()} Daylens`,
+    appVersion:   '0.1.0',
   },
   rebuildConfig: {},
   makers: [
     // Windows installer — only runs on Windows
-    new MakerSquirrel({ name: 'Daylens' }),
+    new MakerSquirrel({
+      name: 'Daylens',
+      setupExe: 'DaylensSetup.exe',
+    }),
     // macOS zip for dev testing
     new MakerZIP({}, ['darwin']),
   ],

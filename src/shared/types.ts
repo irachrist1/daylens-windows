@@ -26,6 +26,7 @@ export interface AppUsageSummary {
   category: AppCategory
   totalSeconds: number
   isFocused: boolean
+  sessionCount?: number   // populated from DB queries; absent for live/synthetic entries
 }
 
 export interface FocusSession {
@@ -48,10 +49,30 @@ export interface AIMessage {
   timestamp: number
 }
 
+export interface WebsiteSummary {
+  domain: string
+  totalSeconds: number
+  visitCount: number
+  topTitle: string | null
+  browserBundleId: string | null
+}
+
+export type AppTheme = 'system' | 'light' | 'dark'
+
 export interface AppSettings {
   anthropicApiKey: string
   launchOnLogin: boolean
   trackingEnabled: boolean
+  theme: AppTheme
+}
+
+// In-flight session that has not yet been flushed to the DB.
+// Exposed via IPC so the renderer can merge it into Today's display totals.
+export interface LiveSession {
+  bundleId: string
+  appName: string
+  startTime: number   // Unix ms
+  category: AppCategory
 }
 
 export type AppCategory =
@@ -85,11 +106,17 @@ export const IPC = {
     GET_TODAY: 'db:get-today',
     GET_HISTORY: 'db:get-history',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
+    GET_APP_SESSIONS: 'db:get-app-sessions',
+    GET_WEBSITE_SUMMARIES: 'db:get-website-summaries',
+  },
+  DEBUG: {
+    GET_INFO: 'debug:get-info',
   },
   FOCUS: {
     START: 'focus:start',
     STOP: 'focus:stop',
     GET_ACTIVE: 'focus:get-active',
+    GET_RECENT: 'focus:get-recent',
   },
   AI: {
     SEND_MESSAGE: 'ai:send-message',
@@ -99,5 +126,8 @@ export const IPC = {
   SETTINGS: {
     GET: 'settings:get',
     SET: 'settings:set',
+  },
+  TRACKING: {
+    GET_LIVE: 'tracking:get-live',
   },
 } as const

@@ -14,6 +14,10 @@ const api = {
     getToday: () => ipcRenderer.invoke(IPC.DB.GET_TODAY),
     getHistory: (date: string) => ipcRenderer.invoke(IPC.DB.GET_HISTORY, date),
     getAppSummaries: (days?: number) => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
+    getAppSessions: (bundleId: string, days?: number) =>
+      ipcRenderer.invoke(IPC.DB.GET_APP_SESSIONS, bundleId, days),
+    getWebsiteSummaries: (days?: number) =>
+      ipcRenderer.invoke(IPC.DB.GET_WEBSITE_SUMMARIES, days),
     setCategoryOverride: (bundleId: string, category: AppCategory) =>
       ipcRenderer.invoke('db:set-category-override', bundleId, category),
   },
@@ -21,6 +25,7 @@ const api = {
     start: (label?: string) => ipcRenderer.invoke(IPC.FOCUS.START, label ?? null),
     stop: (id: number) => ipcRenderer.invoke(IPC.FOCUS.STOP, id),
     getActive: () => ipcRenderer.invoke(IPC.FOCUS.GET_ACTIVE),
+    getRecent: (limit?: number) => ipcRenderer.invoke(IPC.FOCUS.GET_RECENT, limit),
   },
   ai: {
     sendMessage: (message: string) => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, message),
@@ -30,6 +35,12 @@ const api = {
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),
     set: (partial: Partial<AppSettings>) => ipcRenderer.invoke(IPC.SETTINGS.SET, partial),
+  },
+  tracking: {
+    getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
+  },
+  debug: {
+    getInfo: () => ipcRenderer.invoke(IPC.DEBUG.GET_INFO),
   },
 }
 

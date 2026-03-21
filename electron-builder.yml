@@ -1,0 +1,46 @@
+appId: com.daylens.windows
+productName: DaylensWindows
+copyright: Copyright © 2026 Daylens
+
+directories:
+  output: dist-release
+  buildResources: build
+
+files:
+  - "dist/**/*"
+  - "package.json"
+
+extraMetadata:
+  main: dist/main/main.js
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: "Daylens-${version}-${arch}-Setup.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Daylens
+
+portable:
+  artifactName: "Daylens-${version}-Portable.${ext}"
+
+asar: true
+
+# Native modules
+asarUnpack:
+  - "node_modules/better-sqlite3/**"
+  - "node_modules/@paymoapp/active-window/**"
+
+publish: null

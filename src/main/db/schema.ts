@@ -33,4 +33,21 @@ CREATE TABLE IF NOT EXISTS category_overrides (
   category  TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- Website visits from local browser history files (browser.ts service).
+-- Additive — CREATE TABLE IF NOT EXISTS is safe to run on every launch.
+CREATE TABLE IF NOT EXISTS website_visits (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  domain            TEXT    NOT NULL,
+  page_title        TEXT,
+  url               TEXT,
+  visit_time        INTEGER NOT NULL,
+  duration_sec      INTEGER NOT NULL DEFAULT 0,
+  browser_bundle_id TEXT,
+  source            TEXT    NOT NULL DEFAULT 'history',
+  UNIQUE (browser_bundle_id, visit_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_website_visits_time   ON website_visits (visit_time);
+CREATE INDEX IF NOT EXISTS idx_website_visits_domain ON website_visits (domain, visit_time);
 `

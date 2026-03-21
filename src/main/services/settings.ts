@@ -17,6 +17,7 @@ const DEFAULTS: AppSettings = {
   anthropicApiKey: '',
   launchOnLogin: false,
   trackingEnabled: true,
+  theme: 'system',
 }
 
 export function getSettings(): AppSettings {
@@ -28,6 +29,7 @@ export function getSettings(): AppSettings {
     anthropicApiKey: (_store.get('anthropicApiKey', '') as string),
     launchOnLogin: (_store.get('launchOnLogin', false) as boolean),
     trackingEnabled: (_store.get('trackingEnabled', true) as boolean),
+    theme: (_store.get('theme', 'system') as AppSettings['theme']),
   }
 }
 
