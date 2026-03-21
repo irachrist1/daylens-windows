@@ -13,6 +13,7 @@ import type { AppCategory } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import fs from 'node:fs'
 import path from 'node:path'
+import { localDateString, localDayBounds } from '../lib/localDate'
 
 // ─── Types matching DaySnapshot v1 contract ──────────────────────────────────
 
@@ -139,9 +140,7 @@ function computeFocusScore(focusedSeconds: number, totalTrackedSeconds: number, 
 // ─── Day bounds ──────────────────────────────────────────────────────────────
 
 function dayBounds(dateStr: string): [number, number] {
-  const d = new Date(dateStr + 'T00:00:00')
-  const from = d.getTime()
-  return [from, from + 86_400_000]
+  return localDayBounds(dateStr)
 }
 
 function toISOWithOffset(ms: number): string {
@@ -160,8 +159,8 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   const [fromMs, toMs] = dayBounds(dateStr)
   const db = getDb()
 
-  // Is this today? (partial day)
-  const today = new Date().toISOString().slice(0, 10)
+  // Is this today? (partial day) — use local date to match the day boundary on this machine
+  const today = localDateString()
   const isPartialDay = dateStr === today
 
   // App summaries from DB
