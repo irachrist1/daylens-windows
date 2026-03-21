@@ -22,9 +22,9 @@ if (BIP39_ENGLISH.length !== 2048) {
   throw new Error(`BIP39 wordlist corrupted: expected 2048 words, got ${BIP39_ENGLISH.length}`)
 }
 
-// Convex site URL — hardcoded for the Daylens backend.
-// In production, replace with your deployed URL.
-const CONVEX_SITE_URL = 'https://decisive-aardvark-847.convex.site'
+declare const __DAYLENS_CONVEX_SITE_URL__: string
+
+const CONVEX_SITE_URL = __DAYLENS_CONVEX_SITE_URL__
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -68,20 +68,23 @@ export async function createWorkspace(): Promise<WorkspaceResult> {
     recoveryKeyHash,
     deviceId,
     displayName: os.hostname() || 'This PC',
+    platform: 'windows',
   }
 
   const result = await callConvex('createWorkspace', body)
-  if (!result.sessionToken) {
+  const sessionToken =
+    typeof result.sessionToken === 'string' ? result.sessionToken : null
+  if (!sessionToken) {
     throw new Error('Invalid server response — no session token')
   }
 
   // Store credentials
   await setWorkspaceId(workspaceId)
-  await setWorkspaceToken(result.sessionToken)
+  await setWorkspaceToken(sessionToken)
   await setRecoveryMnemonic(mnemonic)
 
   // Create browser link code
-  const browserLink = await createBrowserLinkWithToken(result.sessionToken)
+  const browserLink = await createBrowserLinkWithToken(sessionToken)
 
   return {
     workspaceId,

@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import path from 'node:path'
 
 const isStandalone = process.env.STANDALONE_BUILD === '1'
+const convexSiteUrl = JSON.stringify(
+  process.env.DAYLENS_CONVEX_SITE_URL ?? 'https://decisive-aardvark-847.convex.site',
+)
 
 export default defineConfig({
   resolve: {
@@ -13,8 +16,11 @@ export default defineConfig({
     ? {
         MAIN_WINDOW_VITE_DEV_SERVER_URL: 'undefined',
         MAIN_WINDOW_VITE_NAME: JSON.stringify('main_window'),
+        __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
       }
-    : {},
+    : {
+        __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
+      },
   build: {
     // Build as Node (not browser) so node: builtins are not externalized
     ...(isStandalone && {

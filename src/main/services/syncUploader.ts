@@ -3,8 +3,9 @@
  * Mirrors the macOS SyncUploader.swift for parity.
  */
 import { exportSnapshot } from './snapshotExporter'
-import { getDeviceId, getWorkspaceToken } from './credentials'
+import { getDeviceId } from './credentials'
 import { getConvexSiteUrl, getSessionToken } from './workspaceLinker'
+import { daysFromTodayLocalDateString, localDateString } from '../lib/localDate'
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
@@ -56,7 +57,7 @@ export function getLastSyncAt(): number | null {
  * Called at end of day or on app quit to finalize the previous day's snapshot.
  */
 export function finalizePreviousDay(): void {
-  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+  const yesterday = daysFromTodayLocalDateString(-1)
   markDirty(yesterday)
   void syncNow()
 }
@@ -115,5 +116,5 @@ async function syncNow(): Promise<void> {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10)
+  return localDateString()
 }
