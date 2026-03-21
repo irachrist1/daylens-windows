@@ -17,6 +17,11 @@ import {
 } from './credentials'
 import { BIP39_ENGLISH } from './bip39wordlist'
 
+// Validate BIP39 wordlist integrity at module load time
+if (BIP39_ENGLISH.length !== 2048) {
+  throw new Error(`BIP39 wordlist corrupted: expected 2048 words, got ${BIP39_ENGLISH.length}`)
+}
+
 // Convex site URL — hardcoded for the Daylens backend.
 // In production, replace with your deployed URL.
 const CONVEX_SITE_URL = 'https://decisive-aardvark-847.convex.site'
@@ -253,7 +258,9 @@ async function callConvex(
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`Server error (HTTP ${res.status}): ${text}`)
+    // Truncate server response to avoid leaking internal details in error messages
+    const safeText = text.slice(0, 200)
+    throw new Error(`Server error (HTTP ${res.status}): ${safeText}`)
   }
 
   return (await res.json()) as Record<string, unknown>
