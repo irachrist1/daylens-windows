@@ -1,4 +1,3 @@
-import { MakerSquirrel } from '@electron-forge/maker-squirrel'
 import { MakerZIP } from '@electron-forge/maker-zip'
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives'
 import { VitePlugin } from '@electron-forge/plugin-vite'
@@ -16,11 +15,6 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    // Windows installer — only runs on Windows
-    new MakerSquirrel({
-      name: 'DaylensWindows',
-      setupExe: 'DaylensSetup.exe',
-    }),
     // macOS zip for dev testing
     new MakerZIP({}, ['darwin']),
   ],

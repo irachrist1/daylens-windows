@@ -14,13 +14,12 @@
     "build:renderer": "STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",
     "build:all": "npm run build:main && npm run build:preload && npm run build:renderer",
     "dist:win": "npm run build:all && electron-builder --win",
-    "postinstall": "electron-rebuild -f -w better-sqlite3"
+    "postinstall": "electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
     "@paymoapp/active-window": "^2.1.4",
     "better-sqlite3": "^12.8.0",
-    "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^10.0.0",
     "keytar": "^7.9.0",
     "react": "^19.0.0",
@@ -30,7 +29,6 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
-    "@electron-forge/maker-squirrel": "^7.11.1",
     "@electron-forge/maker-zip": "^7.11.1",
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron-forge/plugin-vite": "^7.11.1",

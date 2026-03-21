@@ -2,16 +2,20 @@
 
 ## What's shipped
 
-**v0.1.0** — first Windows release, live at https://github.com/irachrist1/daylens-windows/releases/tag/v0.1.4-win
+Windows releases are published at https://github.com/irachrist1/daylens-windows/releases/latest
 
-All core features are working:
+Core features currently shipped:
 - Active window tracking (5 s poll, idle detection, session flush)
 - Browser history ingestion (Chrome, Edge, Brave on Windows)
 - Focus session timer
 - AI insights chat (Anthropic API, streaming)
 - System tray (hide-to-tray, single-instance lock)
 - Settings (API key, theme, launch-on-login)
-- NSIS installer + portable exe via electron-builder
+- NSIS installer via electron-builder
+
+### Release health
+- `v0.1.6-win` is a bad Windows installer build: it emits the Electron main process as ESM while the packaged runtime still expects CommonJS semantics on first launch.
+- The fix is to emit the standalone main bundle as CommonJS and keep the app free of Squirrel-only startup hooks, which are not used by the NSIS installer path.
 
 ## What's not done / known gaps
 
@@ -28,7 +32,7 @@ Firefox uses a profile-based SQLite layout that differs from Chromium. Currently
 3. Wait for `@paymoapp/active-window` to add ARM64 prebuild
 
 ### No auto-update
-No Squirrel or electron-updater wired up. Users must manually download new releases. Would need a code-signing certificate before this is worth implementing.
+No auto-update or electron-updater wired up. Users must manually download new releases. Would need a code-signing certificate before this is worth implementing.
 
 ### No code signing
 The Windows installer is unsigned — Windows Defender / SmartScreen will show a warning on first run. Users must click "More info → Run anyway". Signing requires an EV certificate (~$300/yr).
@@ -49,4 +53,4 @@ Running this Electron app on macOS sets `userData` to `~/Library/Application Sup
 
 `v{major}.{minor}.{patch}-win` — always suffix `-win` to distinguish from macOS tags.
 
-Current: **v0.1.0** (build tag v0.1.4-win — the build tag version incremented through CI fixes; the app version in `package.json` stays `0.1.0` until a feature release).
+Release tags advance independently for Windows packaging fixes. The CI workflow stamps the pushed tag version into `package.json` during the Windows release build so the published installer filename and app metadata match the tag.

@@ -71,11 +71,16 @@ jobs:
 
             Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud, no telemetry.
 
+            ### Fixes in this build
+            - Fixes the packaged-app startup crash from `v0.1.6-win`
+            - Publishes a single Windows x64 NSIS installer (`Setup.exe`)
+
             ### Install
 
             1. Download `Daylens-${{ steps.meta.outputs.version }}-Setup.exe` below
             2. Run it — Windows may show a security warning, click **"More info" → "Run anyway"**
-            3. Daylens launches automatically when done
+            3. Let the installer replace any previous Daylens Windows install
+            4. Daylens launches automatically when done
 
             ### System requirements
             - Windows 10 or later (64-bit)
