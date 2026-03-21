@@ -73,6 +73,7 @@ jobs:
 
             ### Fixes in this build
             - Fixes the packaged-app startup crash from `v0.1.6-win`
+            - Adds a packaged-app fallback for Windows app tracking so `@paymoapp/active-window` can load from unpacked resources
             - Publishes a single Windows x64 NSIS installer (`Setup.exe`)
             - Uses a standard guided installer flow instead of a silent one-click install
 

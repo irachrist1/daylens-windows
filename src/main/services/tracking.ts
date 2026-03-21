@@ -1,6 +1,7 @@
 // Activity tracker — polls active window every 5 s and flushes completed sessions to DB.
 // Uses @paymoapp/active-window which supports Windows, macOS, and Linux natively.
-import { powerMonitor } from 'electron'
+import { app, powerMonitor } from 'electron'
+import path from 'node:path'
 import { insertAppSession } from '../db/queries'
 import { getDb } from './database'
 import type { AppCategory, LiveSession } from '@shared/types'
@@ -13,6 +14,10 @@ interface ActiveWinResult {
   path: string
   pid: number
   icon: string
+  windows?: {
+    isUWPApp: boolean
+    uwpPackage: string
+  }
 }
 
 interface InFlightSession {
@@ -35,25 +40,86 @@ const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → flush current session a
 let _activeWindowMod: typeof import('@paymoapp/active-window').default | null = null
 let _activeWindowInitFailed = false
 
+export const trackingStatus = {
+  moduleSource: null as 'package' | 'unpacked' | null,
+  loadError: null as string | null,
+  pollError: null as string | null,
+  lastRawWindow: null as {
+    application: string
+    path: string
+    isUWPApp: boolean
+    uwpPackage: string
+  } | null,
+}
+
+function formatError(err: unknown): string {
+  if (err instanceof Error) return `${err.name}: ${err.message}`
+  return String(err)
+}
+
+function requireActiveWindowModule() {
+  try {
+    trackingStatus.moduleSource = 'package'
+    return require('@paymoapp/active-window')
+  } catch (packageErr) {
+    if (!app.isPackaged) throw packageErr
+
+    const unpackedEntry = path.join(
+      process.resourcesPath,
+      'app.asar.unpacked',
+      'node_modules',
+      '@paymoapp',
+      'active-window',
+      'dist',
+      'index.js',
+    )
+
+    try {
+      trackingStatus.moduleSource = 'unpacked'
+      return require(unpackedEntry)
+    } catch (unpackedErr) {
+      const combined = new Error(
+        [
+          `package require failed: ${formatError(packageErr)}`,
+          `unpacked require failed: ${formatError(unpackedErr)}`,
+        ].join(' | '),
+      )
+      trackingStatus.moduleSource = null
+      throw combined
+    }
+  }
+}
+
 function getActiveWindowModule(): typeof import('@paymoapp/active-window').default | null {
   if (_activeWindowInitFailed) return null
   if (!_activeWindowMod) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('@paymoapp/active-window')
+      const mod = requireActiveWindowModule()
       const ActiveWindow = mod.default ?? mod
       ActiveWindow.initialize()
       if (process.platform === 'darwin') {
         ActiveWindow.requestPermissions()
       }
       _activeWindowMod = ActiveWindow
+      trackingStatus.loadError = null
+      console.log(`[tracking] active-window loaded via ${trackingStatus.moduleSource ?? 'unknown source'}`)
     } catch (err) {
+      trackingStatus.loadError = formatError(err)
       console.warn('[tracking] @paymoapp/active-window failed to load:', err)
       _activeWindowInitFailed = true
       return null
     }
   }
   return _activeWindowMod
+}
+
+function deriveWindowIdentity(win: ActiveWinResult): { bundleId: string; appName: string } {
+  const exeName = win.path ? path.basename(win.path) : ''
+  const uwpPackage = win.windows?.isUWPApp ? win.windows.uwpPackage : ''
+  const appName = win.application || exeName || uwpPackage || 'Unknown app'
+  const bundleId = win.path || uwpPackage || appName
+  return { bundleId, appName }
 }
 
 // ─── OS noise filter ─────────────────────────────────────────────────────────
@@ -156,14 +222,25 @@ async function poll(): Promise<void> {
     let win: ActiveWinResult
     try {
       win = awMod.getActiveWindow()
-    } catch {
-      return // no focused window
+    } catch (err) {
+      trackingStatus.pollError = formatError(err)
+      return
     }
-    if (!win) return
+    if (!win) {
+      trackingStatus.pollError = null
+      trackingStatus.lastRawWindow = null
+      return
+    }
+    trackingStatus.pollError = null
+    trackingStatus.lastRawWindow = {
+      application: win.application,
+      path: win.path,
+      isUWPApp: win.windows?.isUWPApp ?? false,
+      uwpPackage: win.windows?.uwpPackage ?? '',
+    }
 
-    // Derive bundleId-equivalent from exe path on Windows, app name on macOS
-    const bundleId = win.path || win.application
-    const appName  = win.application
+    // Prefer the display name from the addon, but fall back to exe/UWP metadata on Windows.
+    const { bundleId, appName } = deriveWindowIdentity(win)
 
     // Skip OS infrastructure processes
     if (isOsNoise(bundleId, appName)) return
@@ -184,6 +261,7 @@ async function poll(): Promise<void> {
     }
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform
+    trackingStatus.pollError = formatError(err)
     console.warn('[tracking] poll error:', err)
   }
 }

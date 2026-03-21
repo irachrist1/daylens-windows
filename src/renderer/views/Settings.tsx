@@ -9,6 +9,17 @@ interface DebugInfo {
   appVersion: string
   liveSession: { bundleId: string; appName: string; startTime: number; category: string } | null
   lastClassify: { target: string; category: string }
+  trackingStatus: {
+    moduleSource: 'package' | 'unpacked' | null
+    loadError: string | null
+    pollError: string | null
+    lastRawWindow: {
+      application: string
+      path: string
+      isUWPApp: boolean
+      uwpPackage: string
+    } | null
+  }
   recentSessions: { appName: string; category: string; durationSec: number; startTime: number }[]
   browserStatus: {
     lastPoll: number | null
@@ -478,6 +489,29 @@ export default function Settings() {
                     value={`"${debug.lastClassify.target}" → ${debug.lastClassify.category}`}
                     mono
                   />
+                  <DebugRow
+                    label="Tracker module"
+                    value={debug.trackingStatus.moduleSource ?? 'not loaded'}
+                  />
+                  {debug.trackingStatus.loadError && (
+                    <DebugRow label="Tracker load error" value={debug.trackingStatus.loadError} error />
+                  )}
+                  {debug.trackingStatus.pollError && (
+                    <DebugRow label="Tracker poll error" value={debug.trackingStatus.pollError} error />
+                  )}
+                  {debug.trackingStatus.lastRawWindow && (
+                    <DebugRow
+                      label="Last raw window"
+                      value={[
+                        debug.trackingStatus.lastRawWindow.application || 'app=""',
+                        debug.trackingStatus.lastRawWindow.path || 'path=""',
+                        debug.trackingStatus.lastRawWindow.isUWPApp
+                          ? `uwp=${debug.trackingStatus.lastRawWindow.uwpPackage || 'unknown'}`
+                          : 'uwp=false',
+                      ].join(' | ')}
+                      mono
+                    />
+                  )}
 
                   <div>
                     <p className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-[0.4px] mb-1.5">
