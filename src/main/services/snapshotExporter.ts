@@ -42,7 +42,7 @@ interface TopDomain {
   domain: string
   seconds: number
   category: string
-  topPages?: TopPage[]
+  topPages: TopPage[]
 }
 
 interface TopPage {
@@ -243,10 +243,10 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
     db,
     fromMs,
     toMs,
-    rawDomains.slice(0, 10).map((domain) => domain.domain),
+    rawDomains.slice(0, 20).map((domain) => domain.domain),
     5,
   )
-  const topDomains: TopDomain[] = rawDomains.slice(0, 10).map((d) => ({
+  const topDomains: TopDomain[] = rawDomains.slice(0, 20).map((d) => ({
     domain: d.domain,
     seconds: d.totalSeconds,
     category: 'browsing',
