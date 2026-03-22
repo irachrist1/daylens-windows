@@ -457,6 +457,54 @@ export function getWebsiteSummariesForRange(
   }))
 }
 
+export function getTopPagesForDomains(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  domains: string[],
+  limitPerDomain = 5,
+): Record<string, { url: string; title: string | null; totalSeconds: number }[]> {
+  if (domains.length === 0) {
+    return {}
+  }
+
+  const placeholders = domains.map(() => '?').join(', ')
+  const rows = db
+    .prepare(`
+      SELECT domain,
+             url,
+             MAX(page_title)   AS title,
+             SUM(duration_sec) AS total_sec
+      FROM website_visits
+      WHERE visit_time >= ? AND visit_time < ?
+        AND domain IN (${placeholders})
+      GROUP BY domain, url
+      ORDER BY domain ASC, total_sec DESC
+    `)
+    .all(fromMs, toMs, ...domains) as {
+      domain: string
+      url: string
+      title: string | null
+      total_sec: number
+    }[]
+
+  return rows.reduce<Record<string, { url: string; title: string | null; totalSeconds: number }[]>>(
+    (grouped, row) => {
+      const bucket = grouped[row.domain] ?? []
+      if (bucket.length < limitPerDomain) {
+        bucket.push({
+          url: row.url,
+          title: row.title,
+          totalSeconds: row.total_sec,
+        })
+      }
+      grouped[row.domain] = bucket
+      return grouped
+    },
+    {},
+  )
+}
+
 export function getRecentFocusSessions(
   db: Database.Database,
   limit = 20,

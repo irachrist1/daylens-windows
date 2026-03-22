@@ -7,6 +7,7 @@ import {
   getAppSummariesForRange,
   getSessionsForRange,
   getWebsiteSummariesForRange,
+  getTopPagesForDomains,
   getRecentFocusSessions,
 } from '../db/queries'
 import fs from 'node:fs'
@@ -18,10 +19,12 @@ import { computeFocusScore, isCategoryFocused } from '../lib/focusScore'
 
 interface AppSummaryOut {
   appKey: string
+  bundleID?: string
   displayName: string
   category: string
   totalSeconds: number
   sessionCount: number
+  iconBase64?: string
 }
 
 interface CategoryTotal {
@@ -39,6 +42,13 @@ interface TopDomain {
   domain: string
   seconds: number
   category: string
+  topPages?: TopPage[]
+}
+
+interface TopPage {
+  url: string
+  title?: string | null
+  seconds: number
 }
 
 interface FocusSessionOut {
@@ -169,6 +179,7 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
     } else {
       const entry: AppSummaryOut = {
         appKey,
+        bundleID: raw.bundleId,
         displayName,
         category,
         totalSeconds: raw.totalSeconds,
@@ -228,10 +239,22 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
 
   // Top domains
   const rawDomains = getWebsiteSummariesForRange(db, fromMs, toMs)
+  const topPagesByDomain = getTopPagesForDomains(
+    db,
+    fromMs,
+    toMs,
+    rawDomains.slice(0, 10).map((domain) => domain.domain),
+    5,
+  )
   const topDomains: TopDomain[] = rawDomains.slice(0, 10).map((d) => ({
     domain: d.domain,
     seconds: d.totalSeconds,
     category: 'browsing',
+    topPages: (topPagesByDomain[d.domain] ?? []).map((page) => ({
+      url: page.url,
+      title: page.title,
+      seconds: page.totalSeconds,
+    })),
   }))
 
   // Category overrides
