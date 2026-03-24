@@ -807,14 +807,7 @@ export default function Today() {
 
           {/* Col A — Recent Sessions */}
           <div>
-            <p style={{
-              fontSize: 10,
-              fontWeight: 900,
-              textTransform: 'uppercase',
-              letterSpacing: '0.2em',
-              color: 'var(--color-text-secondary)',
-              margin: '0 0 14px',
-            }}>
+            <p className="section-label" style={{ color: 'var(--color-text-secondary)', margin: '0 0 14px' }}>
               Recent Sessions
             </p>
 

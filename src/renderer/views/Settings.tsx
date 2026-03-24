@@ -998,7 +998,7 @@ export default function Settings() {
                         )}
 
                         <div>
-                          <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: 'var(--color-text-secondary)', margin: '0 0 6px' }}>Recent sessions</p>
+                          <p className="section-label" style={{ color: 'var(--color-text-secondary)', margin: '0 0 6px' }}>Recent sessions</p>
                           {debug.recentSessions.length === 0 ? (
                             <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>None</p>
                           ) : (

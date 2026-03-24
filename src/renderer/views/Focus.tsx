@@ -692,7 +692,7 @@ export default function Focus() {
               boxShadow: 'var(--color-shadow-soft)',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
-                <span style={{ fontSize: 10, fontWeight: 900, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                <span className="section-label" style={{ color: 'var(--color-text-secondary)' }}>
                   Recent Sessions
                 </span>
                 {streak > 0 && <GlassBadge>{streak} day streak</GlassBadge>}

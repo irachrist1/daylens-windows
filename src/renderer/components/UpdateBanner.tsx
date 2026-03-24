@@ -20,16 +20,34 @@ export default function UpdateBanner() {
     return (
       <div
         style={{
-          padding: '6px 16px',
-          background: 'rgba(104,174,255,0.08)',
-          borderBottom: '1px solid rgba(104,174,255,0.15)',
-          fontSize: 12,
-          color: 'var(--color-text-secondary)',
-          textAlign: 'center',
+          padding: '10px 18px',
+          background: 'linear-gradient(180deg, rgba(173,198,255,0.14), rgba(173,198,255,0.06))',
+          borderBottom: '1px solid rgba(173,198,255,0.18)',
+          color: 'var(--color-text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
           WebkitAppRegion: 'no-drag',
         } as React.CSSProperties}
       >
-        A new version is downloading…
+        <span
+          aria-hidden="true"
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: 'var(--color-primary)',
+            boxShadow: '0 0 0 6px rgba(173,198,255,0.12)',
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
+          Downloading Daylens {update.version}
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+          You can keep using the app while it downloads.
+        </span>
       </div>
     )
   }
@@ -37,32 +55,49 @@ export default function UpdateBanner() {
   return (
     <div
       style={{
-        padding: '6px 16px',
-        background: 'rgba(104,174,255,0.1)',
-        borderBottom: '1px solid rgba(104,174,255,0.2)',
-        fontSize: 12,
+        padding: '10px 18px',
+        background: 'linear-gradient(180deg, rgba(173,198,255,0.16), rgba(173,198,255,0.08))',
+        borderBottom: '1px solid rgba(173,198,255,0.24)',
         color: 'var(--color-text-primary)',
-        textAlign: 'center',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 12,
+        gap: 14,
+        flexWrap: 'wrap',
         WebkitAppRegion: 'no-drag',
       } as React.CSSProperties}
     >
-      <span>Daylens {update.version} is ready</span>
+      <span
+        aria-hidden="true"
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: 'var(--color-tertiary)',
+          boxShadow: '0 0 0 6px rgba(79,219,200,0.10)',
+          flexShrink: 0,
+        }}
+      />
+      <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
+        Daylens {update.version} is ready
+      </span>
+      <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+        Restart once to finish installing the update.
+      </span>
       <button
         onClick={() => ipc.updater.install()}
         style={{
-          padding: '3px 10px',
-          borderRadius: 6,
+          padding: '6px 12px',
+          borderRadius: 999,
           border: 'none',
-          background: 'var(--color-accent)',
-          color: 'var(--color-surface)',
+          background: 'var(--gradient-primary)',
+          color: 'var(--color-primary-contrast)',
           fontSize: 12,
-          fontWeight: 600,
+          fontWeight: 700,
           cursor: 'pointer',
           fontFamily: 'inherit',
+          letterSpacing: '-0.01em',
+          boxShadow: '0 10px 22px rgba(15,99,219,0.18)',
         }}
       >
         Restart to update
