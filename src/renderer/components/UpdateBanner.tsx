@@ -1,22 +1,23 @@
 import { useEffect, useState } from 'react'
 import { ipc } from '../lib/ipc'
-
-interface UpdateInfo {
-  status: 'available' | 'downloaded'
-  version: string
-}
+import type { UpdaterStatusInfo } from '../../preload/index'
 
 export default function UpdateBanner() {
-  const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  const [update, setUpdate] = useState<UpdaterStatusInfo | null>(null)
 
   useEffect(() => {
+    void ipc.updater.getStatus().then((info) => setUpdate(info))
     const cleanup = ipc.updater.onStatus((info) => setUpdate(info))
     return cleanup
   }, [])
 
   if (!update) return null
 
-  if (update.status === 'available') {
+  if (update.status === 'checking' || update.status === 'not-available' || update.status === 'idle') {
+    return null
+  }
+
+  if (update.status === 'downloading') {
     return (
       <div
         style={{
@@ -43,10 +44,63 @@ export default function UpdateBanner() {
           }}
         />
         <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
-          Downloading Daylens {update.version}
+          Downloading Daylens {update.version ?? ''}
         </span>
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-          You can keep using the app while it downloads.
+          {typeof update.progressPct === 'number'
+            ? `${update.progressPct}% complete. You can keep using the app while it downloads.`
+            : 'You can keep using the app while it downloads.'}
+        </span>
+      </div>
+    )
+  }
+
+  if (update.status === 'error') {
+    return (
+      <div
+        style={{
+          padding: '10px 18px',
+          background: 'linear-gradient(180deg, rgba(248,113,113,0.12), rgba(248,113,113,0.05))',
+          borderBottom: '1px solid rgba(248,113,113,0.18)',
+          color: 'var(--color-text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          WebkitAppRegion: 'no-drag',
+        } as React.CSSProperties}
+      >
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
+          Update failed
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+          {update.errorMessage ?? 'Daylens could not finish the update download.'}
+        </span>
+      </div>
+    )
+  }
+
+  if (update.status === 'installing') {
+    return (
+      <div
+        style={{
+          padding: '10px 18px',
+          background: 'linear-gradient(180deg, rgba(79,219,200,0.14), rgba(79,219,200,0.06))',
+          borderBottom: '1px solid rgba(79,219,200,0.18)',
+          color: 'var(--color-text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+          WebkitAppRegion: 'no-drag',
+        } as React.CSSProperties}
+      >
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
+          Installing Daylens {update.version ?? ''}
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+          The app will close and finish the update automatically.
         </span>
       </div>
     )
@@ -79,13 +133,13 @@ export default function UpdateBanner() {
         }}
       />
       <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
-        Daylens {update.version} is ready
+        Daylens {update.version ?? ''} is ready
       </span>
       <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
         Restart once to finish installing the update.
       </span>
       <button
-        onClick={() => ipc.updater.install()}
+        onClick={() => void ipc.updater.install()}
         style={{
           padding: '6px 12px',
           borderRadius: 999,

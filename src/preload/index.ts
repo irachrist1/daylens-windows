@@ -11,6 +11,13 @@ import type {
 } from '@shared/types'
 import { IPC } from '@shared/types'
 
+export interface UpdaterStatusInfo {
+  status: 'idle' | 'checking' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
+  version: string | null
+  progressPct: number | null
+  errorMessage: string | null
+}
+
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
 const api = {
   // Window controls — used by the custom TitleBar (needed on Windows frameless)
@@ -86,16 +93,18 @@ const api = {
   },
   updater: {
     onStatus: (
-      callback: (info: { status: 'available' | 'downloaded'; version: string }) => void,
+      callback: (info: UpdaterStatusInfo) => void,
     ) => {
       const handler = (
         _e: Electron.IpcRendererEvent,
-        info: { status: 'available' | 'downloaded'; version: string },
+        info: UpdaterStatusInfo,
       ) => callback(info)
       ipcRenderer.on('update:status', handler)
       return () => { ipcRenderer.removeListener('update:status', handler) }
     },
-    install: () => ipcRenderer.send('update:install'),
+    getStatus: (): Promise<UpdaterStatusInfo> => ipcRenderer.invoke('update:get-status'),
+    check: (): Promise<UpdaterStatusInfo> => ipcRenderer.invoke('update:check'),
+    install: (): Promise<boolean> => ipcRenderer.invoke('update:install'),
   },
 }
 

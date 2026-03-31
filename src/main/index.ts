@@ -16,6 +16,7 @@ process.on('unhandledRejection', (reason) => {
 })
 
 import { BrowserWindow, app, dialog, ipcMain, nativeImage, shell } from 'electron'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { capture, shutdown } from './services/analytics'
@@ -33,7 +34,7 @@ import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './serv
 import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray } from './tray'
-import { initUpdater } from './services/updater'
+import { initUpdater, isInstallingUpdate, registerUpdaterShutdown } from './services/updater'
 import { startDailySummaryNotifier } from './services/dailySummaryNotifier'
 import { startDistractionAlerter } from './services/distractionAlerter'
 import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
@@ -68,6 +69,62 @@ let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 // Set to latest version string when a newer release is detected
 export let updateAvailable: string | null = null
+
+async function backupUserDataForUpdate(): Promise<void> {
+  const userDataPath = app.getPath('userData')
+  const backupRoot = path.join(userDataPath, 'pre-update-backups')
+  const backupDir = path.join(
+    backupRoot,
+    new Date().toISOString().replace(/[:.]/g, '-'),
+  )
+
+  try {
+    fs.mkdirSync(backupDir, { recursive: true })
+    for (const entry of fs.readdirSync(userDataPath)) {
+      if (entry === path.basename(backupRoot)) continue
+      fs.cpSync(path.join(userDataPath, entry), path.join(backupDir, entry), {
+        recursive: true,
+        force: true,
+      })
+    }
+
+    const backups = fs
+      .readdirSync(backupRoot)
+      .sort()
+    while (backups.length > 3) {
+      const oldest = backups.shift()
+      if (!oldest) break
+      fs.rmSync(path.join(backupRoot, oldest), { recursive: true, force: true })
+    }
+
+    console.log('[update] backed up user data to', backupDir)
+  } catch (err) {
+    console.warn('[update] backup failed:', err)
+  }
+}
+
+async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
+  stopTracking()
+  stopBrowserTracking()
+  stopSync()
+  stopProcessMonitor()
+
+  if (options?.awaitFinalSync) {
+    await Promise.race([
+      syncNowForQuit(),
+      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    ])
+  }
+
+  closeDb()
+
+  if (options?.backupBeforeExit) {
+    await backupUserDataForUpdate()
+  }
+
+  destroyTray()
+  shutdown()
+}
 
 function showFatalStartupError(title: string, err: unknown): void {
   const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
@@ -208,6 +265,10 @@ ipcMain.on('window:close', () => {
 })
 
 app.on('before-quit', (event) => {
+  if (isInstallingUpdate()) {
+    isQuitting = true
+    return
+  }
   if (isQuitting) return
   isQuitting = true
 
@@ -215,20 +276,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
 
   void (async () => {
-    stopTracking()
-    stopBrowserTracking()
-    stopSync()
-    stopProcessMonitor()
-
-    // Await final sync with a 5-second timeout so quit doesn't hang if offline.
-    await Promise.race([
-      syncNowForQuit(),
-      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
-    ])
-
-    closeDb()
-    destroyTray()
-    shutdown()
+    await shutdownApp({ awaitFinalSync: true })
     app.quit()
   })()
 })
@@ -271,6 +319,10 @@ app.whenReady()
     mainWindow = createWindow()
     createTray(mainWindow)
     initUpdater(mainWindow)
+    registerUpdaterShutdown(async () => {
+      isQuitting = true
+      await shutdownApp({ awaitFinalSync: true, backupBeforeExit: true })
+    })
 
     startTracking()
     startSync()

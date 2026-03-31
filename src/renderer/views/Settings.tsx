@@ -5,6 +5,7 @@ import { track } from '../lib/analytics'
 import { formatDuration, formatTime } from '../lib/format'
 import type { AppSettings, AppTheme } from '@shared/types'
 import FeedbackModal from '../components/FeedbackModal'
+import type { UpdaterStatusInfo } from '../../preload/index'
 
 interface DebugInfo {
   dbPath: string
@@ -46,7 +47,6 @@ interface LinkResult {
   linkToken: string
 }
 
-const WINDOWS_RELEASES_URL = 'https://github.com/irachrist1/daylens-windows/releases/latest'
 const WEB_COMPANION_LINK_URL = 'https://christian-tonny.dev/daylens/link'
 
 // ─── Section helpers ───────────────────────────────────────────────────────────
@@ -164,6 +164,7 @@ export default function Settings() {
   const [showMnemonic, setShowMnemonic]   = useState(false)
   const [mnemonic, setMnemonic]           = useState<string | null>(null)
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false)
+  const [updater, setUpdater] = useState<UpdaterStatusInfo | null>(null)
 
   const linkAbortRef = useRef<AbortController | null>(null)
 
@@ -172,6 +173,9 @@ export default function Settings() {
     ipc.settings.hasApiKey().then((has) => setHasApiKey(has as boolean))
     ipc.sync.getStatus().then((s: SyncStatus) => setSyncStatus(s))
     ipc.debug.getInfo().then((info) => setDebug(info as DebugInfo))
+    ipc.updater.getStatus().then((info) => setUpdater(info))
+    const cleanup = ipc.updater.onStatus((info) => setUpdater(info))
+    return cleanup
   }, [])
 
   useEffect(() => {
@@ -296,7 +300,67 @@ export default function Settings() {
     navigate('/apps')
   }
 
+  async function handleCheckForUpdates() {
+    try {
+      const next = await ipc.updater.check()
+      setUpdater(next)
+      if (next.status === 'not-available') {
+        flashSaved('Daylens is up to date')
+      }
+    } catch (err) {
+      flashSaved(err instanceof Error ? err.message : 'Could not check for updates')
+    }
+  }
+
+  async function handleInstallUpdate() {
+    try {
+      const started = await ipc.updater.install()
+      if (!started) {
+        flashSaved('The update is not ready to install yet')
+      }
+    } catch (err) {
+      flashSaved(err instanceof Error ? err.message : 'Could not start the update install')
+    }
+  }
+
+  function softwareUpdateLabel(): string {
+    switch (updater?.status) {
+      case 'checking':
+        return 'Checking for updates…'
+      case 'downloading':
+        return updater.progressPct != null
+          ? `Downloading ${updater.version ?? 'update'} (${updater.progressPct}%)`
+          : `Downloading ${updater.version ?? 'update'}`
+      case 'downloaded':
+        return `Daylens ${updater.version ?? ''} is ready to install`
+      case 'installing':
+        return 'Installing update…'
+      case 'error':
+        return updater.errorMessage ?? 'The last update attempt failed'
+      case 'not-available':
+        return `Daylens ${updater.version ?? version ?? ''} is up to date`
+      default:
+        return 'Check for updates or install the one already downloaded'
+    }
+  }
+
+  function softwareUpdateAction(): { label: string; onClick: () => void; disabled?: boolean } {
+    switch (updater?.status) {
+      case 'checking':
+        return { label: 'Checking…', onClick: () => {}, disabled: true }
+      case 'downloading':
+        return { label: updater.progressPct != null ? `${updater.progressPct}%` : 'Downloading…', onClick: () => {}, disabled: true }
+      case 'downloaded':
+        return { label: 'Restart to Update', onClick: () => void handleInstallUpdate() }
+      case 'installing':
+        return { label: 'Installing…', onClick: () => {}, disabled: true }
+      default:
+        return { label: 'Check Now', onClick: () => void handleCheckForUpdates() }
+    }
+  }
+
   const version = debug?.appVersion
+  const updateAction = softwareUpdateAction()
 
   // ─── Shared card style ────────────────────────────────────────────────────
   const cardStyle: React.CSSProperties = {
@@ -325,23 +389,39 @@ export default function Settings() {
         </div>
 
         {/* Update banner */}
-        {debug?.updateAvailable && (
+        {updater && ['checking', 'downloading', 'downloaded', 'error', 'installing'].includes(updater.status) && (
           <div style={{
             borderRadius: 12, padding: '12px 18px', marginBottom: 24,
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             background: 'rgba(173,198,255,0.08)', border: '1px solid rgba(173,198,255,0.15)',
+            gap: 12,
           }}>
-            <span style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 500 }}>
-              Daylens {debug.updateAvailable} is available
-            </span>
+            <div>
+              <span style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 500, display: 'block' }}>
+                {updater.status === 'downloaded'
+                  ? `Daylens ${updater.version ?? ''} is ready`
+                  : updater.status === 'downloading'
+                    ? `Downloading Daylens ${updater.version ?? ''}`
+                    : updater.status === 'installing'
+                      ? `Installing Daylens ${updater.version ?? ''}`
+                      : updater.status === 'checking'
+                        ? 'Checking for updates'
+                        : 'Update issue'}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                {softwareUpdateLabel()}
+              </span>
+            </div>
             <button
-              onClick={() => ipc.shell.openExternal(WINDOWS_RELEASES_URL)}
+              onClick={updateAction.onClick}
+              disabled={updateAction.disabled}
               style={{
                 fontSize: 12, fontWeight: 700, color: 'var(--color-primary-contrast)', background: 'var(--gradient-primary)',
                 border: 'none', cursor: 'pointer', borderRadius: 8, padding: '5px 14px',
+                opacity: updateAction.disabled ? 0.5 : 1,
               }}
             >
-              Download
+              {updateAction.label}
             </button>
           </div>
         )}
@@ -929,6 +1009,27 @@ export default function Settings() {
                   }
                 />
               )}
+
+              <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
+
+              <SettingsRow
+                label="Software Update"
+                sublabel={softwareUpdateLabel()}
+                control={
+                  <button
+                    onClick={updateAction.onClick}
+                    disabled={updateAction.disabled}
+                    style={{
+                      padding: '5px 14px', borderRadius: 8,
+                      border: '1px solid var(--color-border-ghost)', background: 'transparent',
+                      cursor: updateAction.disabled ? 'default' : 'pointer', fontSize: 12, fontWeight: 500,
+                      color: 'var(--color-text-secondary)', opacity: updateAction.disabled ? 0.5 : 1,
+                    }}
+                  >
+                    {updateAction.label}
+                  </button>
+                }
+              />
 
               <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
 
