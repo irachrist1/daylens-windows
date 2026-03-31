@@ -15,6 +15,20 @@ Daylens is a Windows Electron app that passively tracks app and website activity
 - App detail views with usage interpretation, grouped sessions, and hour-of-day mini charts.
 - GitHub-backed Windows releases with `electron-updater` metadata, in-app progress, and published "what's new" notes so installed apps can update without leaving Daylens.
 
+## MCP — Use Daylens with Claude Code, Cursor, and other AI agents
+
+[daylens-mcp](https://github.com/irachrist1/daylens-mcp) is an MCP server that gives AI coding assistants direct access to your Daylens activity history. Ask your AI "what was I working on this morning?", "when am I most focused?", or "write my performance review for last quarter" — answered from your local database in seconds.
+
+Works with Claude Code, Cursor, Windsurf, and Claude Desktop. Zero cloud. Your data never leaves your machine.
+
+```bash
+claude mcp add daylens -- npx -y daylens-mcp
+```
+
+[Full setup guide →](https://github.com/irachrist1/daylens-mcp)
+
+---
+
 ## Development
 
 - `npm start` runs the Electron app in development mode.

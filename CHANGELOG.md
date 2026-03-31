@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.16 - 2026-04-01
+
+- **daylens-mcp:** Daylens now has an MCP server that connects Claude Code, Cursor, Windsurf, and Claude Desktop directly to your activity history. Ask your AI "what was I working on this morning?", "when am I most productive?", or "write my Q1 performance review" — answered from your local database. Install: `claude mcp add daylens -- npx -y daylens-mcp`. Full docs at [github.com/irachrist1/daylens-mcp](https://github.com/irachrist1/daylens-mcp).
+
 ## v1.0.15 - 2026-03-31
 
 - Added provider-aware AI chat support for Anthropic, OpenAI, and Google AI Studio / Gemini.
