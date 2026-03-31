@@ -3,7 +3,7 @@ import { ipc } from '../lib/ipc'
 import { formatDateShort, formatDuration, formatTime, rollingDayBounds } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
 import { buildHourlyUsage, filterVisibleSessions, groupConsecutiveSessions } from '../lib/activity'
-import type { AppCategory, AppSession, AppUsageSummary, LiveSession } from '@shared/types'
+import type { AppCategory, AppCategorySuggestion, AppSession, AppUsageSummary, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import { formatDisplayAppName } from '../lib/apps'
@@ -118,6 +118,7 @@ export default function Apps() {
   const [selectedApp, setSelectedApp] = useState<AppUsageSummary | null>(null)
   const [, setOverrides] = useState<Record<string, AppCategory>>({})
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+  const [categorySuggestions, setCategorySuggestions] = useState<Record<string, AppCategorySuggestion>>({})
   const dropdownRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -191,6 +192,45 @@ export default function Apps() {
     setOverrides(overrideData as Record<string, AppCategory>)
   }
 
+  // These must be computed BEFORE any early return — they are deps of the useEffect below.
+  const mergedSummaries = mergeLiveSummary(summaries, live, days)
+  const visibleSummaries = mergedSummaries.filter(
+    (summary) => !isPresentationNoise(summary.category, summary.totalSeconds),
+  )
+
+  // Auto-suggest categories for uncategorized apps. Must be declared before the early
+  // return below, or React will throw "rendered fewer hooks than expected".
+  useEffect(() => {
+    const uncategorized = visibleSummaries
+      .filter((summary) => summary.category === 'uncategorized' && !categorySuggestions[summary.bundleId])
+      .slice(0, 6)
+
+    if (uncategorized.length === 0) return
+
+    let cancelled = false
+    void Promise.all(
+      uncategorized.map(async (summary) => {
+        const suggestion = await ipc.ai.suggestAppCategory(summary.bundleId, summary.appName)
+        return [summary.bundleId, suggestion] as const
+      }),
+    ).then((results) => {
+      if (cancelled) return
+      setCategorySuggestions((current) => {
+        const next = { ...current }
+        for (const [bundleId, suggestion] of results) {
+          next[bundleId] = suggestion
+        }
+        return next
+      })
+    }).catch(() => {
+      // Suggestion failure should never break the Apps view.
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [categorySuggestions, visibleSummaries])
+
   if (selectedApp) {
     const selectedSummary =
       live && live.bundleId === selectedApp.bundleId
@@ -210,6 +250,7 @@ export default function Apps() {
   }
 
   function renderCategoryDropdown(bundleId: string, currentCategory: AppCategory) {
+    const suggestion = categorySuggestions[bundleId]
     return (
       <div
         ref={dropdownRef}
@@ -221,14 +262,51 @@ export default function Apps() {
           boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
         }}
         onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
+        {currentCategory === 'uncategorized' && suggestion?.suggestedCategory && (
+          <div style={{ padding: '6px 12px 8px' }}>
+            <button
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleSetOverride(bundleId, suggestion.suggestedCategory!)
+              }}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                padding: '8px 10px',
+                borderRadius: 8,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-high)',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                AI suggests {formatCategory(suggestion.suggestedCategory)}
+              </span>
+              <span style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>Use</span>
+            </button>
+            {suggestion.reason && (
+              <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--color-text-tertiary)', lineHeight: 1.35 }}>
+                {suggestion.reason}
+              </div>
+            )}
+          </div>
+        )}
         {ALL_CATEGORIES.map((category) => {
           const color = distColor(category)
           const active = category === currentCategory
           return (
             <button
               key={category}
-              onClick={() => void handleSetOverride(bundleId, category)}
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleSetOverride(bundleId, category)
+              }}
               style={{
                 width: '100%', display: 'flex', alignItems: 'center', gap: 8,
                 padding: '6px 12px', background: 'transparent', border: 'none',
@@ -246,7 +324,10 @@ export default function Apps() {
         })}
         <div style={{ borderTop: '1px solid var(--color-border-ghost)', marginTop: 4, paddingTop: 4 }}>
           <button
-            onClick={() => void handleClearOverride(bundleId)}
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleClearOverride(bundleId)
+            }}
             style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'transparent', border: 'none', cursor: 'pointer' }}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
@@ -258,10 +339,6 @@ export default function Apps() {
     )
   }
 
-  const mergedSummaries = mergeLiveSummary(summaries, live, days)
-  const visibleSummaries = mergedSummaries.filter(
-    (summary) => !isPresentationNoise(summary.category, summary.totalSeconds),
-  )
   const totalSeconds = mergedSummaries.reduce((sum, summary) => sum + summary.totalSeconds, 0)
   const filtered = selectedCat
     ? visibleSummaries.filter((summary) => summary.category === selectedCat)
@@ -381,7 +458,10 @@ export default function Apps() {
                 const displayName = formatDisplayAppName(app.appName)
                 const sc = app.sessionCount ?? 1
                 const avgSec = sc > 0 ? Math.round(app.totalSeconds / sc) : 0
-                const characterLine = buildCharacterLine(app.category, avgSec, sc)
+                const suggestion = categorySuggestions[app.bundleId]
+                const characterLine = app.category === 'uncategorized' && suggestion?.suggestedCategory
+                  ? `AI suggests ${formatCategory(suggestion.suggestedCategory)}`
+                  : buildCharacterLine(app.category, avgSec, sc)
                 const isLive = live?.bundleId === app.bundleId
 
                 return (

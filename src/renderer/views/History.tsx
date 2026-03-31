@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import { formatDuration, formatTime, formatFullDate, percentOf, todayString } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
-import type { AppSession, AppCategory } from '@shared/types'
+import type { AppSession, AppCategory, HistoryDayPayload } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import { BarChart, Bar, Cell, ResponsiveContainer } from 'recharts'
 import AppIcon from '../components/AppIcon'
 import { formatDisplayAppName } from '../lib/apps'
+import TimelineDayView from '../components/history/TimelineDayView'
 
 function isPresentationNoise(session: AppSession): boolean {
   return (session.category === 'system' || session.category === 'uncategorized') &&
@@ -424,24 +425,49 @@ const FILTER_PILLS = [
 type FilterKey = typeof FILTER_PILLS[number]['key']
 
 export default function History() {
-  const [viewMode, setViewMode] = useState<'day' | 'week'>('day')
+  const [viewMode, setViewMode] = useState<'timeline' | 'stats' | 'week'>('timeline')
   const [date, setDate] = useState(todayString())
-  const [sessions, setSessions] = useState<AppSession[]>([])
+  const [dayPayload, setDayPayload] = useState<HistoryDayPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all')
   const [hoveredGroup, setHoveredGroup] = useState<string | null>(null)
 
   useEffect(() => {
-    if (viewMode !== 'day') return
-    setLoading(true)
-    setError(null)
-    ipc.db.getHistory(date).then((data) => {
-      setSessions(data as AppSession[])
-    }).catch((err) => {
-      setError(err instanceof Error ? err.message : String(err))
-    }).finally(() => setLoading(false))
+    if (viewMode === 'week') return
+    let cancelled = false
+
+    const loadDay = (showSpinner: boolean) => {
+      if (showSpinner) setLoading(true)
+      setError(null)
+      void ipc.db.getHistoryDay(date).then((data) => {
+        if (cancelled) return
+        setDayPayload(data)
+      }).catch((err) => {
+        if (cancelled) return
+        setDayPayload(null)
+        setError(err instanceof Error ? err.message : String(err))
+      }).finally(() => {
+        if (!cancelled && showSpinner) setLoading(false)
+      })
+    }
+
+    loadDay(true)
+
+    if (date === todayString()) {
+      const timer = window.setInterval(() => loadDay(false), 10_000)
+      return () => {
+        cancelled = true
+        window.clearInterval(timer)
+      }
+    }
+
+    return () => {
+      cancelled = true
+    }
   }, [date, viewMode])
+
+  const sessions = dayPayload?.sessions ?? []
 
   const groups    = groupSessions(sessions)
   const totalSec  = groups.reduce((n, g) => n + g.totalSeconds, 0)
@@ -477,96 +503,112 @@ export default function History() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
-      {/* ── Sticky day-view header ──────────────────────────────────────── */}
+      {/* ── Sticky header ──────────────────────────────────────────────── */}
       <div style={{
         position: 'sticky',
         top: 0,
         zIndex: 10,
         background: 'var(--color-bg)',
-        padding: '20px 40px 16px',
+        padding: '24px 40px 18px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         borderBottom: '1px solid rgba(66,71,84,0.20)',
       }}>
-        {/* Left: title + separator + date or "Weekly Overview" */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', letterSpacing: '-0.01em' }}>
-            {viewMode === 'day' ? 'Daily Timeline' : 'Weekly Overview'}
-          </span>
-          {viewMode === 'day' && (
-            <>
-              <span style={{ width: 1, height: 16, background: 'rgba(66,71,84,0.6)', display: 'inline-block' }} />
-              <span style={{ fontSize: 13, color: 'var(--color-text-secondary)', fontWeight: 500 }}>
-                {formatFullDate(date)}
-              </span>
-            </>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            onClick={() => setDate(shiftDate(date, -1))}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 999,
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              color: 'var(--color-text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 1,
+            }}
+          >
+            <IconChevronLeft />
+          </button>
+          <div
+            style={{
+              minWidth: 146,
+              padding: '9px 18px',
+              borderRadius: 999,
+              background: 'var(--color-surface-container)',
+              border: '1px solid var(--color-border-ghost)',
+              fontSize: 13,
+              fontWeight: 700,
+              color: 'var(--color-text-primary)',
+              textAlign: 'center',
+              boxShadow: 'var(--color-shadow-soft)',
+            }}
+          >
+            {viewMode === 'week' ? 'This Week' : formatFullDate(date)}
+          </div>
+          <button
+            onClick={() => setDate(shiftDate(date, 1))}
+            disabled={isToday && viewMode !== 'week'}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 999,
+              border: 'none',
+              background: 'transparent',
+              cursor: isToday && viewMode !== 'week' ? 'default' : 'pointer',
+              color: 'var(--color-text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 1,
+              opacity: isToday && viewMode !== 'week' ? 0.35 : 1,
+            }}
+          >
+            <IconChevronRight />
+          </button>
         </div>
 
-        {/* Right: nav arrows + Today pill + Day/Week toggle */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {viewMode === 'day' && (
-            <>
-              <button
-                onClick={() => setDate(shiftDate(date, -1))}
-                style={{
-                  width: 34, height: 34, borderRadius: 10, border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-container)', cursor: 'pointer',
-                  color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center',
-                  justifyContent: 'center', lineHeight: 1, boxShadow: 'var(--color-shadow-soft)',
-                }}
-              >
-                <IconChevronLeft />
-              </button>
-              <button
-                onClick={() => setDate(shiftDate(date, 1))}
-                disabled={isToday}
-                style={{
-                  width: 34, height: 34, borderRadius: 10, border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-container)', cursor: isToday ? 'default' : 'pointer',
-                  color: 'var(--color-text-secondary)', display: 'flex',
-                  alignItems: 'center', justifyContent: 'center', opacity: isToday ? 0.3 : 1,
-                  lineHeight: 1, boxShadow: 'var(--color-shadow-soft)',
-                }}
-              >
-                <IconChevronRight />
-              </button>
-              {!isToday && (
-                <button
-                  onClick={() => setDate(todayString())}
-                  style={{
-                    padding: '4px 12px', borderRadius: 10, fontSize: 12, fontWeight: 700,
-                    border: 'none', cursor: 'pointer',
-                    background: 'var(--gradient-primary)',
-                    color: 'var(--color-primary-contrast)',
-                  }}
-                >
-                  Today
-                </button>
-              )}
-            </>
+          {!isToday && viewMode !== 'week' && (
+            <button
+              onClick={() => setDate(todayString())}
+              style={{
+                padding: '7px 12px',
+                borderRadius: 10,
+                fontSize: 12,
+                fontWeight: 700,
+                border: '1px solid var(--color-border-ghost)',
+                cursor: 'pointer',
+                background: 'var(--color-surface-container)',
+                color: 'var(--color-text-secondary)',
+              }}
+            >
+              Today
+            </button>
           )}
 
-          {/* Day / Week toggle */}
-          <div style={{ display: 'flex', gap: 4, padding: 3, borderRadius: 12, background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)' }}>
-            {(['day', 'week'] as const).map((mode) => (
+          <div style={{ display: 'flex', gap: 4, padding: 3, borderRadius: 10, background: 'var(--color-surface-high)', border: '1px solid var(--color-border-ghost)' }}>
+            {(['timeline', 'stats', 'week'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
                 style={{
                   padding: '5px 14px',
-                  borderRadius: 9,
+                  borderRadius: 7,
                   fontSize: 12,
                   fontWeight: 700,
-                  border: viewMode === mode ? 'none' : '1px solid transparent',
+                  border: '1px solid transparent',
                   cursor: 'pointer',
                   background: viewMode === mode ? 'var(--gradient-primary)' : 'transparent',
                   color: viewMode === mode ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
                   transition: 'all 120ms',
                 }}
               >
-                {mode === 'day' ? 'Day' : 'Week'}
+                {mode === 'timeline' ? 'Timeline' : mode === 'stats' ? 'Stats' : 'Week'}
               </button>
             ))}
           </div>
@@ -582,14 +624,14 @@ export default function History() {
             <WeekView
               onSelectDay={(d) => {
                 setDate(d)
-                setViewMode('day')
+                setViewMode('timeline')
               }}
             />
           </div>
         )}
 
         {/* ── Day view content ─────────────────────────────────────────── */}
-        {viewMode === 'day' && (
+        {viewMode !== 'week' && (
           <>
             {error && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '48px 0', gap: 12 }}>
@@ -605,51 +647,46 @@ export default function History() {
 
             {!error && (
               <>
-                {/* Filter pills */}
-                <div style={{ display: 'flex', gap: 8, overflowX: 'auto', marginBottom: 32, paddingBottom: 2 }}>
-                  {FILTER_PILLS.map((pill) => {
-                    const isActive = activeFilter === pill.key
-                    return (
-                      <button
-                        key={pill.key}
-                        onClick={() => setActiveFilter(pill.key)}
-                        style={{
-                          padding: '6px 16px',
-                          borderRadius: 10,
-                          fontSize: 12,
-                          fontWeight: 700,
-                          border: isActive ? 'none' : '1px solid var(--color-border-ghost)',
-                          cursor: 'pointer',
-                          flexShrink: 0,
-                          background: isActive ? 'var(--gradient-primary)' : 'var(--color-surface-container)',
-                          color: isActive ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
-                          transition: 'all 120ms',
-                        }}
-                      >
-                        {pill.label}
-                      </button>
-                    )
-                  })}
-                </div>
+                {viewMode === 'timeline' && loading && (
+                  <div style={{ display: 'grid', gap: 14 }}>
+                    <div style={{ height: 18, width: 240, borderRadius: 999, background: 'var(--color-surface-high)', opacity: 0.5 }} />
+                    <div style={{ height: 26, width: 360, borderRadius: 999, background: 'var(--color-surface-high)', opacity: 0.5 }} />
+                    <div style={{ height: 540, borderRadius: 18, background: 'var(--color-surface-low)', opacity: 0.55 }} />
+                  </div>
+                )}
 
-                {/* Timeline bar (only when data exists) */}
-                {!loading && sessions.length > 0 && (
+                {viewMode === 'timeline' && dayPayload && !loading && (
+                  <TimelineDayView
+                    payload={dayPayload}
+                    date={date}
+                    activeFilter={activeFilter}
+                    onFilterChange={setActiveFilter}
+                  />
+                )}
+
+                {viewMode === 'timeline' && !loading && dayPayload && dayPayload.blocks.length === 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '96px 0', textAlign: 'center' }}>
+                    <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>No timeline yet</p>
+                    <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>No activity was recorded for this date.</p>
+                  </div>
+                )}
+
+                {viewMode === 'stats' && !loading && sessions.length > 0 && (
                   <DayTimeline sessions={sessions} sortedCats={sortedCats} />
                 )}
 
-                {/* Vertical timeline session list */}
-                {loading ? (
+                {viewMode === 'stats' && loading ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
                     {[...Array(6)].map((_, i) => (
                       <div key={i} style={{ height: 80, background: 'var(--color-surface-low)', borderRadius: 12, opacity: 0.4 }} />
                     ))}
                   </div>
-                ) : filteredGroups.length === 0 ? (
+                ) : viewMode === 'stats' && filteredGroups.length === 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '64px 0', textAlign: 'center' }}>
                     <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>No sessions</p>
                     <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>No activity recorded for this date.</p>
                   </div>
-                ) : (
+                ) : viewMode === 'stats' ? (
                   /* Vertical timeline */
                   <div style={{ position: 'relative', paddingLeft: 64 }}>
                     {/* Vertical line */}
@@ -795,10 +832,10 @@ export default function History() {
                       )
                     })}
                   </div>
-                )}
+                ) : null}
 
                 {/* Spacer so footer doesn't clip last card */}
-                <div style={{ height: 100 }} />
+                {viewMode === 'stats' && <div style={{ height: 100 }} />}
               </>
             )}
           </>
@@ -806,7 +843,7 @@ export default function History() {
       </div>
 
       {/* ── Sticky footer (day view only) ──────────────────────────────── */}
-      {viewMode === 'day' && !error && !loading && groups.length > 0 && (
+      {viewMode === 'stats' && !error && !loading && groups.length > 0 && (
         <div style={{
           position: 'sticky',
           bottom: 0,

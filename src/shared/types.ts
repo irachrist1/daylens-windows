@@ -29,6 +29,56 @@ export interface AppUsageSummary {
   sessionCount?: number   // populated from DB queries; absent for live/synthetic entries
 }
 
+export type BlockConfidence = 'high' | 'medium' | 'low'
+
+export interface WorkContextAppSummary {
+  bundleId: string
+  appName: string
+  category: AppCategory
+  totalSeconds: number
+  sessionCount: number
+  isBrowser: boolean
+}
+
+export interface WorkContextBlock {
+  id: string
+  startTime: number
+  endTime: number
+  dominantCategory: AppCategory
+  categoryDistribution: Partial<Record<AppCategory, number>>
+  ruleBasedLabel: string
+  aiLabel: string | null
+  sessions: AppSession[]
+  topApps: WorkContextAppSummary[]
+  websites: WebsiteSummary[]
+  keyPages: string[]
+  switchCount: number
+  confidence: BlockConfidence
+  isLive: boolean
+}
+
+export interface HistoryDayPayload {
+  date: string
+  sessions: AppSession[]
+  websites: WebsiteSummary[]
+  blocks: WorkContextBlock[]
+  totalSeconds: number
+  focusSeconds: number
+  focusPct: number
+  appCount: number
+  siteCount: number
+}
+
+export interface WorkContextInsight {
+  label: string | null
+  narrative: string | null
+}
+
+export interface AppCategorySuggestion {
+  suggestedCategory: AppCategory | null
+  reason: string | null
+}
+
 export interface FocusSession {
   id: number
   startTime: number
@@ -177,6 +227,7 @@ export const IPC = {
   DB: {
     GET_TODAY: 'db:get-today',
     GET_HISTORY: 'db:get-history',
+    GET_HISTORY_DAY: 'db:get-history-day',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SESSIONS: 'db:get-app-sessions',
     GET_WEBSITE_SUMMARIES: 'db:get-website-summaries',
@@ -198,6 +249,8 @@ export const IPC = {
     SEND_MESSAGE: 'ai:send-message',
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
+    GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
+    SUGGEST_APP_CATEGORY: 'ai:suggest-app-category',
   },
   SETTINGS: {
     GET: 'settings:get',

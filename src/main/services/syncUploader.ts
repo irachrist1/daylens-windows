@@ -4,7 +4,7 @@
  */
 import { exportSnapshot } from './snapshotExporter'
 import { getDeviceId } from './credentials'
-import { getConvexSiteUrl, getSessionToken } from './workspaceLinker'
+import { getConvexSiteUrl, getSessionToken, repairStoredWorkspaceSession } from './workspaceLinker'
 import { daysFromTodayLocalDateString, localDateString } from '../lib/localDate'
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
@@ -95,17 +95,7 @@ async function syncNow(): Promise<void> {
     try {
       const snapshot = exportSnapshot(dateStr, deviceId)
 
-      const res = await fetch(`${siteUrl}/uploadSnapshot`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({
-          localDate: dateStr,
-          snapshot,
-        }),
-      })
+      const res = await uploadSnapshot(siteUrl, sessionToken, dateStr, snapshot)
 
       if (res.ok) {
         dirtyDays.delete(dateStr)
@@ -113,6 +103,25 @@ async function syncNow(): Promise<void> {
         console.log(`[sync] uploaded ${dateStr}`)
       } else {
         const text = await res.text().catch(() => '')
+        if (shouldAttemptSessionRepair(res.status, text)) {
+          const repaired = await repairStoredWorkspaceSession()
+          if (repaired) {
+            const freshToken = await getSessionToken()
+            if (freshToken) {
+              const retryRes = await uploadSnapshot(siteUrl, freshToken, dateStr, snapshot)
+              if (retryRes.ok) {
+                dirtyDays.delete(dateStr)
+                lastSyncAt = Date.now()
+                console.log(`[sync] uploaded ${dateStr} after session repair`)
+                continue
+              }
+              const retryText = await retryRes.text().catch(() => '')
+              console.warn(`[sync] upload retry failed for ${dateStr}: ${retryRes.status} ${retryText}`)
+              continue
+            }
+          }
+        }
+
         console.warn(`[sync] upload failed for ${dateStr}: ${res.status} ${text}`)
       }
     } catch (err) {
@@ -125,4 +134,26 @@ async function syncNow(): Promise<void> {
 
 function todayStr(): string {
   return localDateString()
+}
+
+function uploadSnapshot(siteUrl: string, sessionToken: string, dateStr: string, snapshot: unknown): Promise<Response> {
+  return fetch(`${siteUrl}/uploadSnapshot`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${sessionToken}`,
+    },
+    body: JSON.stringify({
+      localDate: dateStr,
+      snapshot,
+    }),
+  })
+}
+
+function shouldAttemptSessionRepair(status: number, bodyText: string): boolean {
+  if (status !== 401 && status !== 403) return false
+
+  return bodyText.includes('Snapshot identity mismatch')
+    || bodyText.includes('Unknown device')
+    || bodyText.includes('Not authenticated')
 }

@@ -1,6 +1,7 @@
 // Activity tracker — polls active window every 5 s and flushes completed sessions to DB.
 // Uses @paymoapp/active-window which supports Windows, macOS, and Linux natively.
 import { app, powerMonitor } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
 import { insertAppSession } from '../db/queries'
 import { getDb } from './database'
@@ -34,6 +35,37 @@ const POLL_INTERVAL_MS  = 5_000
 const MIN_SESSION_SEC   = 10    // discard sub-10s noise (5s/10s micro-fragments)
 const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → hold the session open provisionally
 const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
+
+interface NormalizationMap {
+  aliases: Record<string, string>
+  catalog: Record<string, { displayName: string; defaultCategory: AppCategory }>
+}
+
+let _normMap: NormalizationMap | null = null
+
+function getNormalizationMap(): NormalizationMap {
+  if (_normMap) return _normMap
+
+  const candidates = [
+    ...(typeof process !== 'undefined' && process.resourcesPath
+      ? [path.join(process.resourcesPath, 'app-normalization.v1.json')]
+      : []),
+    path.join(__dirname, '..', '..', 'shared', 'app-normalization.v1.json'),
+    path.join(process.cwd(), 'shared', 'app-normalization.v1.json'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      _normMap = JSON.parse(fs.readFileSync(candidate, 'utf8')) as NormalizationMap
+      return _normMap
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  _normMap = { aliases: {}, catalog: {} }
+  return _normMap
+}
 
 // ─── active-window singleton ─────────────────────────────────────────────────
 // @paymoapp/active-window is a native CJS module — synchronous getActiveWindow().
@@ -386,6 +418,11 @@ const RULES: [RegExp, AppCategory][] = [
   // Remote access
   [/\bssh\b|putty|mobaxterm/i, 'development'],
 
+  // ── Email — MUST come before browsing so that email clients that use WebView2
+  //    (e.g. New Outlook / olk.exe) are not misclassified as browsers.
+  //    \bolk\b matches the New Outlook for Windows Store exe name.
+  [/\bmail\b|outlook|\bolk\b|\bgmail\b|thunderbird|spark|airmail|mimestream/i, 'email'],
+
   // ── Communication — messaging only (no video calls) ─────────────────────────
   [/slack|teams|discord|skype|telegram|signal|whatsapp|lark|google.?chat|mattermost/i, 'communication'],
 
@@ -402,9 +439,6 @@ const RULES: [RegExp, AppCategory][] = [
 
   // ── AI tools ─────────────────────────────────────────────────────────────────
   [/claude|chatgpt|copilot|gemini|perplexity|mistral|ollama|lm.?studio|jan\.ai/i, 'aiTools'],
-
-  // ── Email ────────────────────────────────────────────────────────────────────
-  [/\bmail\b|outlook|\bgmail\b|thunderbird|spark|airmail|mimestream/i, 'email'],
 
   // ── Research ─────────────────────────────────────────────────────────────────
   [/reader|readwise|pocket|instapaper|kindle|\bbooks\b|zotero|reeder|\bdash\b|kapeli/i, 'research'],
@@ -437,6 +471,27 @@ function normalizeForClassify(bundleId: string, appName: string): string {
   return `${strip(bundleId)} ${strip(appName)}`.toLowerCase()
 }
 
+function normalizedCatalogCategory(bundleId: string, appName: string): AppCategory | null {
+  const map = getNormalizationMap()
+  const candidates = [
+    bundleId,
+    path.basename(bundleId).toLowerCase(),
+    path.basename(bundleId).replace(/\.exe$/i, '').toLowerCase(),
+    appName.toLowerCase(),
+    appName.replace(/\.exe$/i, '').toLowerCase(),
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    const key = map.aliases[candidate] ?? candidate
+    const catalogEntry = map.catalog[key]
+    if (catalogEntry?.defaultCategory) {
+      return catalogEntry.defaultCategory
+    }
+  }
+
+  return null
+}
+
 // Last match info exposed for the debug panel
 export let lastClassifyMatch: { target: string; category: AppCategory } = {
   target: '',
@@ -444,6 +499,12 @@ export let lastClassifyMatch: { target: string; category: AppCategory } = {
 }
 
 function classifyApp(bundleId: string, appName: string): AppCategory {
+  const normalizedCategory = normalizedCatalogCategory(bundleId, appName)
+  if (normalizedCategory) {
+    lastClassifyMatch = { target: `${bundleId} ${appName}`, category: normalizedCategory }
+    return normalizedCategory
+  }
+
   const target = normalizeForClassify(bundleId, appName)
   for (const [pattern, category] of RULES) {
     if (pattern.test(target)) {

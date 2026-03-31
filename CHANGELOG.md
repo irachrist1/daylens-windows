@@ -2,7 +2,15 @@
 
 ## v1.0.16 - 2026-04-01
 
-- **daylens-mcp:** Daylens now has an MCP server that connects Claude Code, Cursor, Windsurf, and Claude Desktop directly to your activity history. Ask your AI "what was I working on this morning?", "when am I most productive?", or "write my Q1 performance review" — answered from your local database. Install: `claude mcp add daylens -- npx -y daylens-mcp`. Full docs at [github.com/irachrist1/daylens-mcp](https://github.com/irachrist1/daylens-mcp).
+- Added macOS-style timeline blocks in History, with grouped work-context blocks, evidence popovers, and day-level timeline filtering.
+- Added AI-powered block labeling and narrative analysis for timeline blocks, with provider fallback across OpenAI, Anthropic, and Google Gemini.
+- Fixed provider/model switching so saved AI settings refresh correctly across Settings, Insights, and History analysis flows.
+- Fixed app categorization UX so changing a category no longer opens the app detail view, and uncategorized apps can now show AI category suggestions.
+- Improved automatic app classification by honoring the normalization catalog first, which fixes common mistakes like Outlook being treated as browsing.
+- Fixed sync session drift by automatically repairing stale desktop sync sessions after `Snapshot identity mismatch` or `Unknown device` errors.
+- Fixed History so today's live in-progress session appears in the timeline without waiting for an app switch, and the page refreshes while you are viewing it.
+- Improved timeline popover behavior with explicit re-analysis, faster local fallbacks, and better hour-axis spacing for late-night/two-digit times.
+- Updated the Windows release workflow to publish `latest.yml` and NSIS blockmap metadata so existing installs can receive in-app updates while new users still download the newest installer from the website.
 
 ## v1.0.15 - 2026-03-31
 

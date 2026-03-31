@@ -3,12 +3,16 @@ import type {
   AppCategory,
   AppCharacter,
   AppSettings,
+  AppCategorySuggestion,
   AIProvider,
   BreakRecommendation,
   FocusStartPayload,
+  HistoryDayPayload,
   PeakHoursResult,
   ProcessSnapshot,
   WeeklySummary,
+  WorkContextBlock,
+  WorkContextInsight,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 
@@ -33,6 +37,7 @@ const api = {
   db: {
     getToday: () => ipcRenderer.invoke(IPC.DB.GET_TODAY),
     getHistory: (date: string) => ipcRenderer.invoke(IPC.DB.GET_HISTORY, date),
+    getHistoryDay: (date: string): Promise<HistoryDayPayload> => ipcRenderer.invoke(IPC.DB.GET_HISTORY_DAY, date),
     getAppSummaries: (days?: number) => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getAppSessions: (bundleId: string, days?: number) =>
       ipcRenderer.invoke(IPC.DB.GET_APP_SESSIONS, bundleId, days),
@@ -65,6 +70,10 @@ const api = {
     sendMessage: (message: string) => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, message),
     getHistory: () => ipcRenderer.invoke(IPC.AI.GET_HISTORY),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
+    generateBlockInsight: (block: WorkContextBlock): Promise<WorkContextInsight> =>
+      ipcRenderer.invoke(IPC.AI.GENERATE_BLOCK_INSIGHT, block),
+    suggestAppCategory: (bundleId: string, appName: string): Promise<AppCategorySuggestion> =>
+      ipcRenderer.invoke(IPC.AI.SUGGEST_APP_CATEGORY, bundleId, appName),
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),

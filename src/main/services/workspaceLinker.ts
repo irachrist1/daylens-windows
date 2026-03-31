@@ -105,6 +105,59 @@ export async function createBrowserLink(): Promise<BrowserLinkResult> {
 }
 
 /**
+ * Recovers the linked workspace using a stored recovery mnemonic and refreshes
+ * the desktop session token for the current device.
+ */
+export async function recoverWorkspace(mnemonic: string): Promise<string> {
+  const normalized = normalizeMnemonic(mnemonic)
+  const workspaceId = deriveWorkspaceId(normalized)
+  const recoveryKeyHash = sha256Hex(workspaceId)
+
+  let deviceId = await getDeviceId()
+  if (!deviceId) {
+    deviceId = crypto.randomUUID()
+    await setDeviceId(deviceId)
+  }
+
+  const body = {
+    recoveryKeyHash,
+    deviceId,
+    displayName: os.hostname() || 'This PC',
+    platform: 'windows',
+  }
+
+  const result = await callConvex('recoverWorkspace', body)
+  const sessionToken =
+    typeof result.sessionToken === 'string' ? result.sessionToken : null
+  if (!sessionToken) {
+    throw new Error('Workspace not found or invalid server response')
+  }
+
+  await setWorkspaceId(workspaceId)
+  await setWorkspaceToken(sessionToken)
+  await setRecoveryMnemonic(normalized)
+
+  return workspaceId
+}
+
+/**
+ * Best-effort repair path for stale desktop sessions. Returns true when a new
+ * session token was issued from the stored recovery mnemonic.
+ */
+export async function repairStoredWorkspaceSession(): Promise<boolean> {
+  const mnemonic = await getRecoveryMnemonic()
+  if (!mnemonic) return false
+
+  try {
+    await recoverWorkspace(mnemonic)
+    return true
+  } catch (error) {
+    console.warn('[sync] workspace recovery failed:', error)
+    return false
+  }
+}
+
+/**
  * Disconnects the workspace — clears all credentials.
  */
 export async function disconnect(): Promise<void> {

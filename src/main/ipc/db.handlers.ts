@@ -14,7 +14,10 @@ import {
 import { getDb } from '../services/database'
 import { getCurrentSession } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
+import { getHistoryDayPayload } from '../services/workBlocks'
 import { IPC } from '@shared/types'
+import type { AppSession } from '@shared/types'
+import { FOCUSED_CATEGORIES } from '@shared/types'
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -50,7 +53,11 @@ export function registerDbHandlers(): void {
   // Raw sessions for a given date — used by History and Today timeline
   ipcMain.handle(IPC.DB.GET_HISTORY, (_e, dateStr: string) => {
     const [from, to] = dayBounds(dateStr)
-    return getSessionsForRange(getDb(), from, to)
+    return mergeLiveSessionForDate(getSessionsForRange(getDb(), from, to), dateStr)
+  })
+
+  ipcMain.handle(IPC.DB.GET_HISTORY_DAY, (_e, dateStr: string) => {
+    return getHistoryDayPayload(getDb(), dateStr, getLiveSessionForDate(dateStr))
   })
 
   // App usage summaries for a range — used by Apps view
@@ -146,4 +153,34 @@ export function registerDbHandlers(): void {
       return null
     }
   })
+}
+
+function getLiveSessionForDate(dateStr: string) {
+  const live = getCurrentSession()
+  if (!live) return null
+
+  const [from, to] = dayBounds(dateStr)
+  const liveEnd = Date.now()
+  if (liveEnd <= from || live.startTime >= to) return null
+  return live
+}
+
+function mergeLiveSessionForDate(sessions: AppSession[], dateStr: string): AppSession[] {
+  const live = getLiveSessionForDate(dateStr)
+  if (!live) return sessions
+
+  const endTime = Date.now()
+  return [
+    ...sessions,
+    {
+      id: -1,
+      bundleId: live.bundleId,
+      appName: live.appName,
+      startTime: live.startTime,
+      endTime,
+      durationSeconds: Math.max(1, Math.round((endTime - live.startTime) / 1000)),
+      category: live.category,
+      isFocused: FOCUSED_CATEGORIES.includes(live.category),
+    },
+  ].sort((left, right) => left.startTime - right.startTime)
 }

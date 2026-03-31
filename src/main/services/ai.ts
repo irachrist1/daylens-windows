@@ -16,11 +16,13 @@ import {
   getCategoryOverrides,
 } from '../db/queries'
 import { getDb } from './database'
-import { getApiKey, getSettings } from './settings'
+import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
-import type { AIProvider } from '@shared/types'
+import type { AIProvider, AppCategorySuggestion, WorkContextBlock, WorkContextInsight } from '@shared/types'
+import { fallbackNarrativeForBlock, userVisibleLabelForBlock } from './workBlocks'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
+const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
 
 interface ResolvedProviderConfig {
   provider: AIProvider
@@ -30,31 +32,57 @@ interface ResolvedProviderConfig {
 
 type ConversationMessage = { role: 'user' | 'assistant'; content: string }
 
-async function resolveProviderConfig(): Promise<ResolvedProviderConfig> {
-  const settings = getSettings()
-  const orderedProviders = [
-    settings.aiProvider ?? 'anthropic',
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+    void promise
+      .then((value) => {
+        clearTimeout(timer)
+        resolve(value)
+      })
+      .catch((error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+  })
+}
+
+function uniqueProviders(preferredProvider: AIProvider): AIProvider[] {
+  return [
+    preferredProvider,
+    'google',
     'anthropic',
     'openai',
-    'google',
   ].filter((provider, index, providers) => providers.indexOf(provider) === index) as AIProvider[]
+}
+
+async function resolveProviderConfigs(): Promise<ResolvedProviderConfig[]> {
+  const settings = await getSettingsAsync()
+  const orderedProviders = [
+    ...uniqueProviders(settings.aiProvider ?? 'anthropic'),
+  ]
+
+  const configs: ResolvedProviderConfig[] = []
 
   for (const provider of orderedProviders) {
     const apiKey = await getApiKey(provider)
     if (!apiKey) continue
 
-    return {
+    configs.push({
       provider,
       apiKey,
-      model: modelForProvider(provider),
-    }
+      model: modelForProvider(provider, settings),
+    })
   }
 
-  throw new Error('No API key configured for the selected AI provider')
+  if (configs.length === 0) {
+    throw new Error('No API key configured for the selected AI provider')
+  }
+
+  return configs
 }
 
-function modelForProvider(provider: AIProvider): string {
-  const settings = getSettings()
+function modelForProvider(provider: AIProvider, settings = getSettings()): string {
   switch (provider) {
     case 'openai':
       return settings.openaiModel || 'gpt-5.4'
@@ -83,6 +111,41 @@ function openAIInputFromHistory(messages: ConversationMessage[]): Array<{ role: 
     role: message.role,
     content: message.content,
   }))
+}
+
+function isQuotaOrAuthError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const maybeError = error as { status?: number; code?: string; type?: string; error?: { code?: string; status?: string; type?: string } }
+  return maybeError.status === 401
+    || maybeError.status === 403
+    || maybeError.status === 429
+    || maybeError.code === 'insufficient_quota'
+    || maybeError.type === 'insufficient_quota'
+    || maybeError.error?.code === 'insufficient_quota'
+    || maybeError.error?.status === 'RESOURCE_EXHAUSTED'
+}
+
+async function sendWithFallback(
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+): Promise<{ text: string; config: ResolvedProviderConfig }> {
+  const configs = await resolveProviderConfigs()
+  let lastError: unknown = null
+
+  for (const config of configs) {
+    try {
+      const text = await sendWithProvider(config, systemPrompt, prior, userMessage)
+      return { text, config }
+    } catch (error) {
+      lastError = error
+      if (!isQuotaOrAuthError(error)) {
+        throw error
+      }
+    }
+  }
+
+  throw lastError ?? new Error('No AI provider could satisfy the request')
 }
 
 function googleHistoryFromMessages(messages: ConversationMessage[]): GoogleContent[] {
@@ -523,8 +586,186 @@ function buildDayContext(): string {
   }
 }
 
+function escapeJsonBlock(raw: string): string {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  return fenced?.[1]?.trim() ?? raw.trim()
+}
+
+function parseWorkBlockInsight(raw: string): WorkContextInsight | null {
+  const candidate = escapeJsonBlock(raw)
+  try {
+    const parsed = JSON.parse(candidate) as { label?: unknown; narrative?: unknown }
+    return {
+      label: typeof parsed.label === 'string' ? parsed.label.trim() : null,
+      narrative: typeof parsed.narrative === 'string' ? parsed.narrative.trim() : null,
+    }
+  } catch {
+    const labelMatch = candidate.match(/label\s*:\s*(.+)/i)
+    const narrativeMatch = candidate.match(/narrative\s*:\s*([\s\S]+)/i)
+    if (!labelMatch && !narrativeMatch) return null
+    return {
+      label: labelMatch?.[1]?.trim() ?? null,
+      narrative: narrativeMatch?.[1]?.trim() ?? null,
+    }
+  }
+}
+
+function workBlockPrompt(block: WorkContextBlock): string {
+  const durationMinutes = Math.max(1, Math.round((block.endTime - block.startTime) / 60_000))
+
+  // Top websites with duration — highest-signal evidence (browser/AI work)
+  const websiteLines = block.websites.slice(0, 5).map((site) => {
+    const dur = formatDuration(site.totalSeconds)
+    const title = site.topTitle ? ` (${site.topTitle.slice(0, 60)})` : ''
+    return `  ${site.domain}${title} — ${dur}`
+  })
+
+  // Native window titles (non-browser) — document/file context
+  const pages = block.keyPages.filter(Boolean).slice(0, 5)
+
+  // Top apps with duration and category
+  const appLines = block.topApps.slice(0, 5).map((app) => {
+    return `  ${app.appName} (${app.category}) — ${formatDuration(app.totalSeconds)}`
+  })
+
+  // Category time breakdown
+  const catLines = (Object.entries(block.categoryDistribution) as Array<[string, number]>)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([cat, sec]) => `  ${cat}: ${formatDuration(sec)}`)
+
+  const switchNote = block.switchCount >= 5
+    ? `Highly fragmented — ${block.switchCount} context switches.`
+    : block.switchCount >= 2
+      ? `${block.switchCount} context switches.`
+      : ''
+
+  const lines = [
+    'Analyze this Daylens work block.',
+    'Return strict JSON: {"label":"...","narrative":"..."}',
+    'label: 3-7 word title-case. NEVER return a bare category name ("Browsing", "Development").',
+    'narrative: 1-2 plain sentences. Evidence-led, no hype, no "the user" prefix.',
+    'Priority rules:',
+    '  - Website titles > window titles > app names > category.',
+    '  - Browser+AI only ≠ Development → call it Research or Planning.',
+    '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
+    '',
+    `Duration: ${durationMinutes} minutes`,
+    `Dominant category: ${block.dominantCategory}`,
+    switchNote,
+    '',
+    websiteLines.length > 0 ? `Website evidence (highest priority):\n${websiteLines.join('\n')}` : 'Websites: none',
+    pages.length > 0 ? `Window titles:\n${pages.map((p) => `  ${p}`).join('\n')}` : 'Window titles: none',
+    appLines.length > 0 ? `Apps used:\n${appLines.join('\n')}` : 'Apps: none',
+    catLines.length > 0 ? `Category breakdown:\n${catLines.join('\n')}` : '',
+    `Rule-based label (override this if evidence supports better): ${userVisibleLabelForBlock(block)}`,
+  ].filter(Boolean)
+
+  return lines.join('\n')
+}
+
+function parseSuggestedCategory(raw: string): AppCategorySuggestion | null {
+  const candidate = escapeJsonBlock(raw)
+  try {
+    const parsed = JSON.parse(candidate) as { category?: unknown; reason?: unknown }
+    const category = typeof parsed.category === 'string' ? parsed.category.trim() : null
+    const reason = typeof parsed.reason === 'string' ? parsed.reason.trim() : null
+    return {
+      suggestedCategory: isAppCategory(category) ? category : null,
+      reason,
+    }
+  } catch {
+    const normalized = candidate.trim().toLowerCase()
+    if (isAppCategory(normalized)) {
+      return { suggestedCategory: normalized, reason: null }
+    }
+    return null
+  }
+}
+
+function isAppCategory(value: string | null): value is import('@shared/types').AppCategory {
+  return value !== null && [
+    'development',
+    'communication',
+    'research',
+    'writing',
+    'aiTools',
+    'design',
+    'browsing',
+    'meetings',
+    'entertainment',
+    'email',
+    'productivity',
+    'social',
+    'system',
+    'uncategorized',
+  ].includes(value)
+}
+
+function appCategorySuggestionPrompt(bundleId: string, appName: string): string {
+  return [
+    'Classify this app into one Daylens category.',
+    'Return strict JSON: {"category":"...","reason":"..."}',
+    'Allowed categories: development, communication, research, writing, aiTools, design, browsing, meetings, entertainment, email, productivity, social, system, uncategorized',
+    'Use uncategorized only if the app identity is genuinely ambiguous.',
+    `Bundle or executable: ${bundleId || 'Unknown'}`,
+    `App name: ${appName || 'Unknown'}`,
+  ].join('\n')
+}
+
+export async function suggestAppCategory(bundleId: string, appName: string): Promise<AppCategorySuggestion> {
+  const systemPrompt = [
+    'You are Daylens.',
+    'You classify productivity apps conservatively.',
+    'Prefer email for mail clients, communication for chat clients, browsing only for real web browsers.',
+    'Return only valid JSON.',
+  ].join(' ')
+
+  try {
+    const { text } = await sendWithFallback(systemPrompt, [], appCategorySuggestionPrompt(bundleId, appName))
+    const parsed = parseSuggestedCategory(text)
+    if (parsed?.suggestedCategory) return parsed
+  } catch {
+    // Fall through to no-suggestion result.
+  }
+
+  return {
+    suggestedCategory: null,
+    reason: null,
+  }
+}
+
+export async function generateWorkBlockInsight(block: WorkContextBlock): Promise<WorkContextInsight> {
+  const systemPrompt = [
+    'You are Daylens.',
+    'You label productivity timeline blocks from local activity evidence.',
+    'Be concrete, restrained, and evidence-led.',
+    'Never mention the model provider.',
+    'If the evidence is weak, keep the label generic but still useful.',
+    'Return only valid JSON.',
+  ].join(' ')
+
+  try {
+    const { text } = await withTimeout(
+      sendWithFallback(systemPrompt, [], workBlockPrompt(block)),
+      BLOCK_INSIGHT_TIMEOUT_MS,
+      'Block insight timed out',
+    )
+    const parsed = parseWorkBlockInsight(text)
+
+    return {
+      label: parsed?.label || userVisibleLabelForBlock(block),
+      narrative: parsed?.narrative || fallbackNarrativeForBlock(block),
+    }
+  } catch {
+    return {
+      label: userVisibleLabelForBlock(block),
+      narrative: fallbackNarrativeForBlock(block),
+    }
+  }
+}
+
 export async function sendMessage(userMessage: string): Promise<string> {
-  const providerConfig = await resolveProviderConfig()
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
 
@@ -540,11 +781,13 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
     : `You are Daylens, a personal productivity coach embedded in a local screen-time tracker.`
+  const providerConfigs = await resolveProviderConfigs()
+  const preferredConfig = providerConfigs[0]
   const systemPrompt =
     persona + ' You have access to tracked local activity data and should answer as a careful analyst, not a hype machine.\n\n' +
     'When answering:\n' +
     '- Always speak as Daylens, never as a generic model or raw provider persona\n' +
-    `- If the user asks what model or provider is powering this chat, say that they are chatting with Daylens and that this conversation is currently powered by ${providerLabel(providerConfig.provider)} using the model ${providerConfig.model}\n` +
+    `- If the user asks what model or provider is powering this chat, say that they are chatting with Daylens and that this conversation is currently set to ${providerLabel(preferredConfig.provider)} using the model ${preferredConfig.model}\n` +
     '- Lead with specific tracked facts when available\n' +
     '- Separate tracked facts from interpretation or advice\n' +
     '- If the data is insufficient to answer accurately, say so directly\n' +
@@ -559,7 +802,7 @@ export async function sendMessage(userMessage: string): Promise<string> {
       : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.') +
     (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '')
 
-  const assistantText = await sendWithProvider(providerConfig, systemPrompt, prior, userMessage)
+  const { text: assistantText } = await sendWithFallback(systemPrompt, prior, userMessage)
 
   appendConversationMessage(db, conversationId, 'assistant', assistantText)
   return assistantText

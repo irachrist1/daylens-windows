@@ -217,6 +217,9 @@ export default function Settings() {
       const trimmed = apiKeyInput.trim()
       const detectedProvider = detectProviderFromApiKey(trimmed)
       const provider = detectedProvider ?? settings.aiProvider
+      const nextSettings = detectedProvider && detectedProvider !== settings.aiProvider
+        ? { ...settings, aiProvider: detectedProvider }
+        : settings
 
       if (detectedProvider && detectedProvider !== settings.aiProvider) {
         setSettings((s) => ({ ...s, aiProvider: detectedProvider }))
@@ -227,11 +230,17 @@ export default function Settings() {
         await ipc.settings.setApiKey(trimmed, provider)
         setHasApiKey(true)
         setApiKeyInput('')
+        window.dispatchEvent(new CustomEvent('daylens:ai-settings-changed', {
+          detail: { provider, model: getSelectedModel(nextSettings) },
+        }))
         track('api_key_saved', { provider })
         flashSaved(`${AI_PROVIDER_META[provider].label} API key saved`)
       } else {
         await ipc.settings.clearApiKey(settings.aiProvider)
         setHasApiKey(false)
+        window.dispatchEvent(new CustomEvent('daylens:ai-settings-changed', {
+          detail: { provider: settings.aiProvider, model: getSelectedModel(settings) },
+        }))
         flashSaved(`${AI_PROVIDER_META[settings.aiProvider].label} API key cleared`)
       }
     } catch (err) {
@@ -243,6 +252,9 @@ export default function Settings() {
     setSettings((s) => ({ ...s, aiProvider: provider }))
     setApiKeyInput('')
     await ipc.settings.set({ aiProvider: provider })
+    window.dispatchEvent(new CustomEvent('daylens:ai-settings-changed', {
+      detail: { provider, model: getSelectedModel({ ...settings, aiProvider: provider }) },
+    }))
     const has = await ipc.settings.hasApiKey(provider)
     setHasApiKey(has)
     flashSaved(`AI provider set to ${AI_PROVIDER_META[provider].label}`)
@@ -258,6 +270,10 @@ export default function Settings() {
 
     setSettings((s) => ({ ...s, ...partial }))
     await ipc.settings.set(partial)
+    const nextSettings = { ...settings, ...partial }
+    window.dispatchEvent(new CustomEvent('daylens:ai-settings-changed', {
+      detail: { provider: nextSettings.aiProvider, model: getSelectedModel(nextSettings) },
+    }))
     flashSaved(`Model set to ${model}`)
   }
 

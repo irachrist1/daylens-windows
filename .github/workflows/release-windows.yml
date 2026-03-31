@@ -164,3 +164,5 @@ jobs:
           body: ${{ steps.notes.outputs.body }}
           files: |
             dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe
+            dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe.blockmap
+            dist-release/latest.yml

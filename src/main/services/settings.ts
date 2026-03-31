@@ -51,6 +51,11 @@ export function getSettings(): AppSettings {
   }
 }
 
+export async function getSettingsAsync(): Promise<AppSettings> {
+  await getStore()
+  return getSettings()
+}
+
 export async function setSettings(partial: Partial<AppSettings>): Promise<void> {
   const store = await getStore()
   for (const [k, v] of Object.entries(partial)) {
