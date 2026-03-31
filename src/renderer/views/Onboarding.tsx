@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
+import type { AIProvider } from '@shared/types'
+import { AI_PROVIDER_META, AI_PROVIDERS, detectProviderFromApiKey } from '../lib/aiProvider'
 
 // ─── Goal definitions ─────────────────────────────────────────────────────────
 
@@ -206,6 +208,8 @@ function Screen2({
 // ─── Screen 3: API key + finish ───────────────────────────────────────────────
 
 function Screen3({
+  provider,
+  onProviderChange,
   apiKey,
   onApiKeyChange,
   launchOnLogin,
@@ -215,6 +219,8 @@ function Screen3({
   saving,
   errorMessage,
 }: {
+  provider: AIProvider
+  onProviderChange: (provider: AIProvider) => void
   apiKey: string
   onApiKeyChange: (v: string) => void
   launchOnLogin: boolean
@@ -225,23 +231,53 @@ function Screen3({
   errorMessage: string | null
 }) {
   const [showKey, setShowKey] = useState(false)
+  const providerMeta = AI_PROVIDER_META[provider]
 
   return (
     <div className="onboarding-screen">
       <h1 className="onboarding-title">One last thing.</h1>
       <p className="onboarding-sub">
-        Daylens uses Claude (by Anthropic) to answer questions about your day.
-        Add your API key to unlock AI features.
+        Daylens can use Anthropic, OpenAI, or Gemini to answer questions about your day.
+        Choose your provider and add an API key to unlock AI features.
       </p>
 
       <div className="onboarding-field">
-        <label className="onboarding-label">Anthropic API key</label>
+        <label className="onboarding-label">AI provider</label>
+        <div style={{
+          display: 'flex', gap: 4, padding: 3, borderRadius: 12,
+          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+        }}>
+          {AI_PROVIDERS.map((value) => {
+            const selected = provider === value
+            return (
+              <button
+                key={value}
+                onClick={() => onProviderChange(value)}
+                className="onboarding-btn-secondary"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: selected ? 'var(--color-accent)' : 'transparent',
+                  color: selected ? '#0d1117' : 'var(--color-text-secondary)',
+                  border: 'none',
+                  padding: '10px 12px',
+                }}
+              >
+                {AI_PROVIDER_META[value].shortLabel}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="onboarding-field">
+        <label className="onboarding-label">{providerMeta.label} API key</label>
         <div style={{ position: 'relative' }}>
           <input
             type={showKey ? 'text' : 'password'}
             value={apiKey}
             onChange={(e) => onApiKeyChange(e.target.value)}
-            placeholder="sk-ant-…"
+            placeholder={providerMeta.keyPlaceholder}
             className="onboarding-input"
             style={{ paddingRight: 44 }}
             disabled={saving}
@@ -279,9 +315,9 @@ function Screen3({
         </div>
         <button
           className="onboarding-external-link"
-          onClick={() => ipc.shell.openExternal('https://platform.anthropic.com/api-keys')}
+          onClick={() => ipc.shell.openExternal(providerMeta.docsUrl)}
         >
-          Get a free API key at platform.anthropic.com/api-keys
+          Open the {providerMeta.shortLabel} key page
         </button>
       </div>
 
@@ -316,6 +352,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [exiting, setExiting]     = useState(false)
   const [name, setName]           = useState('')
   const [goals, setGoals]         = useState<Set<string>>(new Set())
+  const [provider, setProvider]   = useState<AIProvider>('anthropic')
   const [apiKey, setApiKey]       = useState('')
   const [launchOnLogin, setLaunchOnLogin] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -341,19 +378,23 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   async function finish(skipApiKey = false) {
     if (saving) return
     const key = skipApiKey ? '' : apiKey.trim()
+    const detectedProvider = detectProviderFromApiKey(key)
+    const resolvedProvider = detectedProvider ?? provider
     setSaving(true)
     setFinishError(null)
 
     try {
-      if (key) await ipc.settings.setApiKey(key)
+      await ipc.settings.set({ aiProvider: resolvedProvider })
+      if (key) await ipc.settings.setApiKey(key, resolvedProvider)
       await ipc.settings.set({
         onboardingComplete: true,
         userName: name.trim(),
         userGoals: Array.from(goals),
         launchOnLogin,
+        aiProvider: resolvedProvider,
       })
-      track('onboarding_completed', { goals: Array.from(goals), api_key_entered: !!key })
-      if (key) track('api_key_saved', {})
+      track('onboarding_completed', { goals: Array.from(goals), api_key_entered: !!key, provider: resolvedProvider })
+      if (key) track('api_key_saved', { provider: resolvedProvider })
       onComplete()
     } catch (err) {
       setFinishError(err instanceof Error ? err.message : String(err))
@@ -397,6 +438,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         )}
         {screen === 3 && (
           <Screen3
+            provider={provider}
+            onProviderChange={setProvider}
             apiKey={apiKey}
             onApiKeyChange={setApiKey}
             launchOnLogin={launchOnLogin}

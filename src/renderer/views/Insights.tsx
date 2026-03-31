@@ -14,6 +14,7 @@ import { formatDuration, percentOf, todayString } from '../lib/format'
 import { ipc } from '../lib/ipc'
 import { classifyWebsiteDomain, isDistractingWebsiteCategory } from '../lib/websites'
 import { track } from '../lib/analytics'
+import { AI_PROVIDER_META } from '../lib/aiProvider'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -513,6 +514,7 @@ export default function Insights() {
   const maxSparkVal = Math.max(...weeklyTrend.map((day) => day.focusSeconds), 1)
 
   const focusQuality = focusPct >= 70 ? 'Peak Velocity' : focusPct >= 40 ? 'Building Momentum' : 'Getting Started'
+  const providerMeta = AI_PROVIDER_META[settings.aiProvider]
 
   const firstInsight = algorithmicInsights[0]
   const lastAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant')
@@ -944,7 +946,7 @@ export default function Insights() {
                     Ask Daylens
                   </p>
                   <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', maxWidth: 240, margin: '0 auto' }}>
-                    Add your Anthropic API key to ask questions about your productivity.
+                    Add your {providerMeta.label} API key to ask questions about your productivity.
                   </p>
                 </div>
                 <Link

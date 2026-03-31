@@ -2,12 +2,12 @@ import { ipcMain, app } from 'electron'
 import {
   getSettings,
   setSettings,
-  hasAnthropicApiKey,
-  setAnthropicApiKey,
-  clearAnthropicApiKey,
+  hasApiKey,
+  setApiKey,
+  clearApiKey,
 } from '../services/settings'
 import { IPC } from '@shared/types'
-import type { AppSettings } from '@shared/types'
+import type { AIProvider, AppSettings } from '@shared/types'
 
 export function registerSettingsHandlers(): void {
   ipcMain.handle(IPC.SETTINGS.GET, () => {
@@ -21,19 +21,22 @@ export function registerSettingsHandlers(): void {
     }
   })
 
-  ipcMain.handle(IPC.SETTINGS.HAS_API_KEY, async () => {
-    return hasAnthropicApiKey()
+  ipcMain.handle(IPC.SETTINGS.HAS_API_KEY, async (_e, provider?: AIProvider) => {
+    const resolvedProvider = provider ?? getSettings().aiProvider ?? 'anthropic'
+    return hasApiKey(resolvedProvider)
   })
 
-  ipcMain.handle(IPC.SETTINGS.SET_API_KEY, async (_e, key: string) => {
+  ipcMain.handle(IPC.SETTINGS.SET_API_KEY, async (_e, key: string, provider?: AIProvider) => {
+    const resolvedProvider = provider ?? getSettings().aiProvider ?? 'anthropic'
     if (key.trim()) {
-      await setAnthropicApiKey(key.trim())
+      await setApiKey(resolvedProvider, key.trim())
     } else {
-      await clearAnthropicApiKey()
+      await clearApiKey(resolvedProvider)
     }
   })
 
-  ipcMain.handle(IPC.SETTINGS.CLEAR_API_KEY, async () => {
-    await clearAnthropicApiKey()
+  ipcMain.handle(IPC.SETTINGS.CLEAR_API_KEY, async (_e, provider?: AIProvider) => {
+    const resolvedProvider = provider ?? getSettings().aiProvider ?? 'anthropic'
+    await clearApiKey(resolvedProvider)
   })
 }

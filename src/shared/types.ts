@@ -109,6 +109,8 @@ export interface BreakRecommendation {
   urgency: 'medium' | 'high'
 }
 
+export type AIProvider = 'anthropic' | 'openai' | 'google'
+
 export interface ProcessSnapshot {
   pid: number
   name: string
@@ -120,7 +122,7 @@ export interface ProcessSnapshot {
 export type AppTheme = 'system' | 'light' | 'dark'
 
 export interface AppSettings {
-  // anthropicApiKey removed — stored in OS keychain via keytar (never in plain-text)
+  // Provider API keys are stored in OS keychain via keytar (never in plain-text)
   analyticsOptIn: boolean       // false = no telemetry (default)
   launchOnLogin: boolean
   theme: AppTheme
@@ -130,6 +132,10 @@ export interface AppSettings {
   dailyFocusGoalHours: number
   firstLaunchDate: number       // Unix ms — set on first launch, used for day-7 feedback prompt
   feedbackPromptShown: boolean  // true once the day-7 prompt has been shown
+  aiProvider: AIProvider
+  anthropicModel: string
+  openaiModel: string
+  googleModel: string
 }
 
 // In-flight session that has not yet been flushed to the DB.

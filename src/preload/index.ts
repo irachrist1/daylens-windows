@@ -3,6 +3,7 @@ import type {
   AppCategory,
   AppCharacter,
   AppSettings,
+  AIProvider,
   BreakRecommendation,
   FocusStartPayload,
   PeakHoursResult,
@@ -68,9 +69,9 @@ const api = {
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),
     set: (partial: Partial<AppSettings>) => ipcRenderer.invoke(IPC.SETTINGS.SET, partial),
-    hasApiKey: (): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS.HAS_API_KEY),
-    setApiKey: (key: string): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.SET_API_KEY, key),
-    clearApiKey: (): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY),
+    hasApiKey: (provider?: AIProvider): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS.HAS_API_KEY, provider),
+    setApiKey: (key: string, provider?: AIProvider): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.SET_API_KEY, key, provider),
+    clearApiKey: (provider?: AIProvider): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY, provider),
   },
   tracking: {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),

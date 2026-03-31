@@ -10,11 +10,14 @@ let monitorInterval: ReturnType<typeof setInterval> | null = null
 let latestSnapshot: ProcessSnapshot[] = []
 
 export function getRunningProcesses(): ProcessSnapshot[] {
+  if (process.platform !== 'win32') return []
+
   try {
     const output = execSync(WMIC_COMMAND, {
       timeout: 5_000,
       encoding: 'utf8',
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
     })
     const now = Date.now()
 
@@ -43,6 +46,10 @@ export function getRunningProcesses(): ProcessSnapshot[] {
 }
 
 export function startProcessMonitor(): void {
+  if (process.platform !== 'win32') {
+    latestSnapshot = []
+    return
+  }
   if (monitorInterval) return
 
   latestSnapshot = getRunningProcesses()

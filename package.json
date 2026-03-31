@@ -1,7 +1,7 @@
 {
   "name": "daylens-windows",
   "productName": "DaylensWindows",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "Activity tracker and AI insights — Windows",
   "main": ".vite/build/main.js",
   "scripts": {
@@ -18,11 +18,13 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
+    "@google/genai": "^1.47.0",
     "@paymoapp/active-window": "^2.1.4",
     "better-sqlite3": "^12.8.0",
     "electron-store": "^10.0.0",
     "electron-updater": "^6.8.3",
     "keytar": "^7.9.0",
+    "openai": "^6.33.0",
     "posthog-node": "^5.28.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

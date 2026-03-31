@@ -1,6 +1,8 @@
-// AI service — wraps @anthropic-ai/sdk, runs in main process only
+// AI service — runs in the main process only and routes to the selected provider.
 // Renderer communicates via IPC (never direct SDK access)
 import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
+import { GoogleGenAI, type Content as GoogleContent } from '@google/genai'
 import {
   appendConversationMessage,
   clearConversation,
@@ -14,13 +16,167 @@ import {
   getCategoryOverrides,
 } from '../db/queries'
 import { getDb } from './database'
-import { getSettings, getAnthropicApiKey } from './settings'
+import { getApiKey, getSettings } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
+import type { AIProvider } from '@shared/types'
 
-async function buildClient(): Promise<Anthropic> {
-  const apiKey = await getAnthropicApiKey()
-  if (!apiKey) throw new Error('No API key configured')
-  return new Anthropic({ apiKey })
+const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
+
+interface ResolvedProviderConfig {
+  provider: AIProvider
+  apiKey: string
+  model: string
+}
+
+type ConversationMessage = { role: 'user' | 'assistant'; content: string }
+
+async function resolveProviderConfig(): Promise<ResolvedProviderConfig> {
+  const settings = getSettings()
+  const orderedProviders = [
+    settings.aiProvider ?? 'anthropic',
+    'anthropic',
+    'openai',
+    'google',
+  ].filter((provider, index, providers) => providers.indexOf(provider) === index) as AIProvider[]
+
+  for (const provider of orderedProviders) {
+    const apiKey = await getApiKey(provider)
+    if (!apiKey) continue
+
+    return {
+      provider,
+      apiKey,
+      model: modelForProvider(provider),
+    }
+  }
+
+  throw new Error('No API key configured for the selected AI provider')
+}
+
+function modelForProvider(provider: AIProvider): string {
+  const settings = getSettings()
+  switch (provider) {
+    case 'openai':
+      return settings.openaiModel || 'gpt-5.4'
+    case 'google':
+      return settings.googleModel || 'gemini-3.1-flash-lite-preview'
+    case 'anthropic':
+    default:
+      return settings.anthropicModel || 'claude-opus-4-6'
+  }
+}
+
+function providerLabel(provider: AIProvider): string {
+  switch (provider) {
+    case 'openai':
+      return 'OpenAI'
+    case 'google':
+      return 'Google Gemini'
+    case 'anthropic':
+    default:
+      return 'Anthropic Claude'
+  }
+}
+
+function openAIInputFromHistory(messages: ConversationMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }))
+}
+
+function googleHistoryFromMessages(messages: ConversationMessage[]): GoogleContent[] {
+  return messages.map((message) => ({
+    role: message.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: message.content }],
+  }))
+}
+
+async function sendWithAnthropic(
+  config: ResolvedProviderConfig,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+): Promise<string> {
+  const client = new Anthropic({ apiKey: config.apiKey })
+  const response = await client.messages.create({
+    model: config.model,
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: [
+      ...prior.map((message) => ({ role: message.role, content: message.content })),
+      { role: 'user', content: userMessage },
+    ],
+  })
+
+  return response.content
+    .filter((item) => item.type === 'text')
+    .map((item) => item.text)
+    .join('')
+}
+
+async function sendWithOpenAI(
+  config: ResolvedProviderConfig,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+): Promise<string> {
+  const client = new OpenAI({ apiKey: config.apiKey })
+  const response = await client.responses.create({
+    model: config.model,
+    instructions: systemPrompt,
+    input: openAIInputFromHistory([
+      ...prior,
+      { role: 'user', content: userMessage },
+    ]),
+    max_output_tokens: 1024,
+    store: false,
+  })
+
+  return response.output_text || ''
+}
+
+async function sendWithGoogle(
+  config: ResolvedProviderConfig,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+): Promise<string> {
+  const ai = new GoogleGenAI({
+    apiKey: config.apiKey,
+    httpOptions: {
+      headers: {
+        'x-goog-api-client': GOOGLE_CLIENT_HEADER,
+      },
+    },
+  })
+  const chat = ai.chats.create({
+    model: config.model,
+    config: {
+      systemInstruction: systemPrompt,
+    },
+    history: googleHistoryFromMessages(prior),
+  })
+
+  const response = await chat.sendMessage({ message: userMessage })
+  return response.text ?? ''
+}
+
+async function sendWithProvider(
+  config: ResolvedProviderConfig,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+): Promise<string> {
+  switch (config.provider) {
+    case 'openai':
+      return sendWithOpenAI(config, systemPrompt, prior, userMessage)
+    case 'google':
+      return sendWithGoogle(config, systemPrompt, prior, userMessage)
+    case 'anthropic':
+    default:
+      return sendWithAnthropic(config, systemPrompt, prior, userMessage)
+  }
 }
 
 function formatDuration(seconds: number): string {
@@ -368,7 +524,7 @@ function buildDayContext(): string {
 }
 
 export async function sendMessage(userMessage: string): Promise<string> {
-  const client = await buildClient()
+  const providerConfig = await resolveProviderConfig()
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
 
@@ -387,6 +543,8 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const systemPrompt =
     persona + ' You have access to tracked local activity data and should answer as a careful analyst, not a hype machine.\n\n' +
     'When answering:\n' +
+    '- Always speak as Daylens, never as a generic model or raw provider persona\n' +
+    `- If the user asks what model or provider is powering this chat, say that they are chatting with Daylens and that this conversation is currently powered by ${providerLabel(providerConfig.provider)} using the model ${providerConfig.model}\n` +
     '- Lead with specific tracked facts when available\n' +
     '- Separate tracked facts from interpretation or advice\n' +
     '- If the data is insufficient to answer accurately, say so directly\n' +
@@ -401,18 +559,7 @@ export async function sendMessage(userMessage: string): Promise<string> {
       : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.') +
     (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '')
 
-  const response = await client.messages.create({
-    model: 'claude-opus-4-6',
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages: [
-      ...prior.map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: userMessage },
-    ],
-  })
-
-  const assistantText =
-    response.content[0].type === 'text' ? response.content[0].text : ''
+  const assistantText = await sendWithProvider(providerConfig, systemPrompt, prior, userMessage)
 
   appendConversationMessage(db, conversationId, 'assistant', assistantText)
   return assistantText

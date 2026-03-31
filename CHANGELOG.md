@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.15 - 2026-03-31
+
+- Added provider-aware AI chat support for Anthropic, OpenAI, and Google AI Studio / Gemini.
+- Added three selectable model options per provider in Settings, with provider-aware key storage and onboarding flow.
+- Switched the safest Google default to `gemini-3.1-flash-lite-preview` after live testing showed it works reliably on the current account.
+- Fixed Electron main-process startup after adding the new AI SDKs by externalizing websocket-related dependencies that were being bundled incorrectly.
+- Fixed updater IPC noise during local macOS development by registering updater handlers even when auto-update is inactive.
+- Stopped the Windows-only process monitor from trying to run `wmic` on macOS development runs.
+- Tightened the AI system prompt so every provider answers as Daylens and reports the current underlying provider/model cleanly when asked.
+
 ## v1.0.14 - 2026-03-31
 
 - Fixed the in-app updater handoff so Daylens can close into the installer cleanly instead of getting stuck after showing that an update is ready.

@@ -84,7 +84,71 @@ function getReleaseMetadata(info: unknown): Pick<UpdaterState, 'releaseName' | '
 
 export function initUpdater(win: BrowserWindow): void {
   _statusWindow = win
+  _state = {
+    ..._state,
+    version: app.getVersion(),
+  }
   emitState()
+
+  ipcMain.removeHandler('update:get-status')
+  ipcMain.removeHandler('update:check')
+  ipcMain.removeHandler('update:install')
+
+  ipcMain.handle('update:get-status', () => {
+    return getUpdaterState()
+  })
+
+  ipcMain.handle('update:check', async () => {
+    if (process.platform !== 'win32' || !app.isPackaged) {
+      setUpdaterState({
+        status: 'not-available',
+        version: app.getVersion(),
+        progressPct: null,
+        errorMessage: null,
+        releaseName: null,
+        releaseNotesText: null,
+        releaseDate: null,
+      })
+      return getUpdaterState()
+    }
+
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch {
+      // errors are reflected through the updater state
+    }
+    return getUpdaterState()
+  })
+
+  ipcMain.handle('update:install', async () => {
+    if (process.platform !== 'win32' || !app.isPackaged) return false
+    if (_state.status !== 'downloaded' || _installingUpdate) return false
+
+    try {
+      setUpdaterState({ status: 'installing', errorMessage: null })
+
+      if (_beforeInstall) {
+        await _beforeInstall()
+      }
+
+      _installingUpdate = true
+
+      setImmediate(() => {
+        autoUpdater.quitAndInstall()
+      })
+
+      return true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Daylens could not prepare the update install.'
+      _installingUpdate = false
+      capture('update_error', { error_message: message })
+      setUpdaterState({
+        status: 'error',
+        errorMessage: message,
+      })
+      return false
+    }
+  })
 
   // Only run on Windows — macOS auto-updates require code signing
   if (process.platform !== 'win32') return
@@ -156,48 +220,6 @@ export function initUpdater(win: BrowserWindow): void {
       releaseNotesText: null,
       releaseDate: null,
     })
-  })
-
-  ipcMain.handle('update:get-status', () => {
-    return getUpdaterState()
-  })
-
-  ipcMain.handle('update:check', async () => {
-    try {
-      await autoUpdater.checkForUpdates()
-    } catch {
-      // errors are reflected through the updater state
-    }
-    return getUpdaterState()
-  })
-
-  ipcMain.handle('update:install', async () => {
-    if (_state.status !== 'downloaded' || _installingUpdate) return false
-
-    try {
-      setUpdaterState({ status: 'installing', errorMessage: null })
-
-      if (_beforeInstall) {
-        await _beforeInstall()
-      }
-
-      _installingUpdate = true
-
-      setImmediate(() => {
-        autoUpdater.quitAndInstall()
-      })
-
-      return true
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Daylens could not prepare the update install.'
-      _installingUpdate = false
-      capture('update_error', { error_message: message })
-      setUpdaterState({
-        status: 'error',
-        errorMessage: message,
-      })
-      return false
-    }
   })
 
   // Check 10s after launch so it doesn't slow startup

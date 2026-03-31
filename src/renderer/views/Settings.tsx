@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
 import { formatDuration, formatTime } from '../lib/format'
-import type { AppSettings, AppTheme } from '@shared/types'
+import type { AIProvider, AppSettings, AppTheme } from '@shared/types'
 import FeedbackModal from '../components/FeedbackModal'
 import type { UpdaterStatusInfo } from '../../preload/index'
 import { extractReleaseHighlights } from '../lib/releaseNotes'
+import { AI_PROVIDER_META, AI_PROVIDERS, detectProviderFromApiKey, getSelectedModel } from '../lib/aiProvider'
 
 interface DebugInfo {
   dbPath: string
@@ -151,6 +152,10 @@ export default function Settings() {
     dailyFocusGoalHours: 4,
     firstLaunchDate: 0,
     feedbackPromptShown: false,
+    aiProvider: 'anthropic',
+    anthropicModel: 'claude-opus-4-6',
+    openaiModel: 'gpt-5.4',
+    googleModel: 'gemini-3.1-flash-lite-preview',
   })
   const [hasApiKey, setHasApiKey]         = useState(false)
   const [apiKeyInput, setApiKeyInput]     = useState('')
@@ -170,14 +175,24 @@ export default function Settings() {
   const linkAbortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    ipc.settings.get().then((s) => setSettings(s))
-    ipc.settings.hasApiKey().then((has) => setHasApiKey(has as boolean))
+    void (async () => {
+      const currentSettings = await ipc.settings.get()
+      setSettings(currentSettings)
+      const has = await ipc.settings.hasApiKey(currentSettings.aiProvider)
+      setHasApiKey(has as boolean)
+    })()
     ipc.sync.getStatus().then((s: SyncStatus) => setSyncStatus(s))
     ipc.debug.getInfo().then((info) => setDebug(info as DebugInfo))
     ipc.updater.getStatus().then((info) => setUpdater(info))
     const cleanup = ipc.updater.onStatus((info) => setUpdater(info))
     return cleanup
   }, [])
+
+  useEffect(() => {
+    void ipc.settings.hasApiKey(settings.aiProvider).then((has) => {
+      setHasApiKey(has as boolean)
+    })
+  }, [settings.aiProvider])
 
   useEffect(() => {
     if (!debugOpen || debug) return
@@ -199,20 +214,51 @@ export default function Settings() {
 
   async function handleApiKeySave() {
     try {
-      if (apiKeyInput.trim()) {
-        await ipc.settings.setApiKey(apiKeyInput.trim())
+      const trimmed = apiKeyInput.trim()
+      const detectedProvider = detectProviderFromApiKey(trimmed)
+      const provider = detectedProvider ?? settings.aiProvider
+
+      if (detectedProvider && detectedProvider !== settings.aiProvider) {
+        setSettings((s) => ({ ...s, aiProvider: detectedProvider }))
+        await ipc.settings.set({ aiProvider: detectedProvider })
+      }
+
+      if (trimmed) {
+        await ipc.settings.setApiKey(trimmed, provider)
         setHasApiKey(true)
         setApiKeyInput('')
-        track('api_key_saved', {})
-        flashSaved('API key saved')
+        track('api_key_saved', { provider })
+        flashSaved(`${AI_PROVIDER_META[provider].label} API key saved`)
       } else {
-        await ipc.settings.clearApiKey()
+        await ipc.settings.clearApiKey(settings.aiProvider)
         setHasApiKey(false)
-        flashSaved('API key cleared')
+        flashSaved(`${AI_PROVIDER_META[settings.aiProvider].label} API key cleared`)
       }
     } catch (err) {
       flashSaved('Failed to save API key: ' + (err instanceof Error ? err.message : String(err)))
     }
+  }
+
+  async function handleProviderChange(provider: AIProvider) {
+    setSettings((s) => ({ ...s, aiProvider: provider }))
+    setApiKeyInput('')
+    await ipc.settings.set({ aiProvider: provider })
+    const has = await ipc.settings.hasApiKey(provider)
+    setHasApiKey(has)
+    flashSaved(`AI provider set to ${AI_PROVIDER_META[provider].label}`)
+  }
+
+  async function handleModelChange(model: string) {
+    const partial =
+      settings.aiProvider === 'anthropic'
+        ? { anthropicModel: model }
+        : settings.aiProvider === 'openai'
+          ? { openaiModel: model }
+          : { googleModel: model }
+
+    setSettings((s) => ({ ...s, ...partial }))
+    await ipc.settings.set(partial)
+    flashSaved(`Model set to ${model}`)
   }
 
   async function handleThemeChange(theme: AppTheme) {
@@ -703,11 +749,94 @@ export default function Settings() {
             {/* ── COGNITIVE AUGMENTATION ──────────────────────────── */}
             <SectionLabel>Cognitive Augmentation</SectionLabel>
             <div style={cardStyle}>
+              <div style={{ padding: '16px 16px 12px' }}>
+                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: 10, marginTop: 0 }}>
+                  AI Provider
+                </p>
+                <div style={{
+                  display: 'flex', gap: 4, padding: 3, borderRadius: 12,
+                  background: 'var(--color-surface-low)', border: '1px solid var(--color-border-ghost)',
+                }}>
+                  {AI_PROVIDERS.map((provider) => {
+                    const selected = settings.aiProvider === provider
+                    return (
+                      <button
+                        key={provider}
+                        onClick={() => void handleProviderChange(provider)}
+                        style={{
+                          flex: 1,
+                          padding: '7px 10px',
+                          borderRadius: 9,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          border: 'none',
+                          cursor: 'pointer',
+                          background: selected ? 'var(--gradient-primary)' : 'transparent',
+                          color: selected ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                          transition: 'all 120ms',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        {AI_PROVIDER_META[provider].shortLabel}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
+
+              <div style={{ padding: '16px 16px 12px' }}>
+                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: 10, marginTop: 0 }}>
+                  Model
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {AI_PROVIDER_META[settings.aiProvider].models.map((model) => {
+                    const selected = getSelectedModel(settings) === model.id
+                    return (
+                      <button
+                        key={model.id}
+                        onClick={() => void handleModelChange(model.id)}
+                        style={{
+                          textAlign: 'left',
+                          borderRadius: 12,
+                          border: selected ? '1px solid rgba(173,198,255,0.32)' : '1px solid var(--color-border-ghost)',
+                          background: selected ? 'rgba(173,198,255,0.08)' : 'var(--color-surface-low)',
+                          padding: '12px 14px',
+                          cursor: 'pointer',
+                          transition: 'all 120ms',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                            {model.label}
+                          </span>
+                          {selected && (
+                            <span style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.08em',
+                              color: 'var(--color-primary)',
+                            }}>
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '5px 0 0' }}>
+                          {model.description}
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
 
               {/* API Key row */}
               {hasApiKey && !apiKeyInput ? (
                 <SettingsRow
-                  label="Anthropic API Key"
+                  label={`${AI_PROVIDER_META[settings.aiProvider].label} API Key`}
                   control={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{
@@ -736,14 +865,14 @@ export default function Settings() {
               ) : (
                 <div style={{ padding: '16px 16px 12px' }}>
                   <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: 8, marginTop: 0 }}>
-                    Anthropic API Key
+                    {AI_PROVIDER_META[settings.aiProvider].label} API Key
                   </p>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <input
                       type="password"
                       value={apiKeyInput}
                       onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder="sk-ant-…"
+                      placeholder={AI_PROVIDER_META[settings.aiProvider].keyPlaceholder}
                       style={{
                         flex: 1, padding: '0 12px', borderRadius: 10, height: 38,
                         background: 'var(--color-surface-highest)', border: '1px solid transparent',
@@ -765,6 +894,25 @@ export default function Settings() {
                       Save
                     </button>
                   </div>
+                  <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '8px 0 0' }}>
+                    {AI_PROVIDER_META[settings.aiProvider].helperText}
+                  </p>
+                  <button
+                    onClick={() => ipc.shell.openExternal(AI_PROVIDER_META[settings.aiProvider].docsUrl)}
+                    style={{
+                      marginTop: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: 0,
+                      color: 'var(--color-primary)',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    Open key page
+                  </button>
                 </div>
               )}
 
