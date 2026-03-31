@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import type { UpdaterStatusInfo } from '../../preload/index'
+import { extractReleaseHighlights } from '../lib/releaseNotes'
 
 export default function UpdateBanner() {
   const [update, setUpdate] = useState<UpdaterStatusInfo | null>(null)
@@ -12,6 +13,8 @@ export default function UpdateBanner() {
   }, [])
 
   if (!update) return null
+
+  const highlights = extractReleaseHighlights(update.releaseNotesText, 2)
 
   if (update.status === 'checking' || update.status === 'not-available' || update.status === 'idle') {
     return null
@@ -29,6 +32,7 @@ export default function UpdateBanner() {
           alignItems: 'center',
           justifyContent: 'center',
           gap: 10,
+          flexWrap: 'wrap',
           WebkitAppRegion: 'no-drag',
         } as React.CSSProperties}
       >
@@ -51,6 +55,11 @@ export default function UpdateBanner() {
             ? `${update.progressPct}% complete. You can keep using the app while it downloads.`
             : 'You can keep using the app while it downloads.'}
         </span>
+        {highlights[0] && (
+          <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            Includes: {highlights[0]}
+          </span>
+        )}
       </div>
     )
   }
@@ -138,6 +147,11 @@ export default function UpdateBanner() {
       <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
         Restart once to finish installing the update.
       </span>
+      {highlights[0] && (
+        <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+          Includes: {highlights[0]}
+        </span>
+      )}
       <button
         onClick={() => void ipc.updater.install()}
         style={{

@@ -68,7 +68,8 @@ Steps:
 3. `electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar` — rebuilds native modules against Electron's Node ABI
 4. Three Vite builds (with `STANDALONE_BUILD=1`)
 5. `electron-builder --win --publish always` — publishes the installer plus `latest.yml`/blockmap metadata to GitHub Releases
-6. `softprops/action-gh-release@v2` finalises the tagged GitHub release page
+6. Extract the matching changelog section plus a commit summary for the tag
+7. `softprops/action-gh-release@v2` finalises the tagged GitHub release page with install/update notes and release highlights
 
 Workflow file: `.github/workflows/release-windows.yml`
 
@@ -78,8 +79,8 @@ Workflow file: `.github/workflows/release-windows.yml`
 - macOS releases (separate repo): `v1.x.y` — never mix versioning
 
 ```bash
-git tag v1.0.13-win
-git push origin v1.0.13-win
+git tag v1.0.14-win
+git push origin v1.0.14-win
 ```
 
 ## Known CI issues resolved

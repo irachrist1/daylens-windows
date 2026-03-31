@@ -13,6 +13,7 @@ Core features currently shipped:
 - Settings (API key, theme, launch-on-login, web companion linking)
 - NSIS installer via electron-builder
 - In-app update checks via `electron-updater` and GitHub Releases metadata
+- In-app updater progress, install-state messaging, and release-note highlights sourced from the published Windows release
 - Unified focus score calculator shared across daily summaries, exports, and AI context
 - Same-app session merge (15s gap tolerance) to reduce polling noise
 - First-run onboarding with optional AI key capture and safer completion handling
@@ -34,7 +35,10 @@ Core features currently shipped:
 3. Wait for `@paymoapp/active-window` to add ARM64 prebuild
 
 ### In-app updates depend on GitHub release metadata
-Installed apps can check GitHub Releases and download updates in-app, but the release workflow must publish `latest.yml` and the installer artifacts successfully for updates to appear.
+Installed apps can check GitHub Releases and download updates in-app, but the release workflow must publish `latest.yml`, the installer artifacts, and the GitHub release notes successfully for updates and "what's new" highlights to appear.
+
+### Update installs now create a local backup
+Before Daylens hands control to the installer, it now creates a rotating backup of the app `userData` directory under `pre-update-backups/` so local history has a recovery path if an update goes wrong.
 
 ### No code signing
 The Windows installer is unsigned — Windows Defender / SmartScreen will show a warning on first run. Users must click "More info → Run anyway". Signing requires an EV certificate (~$300/yr).

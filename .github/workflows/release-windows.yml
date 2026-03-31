@@ -42,6 +42,8 @@ jobs:
 
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -97,34 +99,68 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build release notes
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          TAG_NAME="${{ steps.meta.outputs.tag_name }}"
+          CHANGELOG_SECTION="$(awk -v version="$VERSION" '
+            $0 ~ "^## v" version " -" { flag = 1; next }
+            /^## v/ && flag { exit }
+            flag { print }
+          ' CHANGELOG.md)"
+
+          if [ -z "$CHANGELOG_SECTION" ]; then
+            echo "Missing CHANGELOG entry for v$VERSION" >&2
+            exit 1
+          fi
+
+          PREV_TAG="$(git tag --list 'v*-win' --sort=-version:refname | grep -vx "$TAG_NAME" | head -n 1 || true)"
+          if [ -n "$PREV_TAG" ]; then
+            COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..HEAD" | head -n 12)"
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG_NAME}"
+          else
+            COMMIT_LINES="$(git log --pretty='- %h %s' HEAD | head -n 12)"
+            COMPARE_URL=""
+          fi
+
+          if [ -z "$COMMIT_LINES" ]; then
+            COMMIT_LINES="- Initial Windows release build"
+          fi
+
+          {
+            echo 'body<<EOF'
+            echo "## Daylens $VERSION for Windows"
+            echo
+            echo "### Highlights"
+            echo "$CHANGELOG_SECTION"
+            echo
+            echo "### Included commits"
+            echo "$COMMIT_LINES"
+            if [ -n "$COMPARE_URL" ]; then
+              echo
+              echo "Compare changes: $COMPARE_URL"
+            fi
+            echo
+            echo "### Install"
+            echo "1. Download \`Daylens-$VERSION-Setup.exe\` below"
+            echo "2. Run the installer"
+            echo "3. Launch Daylens from the Desktop shortcut or Start menu"
+            echo
+            echo "### Update"
+            echo "Existing installs can pick this up through the in-app updater. Daylens will download the release in the background, show progress and highlights in-app, and then restart into the installer to finish."
+            echo
+            echo "### Also available"
+            echo "- **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Daylens ${{ steps.meta.outputs.version }} (Windows)
           tag_name: ${{ steps.meta.outputs.tag_name }}
-          body: |
-            ## Daylens ${{ steps.meta.outputs.version }} for Windows
-
-            Your personal activity analyst for Windows.
-
-            Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud. Analytics are opt-in and disabled by default.
-
-            ### Included in this release
-            - NSIS installer for Windows 10+ (64-bit)
-            - GitHub Releases metadata for in-app updates (`latest.yml` and blockmap assets)
-            - All app code required for onboarding, tracking, insights, and the web companion flow
-
-            ### Install
-
-            1. Download `Daylens-${{ steps.meta.outputs.version }}-Setup.exe` below
-            2. Run the installer
-            3. Launch Daylens from the Desktop shortcut or Start menu
-
-            ### Update
-
-            Existing installs can pick this up through the in-app updater once the app checks GitHub Releases and downloads the new version in the background.
-
-            ### Also available
-            - **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)
+          body: ${{ steps.notes.outputs.body }}
           files: |
             dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe

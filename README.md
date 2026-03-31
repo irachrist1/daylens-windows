@@ -13,7 +13,7 @@ Daylens is a Windows Electron app that passively tracks app and website activity
 - Daily summary notifications around 6 PM and weekday morning nudges when no activity has been tracked yet.
 - Distraction alerts after sustained time in entertainment or social apps.
 - App detail views with usage interpretation, grouped sessions, and hour-of-day mini charts.
-- GitHub-backed Windows releases with `electron-updater` metadata so installed apps can download updates in-app.
+- GitHub-backed Windows releases with `electron-updater` metadata, in-app progress, and published "what's new" notes so installed apps can update without leaving Daylens.
 
 ## Development
 

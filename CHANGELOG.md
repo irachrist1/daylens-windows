@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.14 - 2026-03-31
+
+- Fixed the in-app updater handoff so Daylens can close into the installer cleanly instead of getting stuck after showing that an update is ready.
+- Added richer updater state in-app: progress, install/failure messaging, and release highlights pulled from the published Windows release notes.
+- Replaced the Settings download redirect with real in-app update actions for checking, downloading, and restarting into the installer.
+- Added a pre-update backup of local `userData` before install so upgrades have a built-in recovery path if anything goes wrong.
+- Updated the Windows release workflow to publish changelog-driven release notes plus a commit summary on each GitHub release page.
+
 ## v1.0.13 - 2026-03-31
 
 - Fixed the `visit_time_us` schema migration path so fresh installs and partially upgraded databases no longer fail on startup with a duplicate-column error.

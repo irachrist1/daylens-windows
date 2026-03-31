@@ -6,6 +6,7 @@ import { formatDuration, formatTime } from '../lib/format'
 import type { AppSettings, AppTheme } from '@shared/types'
 import FeedbackModal from '../components/FeedbackModal'
 import type { UpdaterStatusInfo } from '../../preload/index'
+import { extractReleaseHighlights } from '../lib/releaseNotes'
 
 interface DebugInfo {
   dbPath: string
@@ -361,6 +362,7 @@ export default function Settings() {
 
   const version = debug?.appVersion
   const updateAction = softwareUpdateAction()
+  const releaseHighlights = extractReleaseHighlights(updater?.releaseNotesText ?? null, 4)
 
   // ─── Shared card style ────────────────────────────────────────────────────
   const cardStyle: React.CSSProperties = {
@@ -411,6 +413,18 @@ export default function Settings() {
               <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
                 {softwareUpdateLabel()}
               </span>
+              {releaseHighlights.length > 0 && (
+                <div style={{ marginTop: 8, display: 'grid', gap: 4 }}>
+                  {releaseHighlights.slice(0, 3).map((item) => (
+                    <span
+                      key={item}
+                      style={{ fontSize: 11, color: 'var(--color-text-secondary)', lineHeight: 1.5 }}
+                    >
+                      • {item}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             <button
               onClick={updateAction.onClick}

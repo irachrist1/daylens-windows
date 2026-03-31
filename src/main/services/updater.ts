@@ -7,6 +7,9 @@ export interface UpdaterState {
   version: string | null
   progressPct: number | null
   errorMessage: string | null
+  releaseName: string | null
+  releaseNotesText: string | null
+  releaseDate: string | null
 }
 
 let _updateAvailable: string | null = null
@@ -20,6 +23,9 @@ let _state: UpdaterState = {
   version: null,
   progressPct: null,
   errorMessage: null,
+  releaseName: null,
+  releaseNotesText: null,
+  releaseDate: null,
 }
 
 export function isInstallingUpdate(): boolean { return _installingUpdate }
@@ -33,6 +39,47 @@ function emitState(): void {
 function setUpdaterState(partial: Partial<UpdaterState>): void {
   _state = { ..._state, ...partial }
   emitState()
+}
+
+function getReleaseNotesText(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  if (Array.isArray(value)) {
+    const combined = value
+      .map((entry) => {
+        if (typeof entry === 'string') return entry.trim()
+        if (!entry || typeof entry !== 'object') return ''
+        const note = (entry as { note?: unknown }).note
+        return typeof note === 'string' ? note.trim() : ''
+      })
+      .filter(Boolean)
+      .join('\n\n')
+
+    return combined.length > 0 ? combined : null
+  }
+
+  return null
+}
+
+function getReleaseMetadata(info: unknown): Pick<UpdaterState, 'releaseName' | 'releaseNotesText' | 'releaseDate'> {
+  if (!info || typeof info !== 'object') {
+    return { releaseName: null, releaseNotesText: null, releaseDate: null }
+  }
+
+  const candidate = info as {
+    releaseName?: unknown
+    releaseNotes?: unknown
+    releaseDate?: unknown
+  }
+
+  return {
+    releaseName: typeof candidate.releaseName === 'string' ? candidate.releaseName : null,
+    releaseNotesText: getReleaseNotesText(candidate.releaseNotes),
+    releaseDate: typeof candidate.releaseDate === 'string' ? candidate.releaseDate : null,
+  }
 }
 
 export function initUpdater(win: BrowserWindow): void {
@@ -63,6 +110,7 @@ export function initUpdater(win: BrowserWindow): void {
       version: info.version,
       progressPct: 0,
       errorMessage: null,
+      ...getReleaseMetadata(info),
     })
   })
 
@@ -80,6 +128,7 @@ export function initUpdater(win: BrowserWindow): void {
       version: info.version,
       progressPct: 100,
       errorMessage: null,
+      ...getReleaseMetadata(info),
     })
   })
 
@@ -90,6 +139,9 @@ export function initUpdater(win: BrowserWindow): void {
       version: app.getVersion(),
       progressPct: null,
       errorMessage: null,
+      releaseName: null,
+      releaseNotesText: null,
+      releaseDate: null,
     })
   })
 
@@ -100,6 +152,9 @@ export function initUpdater(win: BrowserWindow): void {
       status: 'error',
       errorMessage: err.message,
       progressPct: null,
+      releaseName: null,
+      releaseNotesText: null,
+      releaseDate: null,
     })
   })
 

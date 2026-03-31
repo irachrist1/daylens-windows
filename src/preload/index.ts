@@ -16,6 +16,9 @@ export interface UpdaterStatusInfo {
   version: string | null
   progressPct: number | null
   errorMessage: string | null
+  releaseName: string | null
+  releaseNotesText: string | null
+  releaseDate: string | null
 }
 
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
