@@ -3,7 +3,9 @@ import { FOCUSED_CATEGORIES, IPC } from '@shared/types'
 import type { FocusStartPayload } from '@shared/types'
 import {
   getActiveFocusSession,
+  getDistractionCountForSession,
   getRecentFocusSessions,
+  saveFocusReflection,
   getSessionsForRange,
   startFocusSession,
   stopFocusSession,
@@ -29,6 +31,14 @@ export function registerFocusHandlers(): void {
 
   ipcMain.handle(IPC.FOCUS.GET_RECENT, (_e, limit: number = 20) => {
     return getRecentFocusSessions(getDb(), limit)
+  })
+
+  ipcMain.handle(IPC.FOCUS.SAVE_REFLECTION, (_e, payload: { sessionId: number; note: string }) => {
+    saveFocusReflection(getDb(), payload.sessionId, payload.note)
+  })
+
+  ipcMain.handle(IPC.FOCUS.GET_DISTRACTION_COUNT, (_e, payload: { sessionId: number }) => {
+    return getDistractionCountForSession(getDb(), payload.sessionId)
   })
 
   ipcMain.handle(IPC.FOCUS.GET_BREAK_RECOMMENDATION, () => {

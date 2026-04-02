@@ -3,6 +3,10 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { GoogleGenAI, type Content as GoogleContent } from '@google/genai'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
 import {
   appendConversationMessage,
   clearConversation,
@@ -15,22 +19,42 @@ import {
   getRecentFocusSessions,
   getCategoryOverrides,
 } from '../db/queries'
+import { routeInsightsQuestion, type TemporalContext } from '../lib/insightsQueryRouter'
+import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import { getDb } from './database'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
-import type { AIProvider, AppCategorySuggestion, WorkContextBlock, WorkContextInsight } from '@shared/types'
+import type { AIProviderMode, AppCategorySuggestion, WorkContextBlock, WorkContextInsight } from '@shared/types'
 import { fallbackNarrativeForBlock, userVisibleLabelForBlock } from './workBlocks'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
 
 interface ResolvedProviderConfig {
-  provider: AIProvider
-  apiKey: string
+  provider: AIProviderMode
+  apiKey: string | null
   model: string
 }
 
 type ConversationMessage = { role: 'user' | 'assistant'; content: string }
+
+interface CLIToolDetectionResult {
+  claude: string | null
+  codex: string | null
+}
+
+class CLIProviderError extends Error {
+  readonly code: 'not_found' | 'non_zero_exit' | 'timeout' | 'launch_failed'
+
+  constructor(code: CLIProviderError['code'], message: string) {
+    super(message)
+    this.name = 'CLIProviderError'
+    this.code = code
+  }
+}
+
+const CLI_TIMEOUT_MS = 180_000
+const conversationTemporalContext = new Map<number, TemporalContext | null>()
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -47,26 +71,89 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   })
 }
 
-function uniqueProviders(preferredProvider: AIProvider): AIProvider[] {
+function cliBinaryCandidates(tool: 'claude' | 'codex'): string[] {
+  const appData = process.env.APPDATA
+  const userProfile = process.env.USERPROFILE
+  return [
+    appData ? path.join(appData, 'npm', `${tool}.cmd`) : null,
+    userProfile ? path.join(userProfile, 'AppData', 'Roaming', 'npm', `${tool}.cmd`) : null,
+    userProfile ? path.join(userProfile, '.local', 'bin', `${tool}.cmd`) : null,
+    userProfile ? path.join(userProfile, '.volta', 'bin', `${tool}.cmd`) : null,
+    userProfile ? path.join(userProfile, '.npm-global', 'bin', `${tool}.cmd`) : null,
+  ].filter((candidate): candidate is string => Boolean(candidate))
+}
+
+async function resolveCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null> {
+  for (const candidate of cliBinaryCandidates(tool)) {
+    try {
+      await fs.access(candidate)
+      return candidate
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn('where.exe', [tool], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    let stdout = ''
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString()
+    })
+    child.on('error', () => resolve(null))
+    child.on('close', (code) => {
+      if (code !== 0) {
+        resolve(null)
+        return
+      }
+      const match = stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean)
+      resolve(match ?? null)
+    })
+  })
+}
+
+export async function detectCLITools(): Promise<CLIToolDetectionResult> {
+  const [claude, codex] = await Promise.all([
+    resolveCLIToolPath('claude'),
+    resolveCLIToolPath('codex'),
+  ])
+  return { claude, codex }
+}
+
+function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | 'codex-cli' {
+  return provider === 'claude-cli' || provider === 'codex-cli'
+}
+
+function uniqueProviders(preferredProvider: AIProviderMode): AIProviderMode[] {
   return [
     preferredProvider,
     'google',
     'anthropic',
     'openai',
-  ].filter((provider, index, providers) => providers.indexOf(provider) === index) as AIProvider[]
+  ].filter((provider, index, providers) => providers.indexOf(provider) === index) as AIProviderMode[]
 }
 
 async function resolveProviderConfigs(): Promise<ResolvedProviderConfig[]> {
   const settings = await getSettingsAsync()
-  const orderedProviders = [
-    ...uniqueProviders(settings.aiProvider ?? 'anthropic'),
-  ]
+  const preferred = settings.aiProvider ?? 'anthropic'
+
+  // CLI providers only participate if they are the user's selected provider AND installed.
+  // They are never auto-inserted into the fallback chain because a missing binary throws
+  // a non-quota error that would abort the entire chain before reaching API providers.
+  let orderedProviders: AIProviderMode[]
+  if (providerUsesCLI(preferred)) {
+    orderedProviders = [preferred]
+  } else {
+    orderedProviders = uniqueProviders(preferred)
+  }
 
   const configs: ResolvedProviderConfig[] = []
 
   for (const provider of orderedProviders) {
     const apiKey = await getApiKey(provider)
-    if (!apiKey) continue
+    if (!providerUsesCLI(provider) && !apiKey) continue
 
     configs.push({
       provider,
@@ -82,24 +169,31 @@ async function resolveProviderConfigs(): Promise<ResolvedProviderConfig[]> {
   return configs
 }
 
-function modelForProvider(provider: AIProvider, settings = getSettings()): string {
+function modelForProvider(provider: AIProviderMode, settings = getSettings()): string {
   switch (provider) {
     case 'openai':
+    case 'codex-cli':
       return settings.openaiModel || 'gpt-5.4'
     case 'google':
       return settings.googleModel || 'gemini-3.1-flash-lite-preview'
+    case 'claude-cli':
+      return settings.anthropicModel || 'claude-opus-4-6'
     case 'anthropic':
     default:
       return settings.anthropicModel || 'claude-opus-4-6'
   }
 }
 
-function providerLabel(provider: AIProvider): string {
+function providerLabel(provider: AIProviderMode): string {
   switch (provider) {
     case 'openai':
       return 'OpenAI'
     case 'google':
       return 'Google Gemini'
+    case 'claude-cli':
+      return 'Claude CLI'
+    case 'codex-cli':
+      return 'Codex CLI'
     case 'anthropic':
     default:
       return 'Anthropic Claude'
@@ -161,7 +255,7 @@ async function sendWithAnthropic(
   prior: ConversationMessage[],
   userMessage: string,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey: config.apiKey })
+  const client = new Anthropic({ apiKey: config.apiKey ?? '' })
   const response = await client.messages.create({
     model: config.model,
     max_tokens: 1024,
@@ -184,7 +278,7 @@ async function sendWithOpenAI(
   prior: ConversationMessage[],
   userMessage: string,
 ): Promise<string> {
-  const client = new OpenAI({ apiKey: config.apiKey })
+  const client = new OpenAI({ apiKey: config.apiKey ?? '' })
   const response = await client.responses.create({
     model: config.model,
     instructions: systemPrompt,
@@ -206,7 +300,7 @@ async function sendWithGoogle(
   userMessage: string,
 ): Promise<string> {
   const ai = new GoogleGenAI({
-    apiKey: config.apiKey,
+    apiKey: config.apiKey ?? '',
     httpOptions: {
       headers: {
         'x-goog-api-client': GOOGLE_CLIENT_HEADER,
@@ -225,6 +319,90 @@ async function sendWithGoogle(
   return response.text ?? ''
 }
 
+async function runCLIProvider(
+  tool: 'claude' | 'codex',
+  systemPrompt: string,
+  prompt: string,
+  model?: string,
+): Promise<string> {
+  const detected = await detectCLITools()
+  const executablePath = detected[tool]
+  if (!executablePath) {
+    throw new CLIProviderError('not_found', `${tool} CLI not found`)
+  }
+
+  const tmpFilePath = path.join(os.tmpdir(), `daylens-${tool}-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`)
+  const args = tool === 'claude'
+    ? ['-p', prompt, '--output-format', 'text', '--tools', '', '--system-prompt', systemPrompt]
+    : ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', '--config', 'model_reasoning_effort="low"', '--color', 'never', '--output-last-message', tmpFilePath, `System instructions:\n${systemPrompt}\n\n${prompt}`]
+
+  if (model) {
+    args.splice(tool === 'claude' ? args.length : args.length - 1, 0, '--model', model)
+  }
+
+  try {
+    const output = await new Promise<string>((resolve, reject) => {
+      const env = { ...process.env }
+      const binaryDir = path.dirname(executablePath)
+      env.PATH = `${binaryDir};${env.PATH ?? ''}`
+
+      const child = spawn(executablePath, args, {
+        env,
+        shell: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+
+      let stdout = ''
+      let stderr = ''
+      let finished = false
+      const timer = setTimeout(() => {
+        if (finished) return
+        finished = true
+        child.kill()
+        reject(new CLIProviderError('timeout', `${tool} CLI timed out after ${CLI_TIMEOUT_MS / 1000}s`))
+      }, CLI_TIMEOUT_MS)
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString()
+      })
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString()
+      })
+      child.on('error', (error) => {
+        if (finished) return
+        finished = true
+        clearTimeout(timer)
+        reject(new CLIProviderError('launch_failed', error.message))
+      })
+      child.on('close', async (code) => {
+        if (finished) return
+        finished = true
+        clearTimeout(timer)
+        try {
+          const fileOutput = tool === 'codex'
+            ? (await fs.readFile(tmpFilePath, 'utf8').catch(() => '')).trim()
+            : ''
+          const finalOutput = (tool === 'codex' ? fileOutput : stdout).trim()
+          if (code !== 0) {
+            reject(new CLIProviderError('non_zero_exit', (stderr || finalOutput || `${tool} exited with code ${code ?? 1}`).trim()))
+            return
+          }
+          resolve(finalOutput)
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+
+    return output
+  } finally {
+    if (tool === 'codex') {
+      await fs.unlink(tmpFilePath).catch(() => undefined)
+    }
+  }
+}
+
 async function sendWithProvider(
   config: ResolvedProviderConfig,
   systemPrompt: string,
@@ -232,6 +410,16 @@ async function sendWithProvider(
   userMessage: string,
 ): Promise<string> {
   switch (config.provider) {
+    case 'claude-cli':
+    case 'codex-cli': {
+      const cliPrompt = [
+        prior.length > 0
+          ? `Conversation so far:\n${prior.map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}: ${message.content}`).join('\n\n')}`
+          : null,
+        `User: ${userMessage}`,
+      ].filter(Boolean).join('\n\n')
+      return runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', systemPrompt, cliPrompt, config.model)
+    }
     case 'openai':
       return sendWithOpenAI(config, systemPrompt, prior, userMessage)
     case 'google':
@@ -450,6 +638,11 @@ function buildDayContext(): string {
     const summaries = getAppSummariesForRange(db, todayFrom, todayTo)
     const todaySessions = getSessionsForRange(db, todayFrom, todayTo)
     const websites = getWebsiteSummariesForRange(db, todayFrom, todayTo)
+    const todayEvidence = deriveWorkEvidenceSummary({
+      appSummaries: summaries,
+      sessions: todaySessions,
+      websiteSummaries: websites,
+    })
     const peakHours = getPeakHours(db, todayTo - 14 * 86_400_000, todayTo) ?? undefined
 
     const totalSec = summaries.reduce((s, a) => s + a.totalSeconds, 0)
@@ -570,6 +763,7 @@ function buildDayContext(): string {
       'Today:',
       `- Total tracked time: ${formatDuration(totalSec)}`,
       `- Focus score: ${focusScore} (${formatDuration(focusSec)} in focused apps)`,
+      `- Evidence summary: ${todayEvidence.evidenceText}`,
       `- Top categories: ${topCategoryList || 'none yet'}`,
       `- Top apps: ${topApps || 'none yet'}`,
       `- Top websites: ${topSites || 'none yet'}`,
@@ -635,9 +829,9 @@ function workBlockPrompt(block: WorkContextBlock): string {
     .map(([cat, sec]) => `  ${cat}: ${formatDuration(sec)}`)
 
   const switchNote = block.switchCount >= 5
-    ? `Highly fragmented — ${block.switchCount} context switches.`
+    ? `App transitions observed: ${block.switchCount}.`
     : block.switchCount >= 2
-      ? `${block.switchCount} context switches.`
+      ? `App transitions observed: ${block.switchCount}.`
       : ''
 
   const lines = [
@@ -768,6 +962,15 @@ export async function generateWorkBlockInsight(block: WorkContextBlock): Promise
 export async function sendMessage(userMessage: string): Promise<string> {
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
+  const previousContext = conversationTemporalContext.get(conversationId) ?? null
+
+  const routed = await routeInsightsQuestion(userMessage, new Date(), previousContext, db)
+  if (routed) {
+    appendConversationMessage(db, conversationId, 'user', userMessage)
+    appendConversationMessage(db, conversationId, 'assistant', routed.answer)
+    conversationTemporalContext.set(conversationId, routed.resolvedContext)
+    return routed.answer
+  }
 
   appendConversationMessage(db, conversationId, 'user', userMessage)
 
@@ -805,6 +1008,10 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const { text: assistantText } = await sendWithFallback(systemPrompt, prior, userMessage)
 
   appendConversationMessage(db, conversationId, 'assistant', assistantText)
+  conversationTemporalContext.set(conversationId, {
+    date: new Date(),
+    timeWindow: null,
+  })
   return assistantText
 }
 
@@ -818,4 +1025,14 @@ export function clearAIHistory(): void {
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
   clearConversation(db, conversationId)
+  conversationTemporalContext.delete(conversationId)
+}
+
+export async function testCLITool(tool: 'claude' | 'codex'): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+  try {
+    const output = await runCLIProvider(tool, 'You are a test runner. Reply with the single word OK.', 'Reply with the single word OK')
+    return { ok: true, output: output.trim() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 }

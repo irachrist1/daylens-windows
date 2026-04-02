@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
   duration_sec INTEGER NOT NULL DEFAULT 0,
   label        TEXT,
   target_minutes INTEGER,
-  planned_apps TEXT NOT NULL DEFAULT '[]'
+  planned_apps TEXT NOT NULL DEFAULT '[]',
+  reflection_note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ai_conversations (
@@ -41,6 +42,16 @@ CREATE TABLE IF NOT EXISTS ai_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS distraction_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER REFERENCES focus_sessions(id) ON DELETE SET NULL,
+  app_name TEXT NOT NULL,
+  bundle_id TEXT NOT NULL,
+  triggered_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_distraction_events_session ON distraction_events (session_id, triggered_at);
 
 CREATE TABLE IF NOT EXISTS category_overrides (
   bundle_id TEXT PRIMARY KEY,
@@ -68,4 +79,15 @@ CREATE TABLE IF NOT EXISTS website_visits (
 
 CREATE INDEX IF NOT EXISTS idx_website_visits_time   ON website_visits (visit_time);
 CREATE INDEX IF NOT EXISTS idx_website_visits_domain ON website_visits (domain, visit_time);
+
+CREATE TABLE IF NOT EXISTS work_context_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  start_ts INTEGER NOT NULL,
+  end_ts INTEGER NOT NULL,
+  observation TEXT NOT NULL,
+  source_block_ids TEXT NOT NULL DEFAULT '[]',
+  UNIQUE(start_ts, end_ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_work_context_observations_range ON work_context_observations (start_ts, end_ts);
 `

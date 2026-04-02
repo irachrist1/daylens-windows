@@ -63,13 +63,13 @@ function buildUsageInsight(
 ): string {
   const displayName = formatDisplayAppName(appName)
   if (sessionCount > 8 && avgSessionSeconds < 300) {
-    return `You opened ${displayName} ${sessionCount} times with an average of ${formatDuration(avgSessionSeconds)} - this looks like frequent context switching or command execution.`
+    return `You opened ${displayName} ${sessionCount} times with an average of ${formatDuration(avgSessionSeconds)} - that is a short, repeated-use pattern.`
   }
   if (avgSessionSeconds > 1800) {
-    return `You use ${displayName} in long focused blocks (avg ${formatDuration(avgSessionSeconds)}) - this is a deep work tool for you.`
+    return `You use ${displayName} in long sustained blocks (avg ${formatDuration(avgSessionSeconds)}) - steady usage.`
   }
   if (sessionCount <= 3 && totalSeconds > 3600) {
-    return `You had ${sessionCount} long sustained ${sessionCount === 1 ? 'session' : 'sessions'} today - consistent and focused usage.`
+    return `You had ${sessionCount} long sustained ${sessionCount === 1 ? 'session' : 'sessions'} today - steady usage.`
   }
   return `Regular usage across ${sessionCount} ${sessionCount === 1 ? 'session' : 'sessions'} today.`
 }
@@ -79,10 +79,10 @@ function buildCharacterLine(
   avgSessionSeconds: number,
   sessionCount: number,
 ): string {
-  if (FOCUSED_CATEGORIES.includes(category) && avgSessionSeconds > 20 * 60) return 'Deep focus app'
-  if ((category === 'browsing' || category === 'entertainment') && avgSessionSeconds < 300) return 'Frequent distraction'
+  if (FOCUSED_CATEGORIES.includes(category) && avgSessionSeconds > 20 * 60) return 'Sustained use'
+  if ((category === 'browsing' || category === 'entertainment') && avgSessionSeconds < 300) return 'Short sessions'
   if (category === 'meetings') return 'Communication & calls'
-  if (sessionCount > 10 && avgSessionSeconds < 5 * 60) return 'Frequent context switching'
+  if (sessionCount > 10 && avgSessionSeconds < 5 * 60) return 'Short repeated sessions'
   return formatCategory(category)
 }
 
@@ -1092,7 +1092,7 @@ function AppDetailPanel({
               fontSize: 18, fontWeight: 900, color: 'var(--color-text-primary)',
               margin: '0 0 8px', letterSpacing: '-0.02em',
             }}>
-              Focus Peak Detected
+              Usage Pattern Detected
             </h2>
             <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.6 }}>
               {usageInsight}

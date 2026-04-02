@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import type { AppSession, AppUsageSummary, AppSettings, FocusSession, WebsiteSummary, WeeklySummary } from '@shared/types'
+import type { AIProvider, AppSession, AppUsageSummary, AppSettings, FocusSession, WebsiteSummary, WeeklySummary } from '@shared/types'
 import {
   buildCategoryTotalsFromSummaries,
   calculateFocusTotals,
@@ -180,24 +180,6 @@ function MarkdownMessage({ content }: { content: string }) {
   )
 }
 
-function buildStarterPrompts(summaries: AppUsageSummary[]): string[] {
-  if (summaries.length === 0) return [
-    'How was my focus today?',
-    'What patterns do you notice in my app usage?',
-    'Give me a productivity summary.',
-    'What should I focus on next?',
-  ]
-  const totalSeconds = summaries.reduce((s, a) => s + a.totalSeconds, 0)
-  const focusSeconds = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
-  const focusPct = percentOf(focusSeconds, totalSeconds)
-  const top = summaries[0]
-  return [
-    top ? `I spent ${formatDuration(top.totalSeconds)} in ${top.appName} — is that too much?` : 'Which app used most of my time?',
-    `My focus score is ${focusPct}% today. How can I improve it?`,
-    'What should I focus on for the rest of the day?',
-    'Summarize my computer usage patterns this week.',
-  ]
-}
 
 function overlapSeconds(session: AppSession, startMs: number, endMs: number): number {
   const sessionEnd = session.endTime ?? (session.startTime + session.durationSeconds * 1_000)
@@ -253,12 +235,12 @@ function buildAlgorithmicInsights(params: {
   const switching = computeContextSwitching(visibleSessions, { windowMs: 2 * 60 * 60_000, shortSessionSeconds: 180 })
   if (switching.count > 8) {
     insights.push({
-      key: 'context-switching', tag: 'Attention',
-      headline: `${switching.count} app switches in the last 2 hours`,
-      body: `Average of ${formatDuration(switching.averageSeconds)} per app. Batching similar tasks into longer blocks would reduce the cognitive cost of these resets.`,
+      key: 'context-switching', tag: 'Activity',
+      headline: `${switching.count} short app sessions in the last 2 hours`,
+      body: `Average dwell time before each change was ${formatDuration(switching.averageSeconds)} in this window.`,
       icon: <IconSwitch />,
-      metric: <span>{switching.count} switches</span>,
-      action: <Link to="/focus" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>Start focus session →</Link>,
+      metric: <span>{switching.count} short sessions</span>,
+      action: <Link to="/focus" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>View focus sessions →</Link>,
       accentColor: '#ffb95f',
     })
   }
@@ -487,7 +469,6 @@ export default function Insights() {
   const streakDays = getFocusStreakDays(focusSessions)
 
   const algorithmicInsights = buildAlgorithmicInsights({ settings, summaries, focusSessions, websites, todaySessions })
-  const starterPrompts = buildStarterPrompts(summaries)
 
   const switching = computeContextSwitching(filterVisibleSessions(todaySessions, 10, false), { windowMs: 2 * 60 * 60_000, shortSessionSeconds: 180 })
 
@@ -498,7 +479,8 @@ export default function Insights() {
   const todayLabel = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const showChatInput = hasApiKey === true
+  const isCliProvider = settings.aiProvider === 'claude-cli' || settings.aiProvider === 'codex-cli'
+  const showChatInput = hasApiKey === true || isCliProvider
 
   const peakInsight = algorithmicInsights.find((i) => i.key === 'peak-hours')
   const peakHourText = peakInsight ? peakInsight.headline : null
@@ -646,7 +628,7 @@ export default function Insights() {
                   </>
                 )}
                 {switching.count > 0 && (
-                  <>{' '}{switching.count} context switches recorded.</>
+                  <>{' '}{switching.count} short app sessions recorded.</>
                 )}
               </p>
 
@@ -928,7 +910,7 @@ export default function Insights() {
             </div>
 
             {/* No API key state */}
-            {hasApiKey === false && (
+            {!showChatInput && (
               <div style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 gap: 14, padding: '40px 0', textAlign: 'center',
@@ -943,9 +925,9 @@ export default function Insights() {
                 </div>
                 <div>
                   <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>
-                    Ask Daylens
+                    Ask about your day
                   </p>
-                  <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', maxWidth: 240, margin: '0 auto' }}>
+                  <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', maxWidth: 260, margin: '0 auto' }}>
                     Add your {providerMeta.label} API key to ask questions about your productivity.
                   </p>
                 </div>
@@ -962,22 +944,28 @@ export default function Insights() {
               </div>
             )}
 
-            {/* Chat with API key */}
-            {hasApiKey === true && (
+            {/* Chat with API key or CLI */}
+            {showChatInput && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                {/* Starter prompts — shown when no messages */}
+                {/* Empty state */}
                 {messages.length === 0 && !loading && (
-                  <div style={{
-                    display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))',
-                    gap: 8, marginBottom: 16,
-                  }}>
-                    {starterPrompts.map((prompt) => (
-                      <StarterPromptButton
-                        key={prompt}
-                        prompt={prompt}
-                        onSend={() => void handleSend(prompt)}
-                      />
-                    ))}
+                  <div style={{ marginBottom: 20 }}>
+                    <p style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 6px', letterSpacing: '-0.02em' }}>
+                      Ask about your day
+                    </p>
+                    <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: '0 0 16px', lineHeight: 1.6 }}>
+                      What were you working on? When did you settle in best? What changed your activity most?
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+                      {[
+                        'What was I working on today?',
+                        'What changed most in my day?',
+                        'When was I most focused?',
+                        'Where did my time go?',
+                      ].map((prompt) => (
+                        <StarterPromptButton key={prompt} prompt={prompt} onSend={() => void handleSend(prompt)} />
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -1016,10 +1004,44 @@ export default function Insights() {
                           fontSize: 13,
                           color: 'var(--color-text-primary)',
                           lineHeight: 1.7,
-                          paddingBottom: 14,
+                          paddingBottom: i < messages.length - 1 ? 14 : 8,
                           borderBottom: i < messages.length - 1 ? '1px solid var(--color-border-ghost)' : 'none',
                         }}>
                           <MarkdownMessage content={msg.content} />
+                          {/* Follow-up chips after last assistant message */}
+                          {i === messages.length - 1 && !loading && (
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                              {[
+                                'What changed most?',
+                                'Where did my time go?',
+                                ...(/\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b(morning|afternoon|evening)\b/i.test(msg.content)
+                                  ? ['What was I doing then?'] : []),
+                              ].map((chip) => (
+                                <button
+                                  key={chip}
+                                  onClick={() => void handleSend(chip)}
+                                  style={{
+                                    padding: '5px 12px', borderRadius: 999, fontSize: 12,
+                                    border: '1px solid var(--color-border-ghost)',
+                                    background: 'transparent',
+                                    color: 'var(--color-text-secondary)',
+                                    cursor: 'pointer', fontFamily: 'inherit',
+                                    transition: 'border-color 120ms, color 120ms',
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.borderColor = 'var(--color-primary)'
+                                    e.currentTarget.style.color = 'var(--color-primary)'
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.borderColor = 'var(--color-border-ghost)'
+                                    e.currentTarget.style.color = 'var(--color-text-secondary)'
+                                  }}
+                                >
+                                  {chip}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )
@@ -1066,9 +1088,8 @@ export default function Insights() {
           padding: '12px 40px 14px',
           background: 'var(--color-bg)',
         }}>
-          <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ maxWidth: 900, margin: '0 auto' }}>
             <div style={{
-              flex: 1,
               display: 'flex', alignItems: 'center', gap: 8,
               background: 'var(--color-surface-container)',
               borderRadius: 10,
@@ -1104,6 +1125,16 @@ export default function Insights() {
                 Send
               </button>
             </div>
+            {/* Mode label */}
+            <p style={{ fontSize: 11, color: 'var(--color-text-tertiary)', margin: '6px 0 0', lineHeight: 1.4 }}>
+              {settings.aiProvider === 'claude-cli'
+                ? 'Exact answers use local data. Analysis uses your Claude subscription.'
+                : settings.aiProvider === 'codex-cli'
+                  ? 'Exact answers use local data. Analysis uses your OpenAI subscription.'
+                  : hasApiKey
+                    ? `Exact answers use local data. Analysis uses your ${AI_PROVIDER_META[settings.aiProvider as AIProvider].label} key.`
+                    : 'Exact answers use local data. Connect AI in Settings for deeper analysis.'}
+            </p>
           </div>
         </div>
       )}

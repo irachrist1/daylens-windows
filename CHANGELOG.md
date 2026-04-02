@@ -2,10 +2,20 @@
 
 ## v1.0.17 - 2026-04-02
 
-- Documented launch-readiness caveats for the upcoming multi-provider AI layer, especially separate saved models per provider and honest CLI-provider billing/usage behavior.
-- Captured that Claude Code CLI and Codex CLI should be treated as local subprocess providers with no true streaming, no prompt-cache telemetry, and no reliable per-request token billing.
-- Added implementation guidance that daily AI budget guards should pause background synthesis only, while interactive chat stays available.
-- Added prompt-caching guidance for timeline analysis: keep stable instructions in a cacheable prefix, append volatile activity payloads afterward, and place retry feedback outside the cached prefix.
+### Added
+- Claude Code CLI and Codex CLI as local AI providers, with onboarding and Settings flows that can detect the installed tool, test the connection, and keep a provider-specific default model
+- A stronger Focus flow with a sticky distraction banner, break suggestions, persisted focus intent, and a post-session reflection card that records distraction counts
+- Distraction-alert, daily-recap, and morning-nudge controls directly in Settings
+
+### Changed
+- Insights can answer more exact day/time questions locally, preserve temporal follow-ups more reliably, and explain missing AI setup without dropping the conversation
+- Provider settings are now truly mode-aware across onboarding, Settings, and IPC, including the differences between API-backed and CLI-backed providers
+- Focus scoring and Insights copy now treat short app sessions as descriptive activity instead of automatically assuming broken focus
+
+### Fixed
+- Provider/model switching now refreshes saved state correctly after changing AI backends
+- Missing CLI tools no longer poison the provider fallback chain for API-backed modes
+- Timeline-analysis prompts keep stable instructions separate from volatile activity payloads so retry and caching behavior are more predictable
 
 ## v1.0.16 - 2026-04-01
 

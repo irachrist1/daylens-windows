@@ -35,8 +35,8 @@ import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray } from './tray'
 import { initUpdater, isInstallingUpdate, registerUpdaterShutdown } from './services/updater'
-import { startDailySummaryNotifier } from './services/dailySummaryNotifier'
-import { startDistractionAlerter } from './services/distractionAlerter'
+import { setDailySummaryNotificationWindow, startDailySummaryNotifier } from './services/dailySummaryNotifier'
+import { registerDistractionAlerterHandlers, startDistractionAlerter } from './services/distractionAlerter'
 import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
 
 // Fix macOS path collision with native Swift companion app.
@@ -315,8 +315,10 @@ app.whenReady()
     registerAIHandlers()
     registerSettingsHandlers()
     registerSyncHandlers()
+    registerDistractionAlerterHandlers()
 
     mainWindow = createWindow()
+    setDailySummaryNotificationWindow(mainWindow)
     createTray(mainWindow)
     initUpdater(mainWindow)
     registerUpdaterShutdown(async () => {
@@ -326,7 +328,7 @@ app.whenReady()
 
     startTracking()
     startSync()
-    startDailySummaryNotifier()
+    startDailySummaryNotifier(mainWindow)
     startDistractionAlerter()
 
     // Deferred 5s — after window is visible: browser tracking + Windows history backfill (#4, #5)
@@ -366,6 +368,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     mainWindow = createWindow()
+    setDailySummaryNotificationWindow(mainWindow)
   } else {
     mainWindow?.show()
   }

@@ -4,7 +4,7 @@ import type {
   AppCharacter,
   AppSettings,
   AppCategorySuggestion,
-  AIProvider,
+  AIProviderMode,
   BreakRecommendation,
   FocusStartPayload,
   HistoryDayPayload,
@@ -63,6 +63,8 @@ const api = {
     stop: (id: number) => ipcRenderer.invoke(IPC.FOCUS.STOP, id),
     getActive: () => ipcRenderer.invoke(IPC.FOCUS.GET_ACTIVE),
     getRecent: (limit?: number) => ipcRenderer.invoke(IPC.FOCUS.GET_RECENT, limit),
+    saveReflection: (payload: { sessionId: number; note: string }) => ipcRenderer.invoke(IPC.FOCUS.SAVE_REFLECTION, payload),
+    getDistractionCount: (payload: { sessionId: number }) => ipcRenderer.invoke(IPC.FOCUS.GET_DISTRACTION_COUNT, payload),
     getBreakRecommendation: (): Promise<BreakRecommendation | null> =>
       ipcRenderer.invoke(IPC.FOCUS.GET_BREAK_RECOMMENDATION),
   },
@@ -70,6 +72,8 @@ const api = {
     sendMessage: (message: string) => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, message),
     getHistory: () => ipcRenderer.invoke(IPC.AI.GET_HISTORY),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
+    detectCliTools: () => ipcRenderer.invoke(IPC.AI.DETECT_CLI_TOOLS),
+    testCliTool: (payload: { tool: 'claude' | 'codex' }) => ipcRenderer.invoke(IPC.AI.TEST_CLI_TOOL, payload),
     generateBlockInsight: (block: WorkContextBlock): Promise<WorkContextInsight> =>
       ipcRenderer.invoke(IPC.AI.GENERATE_BLOCK_INSIGHT, block),
     suggestAppCategory: (bundleId: string, appName: string): Promise<AppCategorySuggestion> =>
@@ -78,9 +82,9 @@ const api = {
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),
     set: (partial: Partial<AppSettings>) => ipcRenderer.invoke(IPC.SETTINGS.SET, partial),
-    hasApiKey: (provider?: AIProvider): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS.HAS_API_KEY, provider),
-    setApiKey: (key: string, provider?: AIProvider): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.SET_API_KEY, key, provider),
-    clearApiKey: (provider?: AIProvider): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY, provider),
+    hasApiKey: (provider?: AIProviderMode): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS.HAS_API_KEY, provider),
+    setApiKey: (key: string, provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.SET_API_KEY, key, provider),
+    clearApiKey: (provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY, provider),
   },
   tracking: {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
@@ -99,6 +103,9 @@ const api = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.send(IPC.SHELL.OPEN_EXTERNAL, url),
+  },
+  distractionAlerter: {
+    setThreshold: (payload: { minutes: number }) => ipcRenderer.invoke('distraction-alerter:set-threshold', payload),
   },
   analytics: {
     capture: (event: string, properties: Record<string, unknown>) =>

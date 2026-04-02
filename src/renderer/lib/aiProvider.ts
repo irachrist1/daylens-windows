@@ -1,4 +1,4 @@
-import type { AIProvider } from '@shared/types'
+import type { AIProvider, AIProviderMode } from '@shared/types'
 
 export interface AIModelOption {
   id: string
@@ -7,7 +7,7 @@ export interface AIModelOption {
 }
 
 export interface AIProviderMeta {
-  id: AIProvider
+  id: AIProviderMode
   label: string
   shortLabel: string
   docsUrl: string
@@ -17,7 +17,7 @@ export interface AIProviderMeta {
   models: AIModelOption[]
 }
 
-export const AI_PROVIDER_META: Record<AIProvider, AIProviderMeta> = {
+export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
   anthropic: {
     id: 'anthropic',
     label: 'Anthropic',
@@ -96,6 +96,48 @@ export const AI_PROVIDER_META: Record<AIProvider, AIProviderMeta> = {
       },
     ],
   },
+  'claude-cli': {
+    id: 'claude-cli',
+    label: 'Claude CLI',
+    shortLabel: 'Claude CLI',
+    docsUrl: 'https://docs.anthropic.com',
+    keyPlaceholder: '',
+    helperText: 'Uses the locally installed Claude CLI instead of an API key.',
+    defaultModel: 'claude-opus-4-6',
+    models: [
+      {
+        id: 'claude-opus-4-6',
+        label: 'Claude Opus 4.6',
+        description: 'Uses your local Claude CLI install and Anthropic account.',
+      },
+      {
+        id: 'claude-sonnet-4-6',
+        label: 'Claude Sonnet 4.6',
+        description: 'Balanced local Claude CLI option.',
+      },
+    ],
+  },
+  'codex-cli': {
+    id: 'codex-cli',
+    label: 'Codex CLI',
+    shortLabel: 'Codex CLI',
+    docsUrl: 'https://platform.openai.com/docs',
+    keyPlaceholder: '',
+    helperText: 'Uses the locally installed Codex CLI instead of an API key.',
+    defaultModel: 'gpt-5.4',
+    models: [
+      {
+        id: 'gpt-5.4',
+        label: 'GPT-5.4',
+        description: 'Uses your local Codex CLI install and OpenAI account.',
+      },
+      {
+        id: 'gpt-5.4-mini',
+        label: 'GPT-5.4 mini',
+        description: 'Faster local Codex CLI option.',
+      },
+    ],
+  },
 }
 
 export const AI_PROVIDERS: AIProvider[] = ['anthropic', 'openai', 'google']
@@ -110,16 +152,19 @@ export function detectProviderFromApiKey(key: string): AIProvider | null {
 }
 
 export function getSelectedModel(settings: {
-  aiProvider: AIProvider
+  aiProvider: AIProviderMode
   anthropicModel: string
   openaiModel: string
   googleModel: string
 }): string {
   switch (settings.aiProvider) {
     case 'openai':
+    case 'codex-cli':
       return settings.openaiModel
     case 'google':
       return settings.googleModel
+    case 'claude-cli':
+      return settings.anthropicModel
     case 'anthropic':
     default:
       return settings.anthropicModel

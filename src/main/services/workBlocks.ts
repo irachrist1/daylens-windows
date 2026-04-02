@@ -15,6 +15,7 @@ import type {
 } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import { localDayBounds } from '../lib/localDate'
+import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 
 const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
 const MEETING_THRESHOLD_SEC = 20 * 60
@@ -25,7 +26,7 @@ const COMMUNICATION_INTERRUPTION_THRESHOLD_SEC = 5 * 60
 const FAST_SWITCH_THRESHOLD_SEC = 5 * 60
 const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
 
-type FormationReason = 'coherent' | 'heuristic' | 'fragmented' | 'meeting' | 'longSingleApp'
+type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
 
 interface EffectiveSession {
   session: AppSession
@@ -468,11 +469,11 @@ function shortDomainLabel(domain: string): string {
   return base ? `${base[0].toUpperCase()}${base.slice(1)}` : domain
 }
 
-function confidenceForCandidate(candidate: CandidateBlock, coherence: number, switchCount: number): BlockConfidence {
+function confidenceForCandidate(candidate: CandidateBlock, coherence: number): BlockConfidence {
   if (candidate.formation === 'coherent' && candidate.boundedBeforeGap && candidate.boundedAfterGap && coherence > 0.75) {
     return 'high'
   }
-  if (candidate.formation === 'fragmented' && coherence < 0.4 && switchCount >= 3) {
+  if (candidate.formation === 'mixed' && coherence < 0.4) {
     return 'low'
   }
   return 'medium'
@@ -548,7 +549,7 @@ function buildBlockFromCandidate(
     websites,
     keyPages,
     switchCount,
-    confidence: confidenceForCandidate(candidate, coherence, switchCount),
+    confidence: confidenceForCandidate(candidate, coherence),
     isLive,
   }
 
@@ -637,7 +638,7 @@ function analyzeSessions(
   }
 
   const formation: FormationReason =
-    coherence > 0.75 ? 'coherent' : coherence < 0.4 ? 'fragmented' : 'heuristic'
+    coherence > 0.75 ? 'coherent' : coherence < 0.4 ? 'mixed' : 'heuristic'
 
   return [{ sessions, formation, boundedBeforeGap, boundedAfterGap }]
 }
@@ -695,6 +696,18 @@ export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?
 export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
   const label = userVisibleLabelForBlock(block)
   const duration = formatDuration(Math.round((block.endTime - block.startTime) / 1000))
+  const evidenceSummary = deriveWorkEvidenceSummary({
+    appSummaries: block.topApps.map((app) => ({
+      bundleId: app.bundleId,
+      appName: app.appName,
+      category: app.category,
+      totalSeconds: app.totalSeconds,
+      isFocused: appCategoryIsFocused(app.category),
+      sessionCount: app.sessionCount,
+    })),
+    sessions: block.sessions,
+    websiteSummaries: block.websites,
+  })
   const topSites = block.websites
     .slice(0, 2)
     .map((site) => shortDomainLabel(site.domain))
@@ -705,6 +718,7 @@ export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
     .map((app) => app.appName)
   const keyPage = block.keyPages.find((title) => title.trim().length > 0)
   const evidenceParts: string[] = []
+  const synthesizedEvidence = evidenceSummary.evidenceText.trim()
 
   if (topApps.length > 0) {
     evidenceParts.push(`supporting apps included ${topApps.join(', ')}`)
@@ -715,8 +729,11 @@ export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
   if (keyPage) {
     evidenceParts.push(`key window: ${keyPage}`)
   }
+  if (synthesizedEvidence) {
+    evidenceParts.push(synthesizedEvidence)
+  }
 
-  const switchSummary = `${block.switchCount} context switch${block.switchCount === 1 ? '' : 'es'}`
+  const switchSummary = `${block.switchCount} app transition${block.switchCount === 1 ? '' : 's'}`
   if (evidenceParts.length === 0) {
     return `This block looks like ${label.toLowerCase()} for ${duration}, with ${switchSummary}.`
   }

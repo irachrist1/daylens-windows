@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
 import { formatDuration, formatTime } from '../lib/format'
-import type { AIProvider, AppSettings, AppTheme } from '@shared/types'
+import type { AIProvider, AIProviderMode, AppSettings, AppTheme } from '@shared/types'
 import FeedbackModal from '../components/FeedbackModal'
 import type { UpdaterStatusInfo } from '../../preload/index'
 import { extractReleaseHighlights } from '../lib/releaseNotes'
@@ -171,6 +171,9 @@ export default function Settings() {
   const [mnemonic, setMnemonic]           = useState<string | null>(null)
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false)
   const [updater, setUpdater] = useState<UpdaterStatusInfo | null>(null)
+  const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null } | null>(null)
+  const [cliTesting, setCliTesting] = useState<'claude' | 'codex' | null>(null)
+  const [cliTestResult, setCliTestResult] = useState<{ tool: 'claude' | 'codex'; ok: boolean; message: string } | null>(null)
 
   const linkAbortRef = useRef<AbortController | null>(null)
 
@@ -183,6 +186,7 @@ export default function Settings() {
     })()
     ipc.sync.getStatus().then((s: SyncStatus) => setSyncStatus(s))
     ipc.debug.getInfo().then((info) => setDebug(info as DebugInfo))
+    ipc.ai.detectCliTools().then((r) => setCliTools(r as { claude: string | null; codex: string | null }))
     ipc.updater.getStatus().then((info) => setUpdater(info))
     const cleanup = ipc.updater.onStatus((info) => setUpdater(info))
     return cleanup
@@ -248,16 +252,38 @@ export default function Settings() {
     }
   }
 
-  async function handleProviderChange(provider: AIProvider) {
+  async function handleProviderChange(provider: AIProviderMode) {
     setSettings((s) => ({ ...s, aiProvider: provider }))
     setApiKeyInput('')
     await ipc.settings.set({ aiProvider: provider })
     window.dispatchEvent(new CustomEvent('daylens:ai-settings-changed', {
       detail: { provider, model: getSelectedModel({ ...settings, aiProvider: provider }) },
     }))
-    const has = await ipc.settings.hasApiKey(provider)
-    setHasApiKey(has)
+    if (provider === 'claude-cli' || provider === 'codex-cli') {
+      setHasApiKey(false)
+    } else {
+      const has = await ipc.settings.hasApiKey(provider as AIProvider)
+      setHasApiKey(has)
+    }
+    setCliTestResult(null)
     flashSaved(`AI provider set to ${AI_PROVIDER_META[provider].label}`)
+  }
+
+  async function handleCliTest(tool: 'claude' | 'codex') {
+    setCliTesting(tool)
+    setCliTestResult(null)
+    try {
+      const result = await ipc.ai.testCliTool({ tool }) as { ok: boolean; output?: string; error?: string }
+      const message = result.ok
+        ? 'Connected'
+        : (result.error ?? 'Could not connect. Check the CLI is installed and logged in.').slice(0, 120)
+      setCliTestResult({ tool, ok: result.ok, message })
+      if (result.ok) setTimeout(() => setCliTestResult((prev) => prev?.tool === tool ? null : prev), 3000)
+    } catch {
+      setCliTestResult({ tool, ok: false, message: 'Could not connect. Check the CLI is installed and logged in.' })
+    } finally {
+      setCliTesting(null)
+    }
   }
 
   async function handleModelChange(model: string) {
@@ -712,6 +738,88 @@ export default function Settings() {
               </div>
             </div>
 
+            {/* ── DISTRACTION ALERTS ──────────────────────────────── */}
+            <SectionLabel>Distraction alerts</SectionLabel>
+            <div style={cardStyle}>
+              <SettingsRow
+                label="Alert me when I'm distracted"
+                sublabel="Get a notification when you've been on a non-focus app for too long."
+                control={
+                  <PillToggle
+                    checked={settings.distractionAlertsEnabled ?? true}
+                    onChange={async (v) => {
+                      setSettings((s) => ({ ...s, distractionAlertsEnabled: v }))
+                      await ipc.settings.set({ distractionAlertsEnabled: v })
+                      flashSaved(v ? 'Distraction alerts on' : 'Distraction alerts off')
+                    }}
+                  />
+                }
+              />
+              {(settings.distractionAlertsEnabled ?? true) && (
+                <>
+                  <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
+                  <SettingsRow
+                    label="Alert after"
+                    control={
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <input
+                          type="range"
+                          min={5}
+                          max={30}
+                          step={5}
+                          value={settings.distractionAlertThresholdMinutes ?? 10}
+                          onChange={(e) => {
+                            const minutes = parseInt(e.target.value)
+                            setSettings((s) => ({ ...s, distractionAlertThresholdMinutes: minutes }))
+                            void ipc.distractionAlerter.setThreshold({ minutes })
+                          }}
+                          style={{ width: 100, accentColor: 'var(--color-primary)' }}
+                        />
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', minWidth: 24, textAlign: 'right' }}>
+                          {settings.distractionAlertThresholdMinutes ?? 10}
+                        </span>
+                        <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>minutes</span>
+                      </div>
+                    }
+                  />
+                </>
+              )}
+            </div>
+
+            {/* ── NOTIFICATIONS ───────────────────────────────────── */}
+            <SectionLabel>Notifications</SectionLabel>
+            <div style={cardStyle}>
+              <SettingsRow
+                label="Daily recap at 6pm"
+                sublabel="A nudge to check where your day went."
+                control={
+                  <PillToggle
+                    checked={settings.dailySummaryEnabled ?? true}
+                    onChange={async (v) => {
+                      setSettings((s) => ({ ...s, dailySummaryEnabled: v }))
+                      await ipc.settings.set({ dailySummaryEnabled: v })
+                      flashSaved(v ? 'Daily recap on' : 'Daily recap off')
+                    }}
+                  />
+                }
+              />
+              <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
+              <SettingsRow
+                label="Morning focus nudge"
+                sublabel="A 9am reminder to set your focus goal — skipped if you've already started a session."
+                control={
+                  <PillToggle
+                    checked={settings.morningNudgeEnabled ?? true}
+                    onChange={async (v) => {
+                      setSettings((s) => ({ ...s, morningNudgeEnabled: v }))
+                      await ipc.settings.set({ morningNudgeEnabled: v })
+                      flashSaved(v ? 'Morning nudge on' : 'Morning nudge off')
+                    }}
+                  />
+                }
+              />
+            </div>
+
           </div>{/* end left column */}
 
           {/* ════════════════════════════════════════════════════════════
@@ -802,55 +910,145 @@ export default function Settings() {
 
               <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
 
-              <div style={{ padding: '16px 16px 12px' }}>
-                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: 10, marginTop: 0 }}>
-                  Model
+              {/* CLI provider cards */}
+              <div style={{ padding: '12px 16px' }}>
+                <p style={{
+                  fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em',
+                  color: 'var(--color-text-secondary)', margin: '0 0 10px',
+                }}>
+                  No key needed
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {AI_PROVIDER_META[settings.aiProvider].models.map((model) => {
-                    const selected = getSelectedModel(settings) === model.id
+                  {(['claude-cli', 'codex-cli'] as const).map((cliId) => {
+                    const meta = AI_PROVIDER_META[cliId]
+                    const selected = settings.aiProvider === cliId
+                    const detectedPath = cliId === 'claude-cli' ? cliTools?.claude : cliTools?.codex
+                    const installCmd = cliId === 'claude-cli'
+                      ? 'npm install -g @anthropic-ai/claude-code'
+                      : 'npm install -g @openai/codex'
+                    const testTool = cliId === 'claude-cli' ? 'claude' : 'codex'
+                    const isTesting = cliTesting === testTool
+                    const testRes = cliTestResult?.tool === testTool ? cliTestResult : null
                     return (
                       <button
-                        key={model.id}
-                        onClick={() => void handleModelChange(model.id)}
+                        key={cliId}
+                        onClick={() => void handleProviderChange(cliId)}
                         style={{
-                          textAlign: 'left',
-                          borderRadius: 12,
+                          textAlign: 'left', borderRadius: 12, padding: '12px 14px', cursor: 'pointer',
                           border: selected ? '1px solid rgba(173,198,255,0.32)' : '1px solid var(--color-border-ghost)',
                           background: selected ? 'rgba(173,198,255,0.08)' : 'var(--color-surface-low)',
-                          padding: '12px 14px',
-                          cursor: 'pointer',
-                          transition: 'all 120ms',
-                          fontFamily: 'inherit',
+                          transition: 'all 120ms', fontFamily: 'inherit', width: '100%',
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                            {model.label}
+                            {meta.label}
                           </span>
                           {selected && (
                             <span style={{
-                              fontSize: 10,
-                              fontWeight: 800,
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.08em',
-                              color: 'var(--color-primary)',
+                              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
+                              letterSpacing: '0.08em', color: 'var(--color-primary)', flexShrink: 0,
                             }}>
                               Active
                             </span>
                           )}
                         </div>
-                        <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '5px 0 0' }}>
-                          {model.description}
+                        <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '5px 0 6px' }}>
+                          {cliId === 'claude-cli'
+                            ? 'Runs on your Claude subscription — no API key required. Needs claude CLI installed.'
+                            : 'Runs on your OpenAI subscription — no API key required. Needs codex CLI installed.'}
                         </p>
+                        {detectedPath ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#4ade80', display: 'inline-block', flexShrink: 0 }} />
+                            <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', fontFamily: 'inherit', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {detectedPath}
+                            </span>
+                          </div>
+                        ) : (
+                          <div>
+                            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>Not detected. Install with: </span>
+                            <code style={{ fontSize: 11, color: 'var(--color-text-secondary)', background: 'var(--color-surface-highest)', padding: '1px 5px', borderRadius: 4 }}>
+                              {installCmd}
+                            </code>
+                          </div>
+                        )}
+                        {selected && (
+                          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void handleCliTest(testTool) }}
+                              disabled={isTesting}
+                              style={{
+                                padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+                                border: '1px solid var(--color-border-ghost)',
+                                background: 'var(--color-surface-highest)',
+                                color: 'var(--color-text-secondary)',
+                                cursor: isTesting ? 'default' : 'pointer',
+                                opacity: isTesting ? 0.6 : 1,
+                                fontFamily: 'inherit',
+                              }}
+                            >
+                              {isTesting ? 'Testing…' : 'Test connection'}
+                            </button>
+                            {testRes && (
+                              <span style={{ fontSize: 11, fontWeight: 600, color: testRes.ok ? '#4ade80' : '#f87171' }}>
+                                {testRes.message}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </button>
                     )
                   })}
                 </div>
               </div>
 
-              {/* API Key row */}
-              {hasApiKey && !apiKeyInput ? (
+              {/* Model selection — only for API-key providers */}
+              {settings.aiProvider !== 'claude-cli' && settings.aiProvider !== 'codex-cli' && (
+                <>
+                  <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
+                  <div style={{ padding: '16px 16px 12px' }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)', marginBottom: 10, marginTop: 0 }}>
+                      Model
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {AI_PROVIDER_META[settings.aiProvider].models.map((model) => {
+                        const selected = getSelectedModel(settings) === model.id
+                        return (
+                          <button
+                            key={model.id}
+                            onClick={() => void handleModelChange(model.id)}
+                            style={{
+                              textAlign: 'left', borderRadius: 12, padding: '12px 14px', cursor: 'pointer',
+                              border: selected ? '1px solid rgba(173,198,255,0.32)' : '1px solid var(--color-border-ghost)',
+                              background: selected ? 'rgba(173,198,255,0.08)' : 'var(--color-surface-low)',
+                              transition: 'all 120ms', fontFamily: 'inherit',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                                {model.label}
+                              </span>
+                              {selected && (
+                                <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-primary)' }}>
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '5px 0 0' }}>
+                              {model.description}
+                            </p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* API Key row — only for API-key providers */}
+              {settings.aiProvider !== 'claude-cli' && settings.aiProvider !== 'codex-cli' && (
+                hasApiKey && !apiKeyInput ? (
                 <SettingsRow
                   label={`${AI_PROVIDER_META[settings.aiProvider].label} API Key`}
                   control={
@@ -930,6 +1128,7 @@ export default function Settings() {
                     Open key page
                   </button>
                 </div>
+                )
               )}
 
               <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
@@ -984,6 +1183,17 @@ export default function Settings() {
                   />
                 }
               />
+
+              <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
+
+              {/* Focus Assist — coming soon on Windows */}
+              <div style={{ opacity: 0.4, pointerEvents: 'none' }}>
+                <SettingsRow
+                  label="Enable Focus Assist when session starts"
+                  sublabel="Coming soon on Windows."
+                  control={<PillToggle checked={false} onChange={() => {}} />}
+                />
+              </div>
             </div>
 
             {/* ── SECURITY & SOVEREIGNTY ──────────────────────────── */}

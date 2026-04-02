@@ -195,6 +195,38 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 8,
+    description: 'Add focus reflections, distraction events, and work context observations',
+    up: () => {
+      const db = getDb()
+      if (!hasColumn('focus_sessions', 'reflection_note')) {
+        db.exec(`ALTER TABLE focus_sessions ADD COLUMN reflection_note TEXT`)
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS distraction_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id INTEGER REFERENCES focus_sessions(id) ON DELETE SET NULL,
+          app_name TEXT NOT NULL,
+          bundle_id TEXT NOT NULL,
+          triggered_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_distraction_events_session
+          ON distraction_events (session_id, triggered_at);
+
+        CREATE TABLE IF NOT EXISTS work_context_observations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          start_ts INTEGER NOT NULL,
+          end_ts INTEGER NOT NULL,
+          observation TEXT NOT NULL,
+          source_block_ids TEXT NOT NULL DEFAULT '[]',
+          UNIQUE(start_ts, end_ts)
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_context_observations_range
+          ON work_context_observations (start_ts, end_ts);
+      `)
+    },
+  },
 ]
 
 export function runMigrations(): void {

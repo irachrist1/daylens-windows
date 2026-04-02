@@ -1,6 +1,6 @@
 // Settings persistence via electron-store
 // electron-store is ESM-only in v10 — dynamic import required
-import type { AIProvider, AppSettings } from '@shared/types'
+import type { AIProviderMode, AppSettings } from '@shared/types'
 
 // We keep a synchronous in-memory cache after first load
 let _store: { get: (k: string, d?: unknown) => unknown; set: (k: string, v: unknown) => void } | null = null
@@ -27,6 +27,9 @@ const DEFAULTS: AppSettings = {
   anthropicModel: 'claude-opus-4-6',
   openaiModel: 'gpt-5.4',
   googleModel: 'gemini-3.1-flash-lite-preview',
+  dailySummaryEnabled: true,
+  morningNudgeEnabled: true,
+  distractionAlertThresholdMinutes: 10,
 }
 
 export function getSettings(): AppSettings {
@@ -44,10 +47,13 @@ export function getSettings(): AppSettings {
     dailyFocusGoalHours: (_store.get('dailyFocusGoalHours', 4) as number),
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
-    aiProvider: (_store.get('aiProvider', 'anthropic') as AIProvider),
+    aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
     anthropicModel: (_store.get('anthropicModel', 'claude-opus-4-6') as string),
     openaiModel: (_store.get('openaiModel', 'gpt-5.4') as string),
     googleModel: (_store.get('googleModel', 'gemini-3.1-flash-lite-preview') as string),
+    dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
+    morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
+    distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
   }
 }
 
@@ -70,7 +76,7 @@ export async function initSettings(): Promise<void> {
 // ─── AI provider API keys — stored in OS credential vault, never in plain-text ─
 
 const KEYTAR_SERVICE = 'DaylensWindows'
-const KEYTAR_ACCOUNTS: Record<AIProvider, string> = {
+const KEYTAR_ACCOUNTS: Record<'anthropic' | 'openai' | 'google', string> = {
   anthropic: 'anthropic-api-key',
   openai: 'openai-api-key',
   google: 'google-api-key',
@@ -80,11 +86,15 @@ const KEYTAR_ACCOUNTS: Record<AIProvider, string> = {
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
 const keytar = require('keytar') as typeof import('keytar')
 
-function keytarAccount(provider: AIProvider): string {
+function keytarAccount(provider: AIProviderMode): string {
+  if (provider === 'claude-cli' || provider === 'codex-cli') {
+    throw new Error(`Provider ${provider} does not use stored API keys`)
+  }
   return KEYTAR_ACCOUNTS[provider]
 }
 
-export async function hasApiKey(provider: AIProvider): Promise<boolean> {
+export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
+  if (provider === 'claude-cli' || provider === 'codex-cli') return true
   try {
     const key = await keytar.getPassword(KEYTAR_SERVICE, keytarAccount(provider))
     return !!key
@@ -94,7 +104,8 @@ export async function hasApiKey(provider: AIProvider): Promise<boolean> {
   }
 }
 
-export async function getApiKey(provider: AIProvider): Promise<string | null> {
+export async function getApiKey(provider: AIProviderMode): Promise<string | null> {
+  if (provider === 'claude-cli' || provider === 'codex-cli') return null
   try {
     return await keytar.getPassword(KEYTAR_SERVICE, keytarAccount(provider))
   } catch {
@@ -102,7 +113,8 @@ export async function getApiKey(provider: AIProvider): Promise<string | null> {
   }
 }
 
-export async function setApiKey(provider: AIProvider, key: string): Promise<void> {
+export async function setApiKey(provider: AIProviderMode, key: string): Promise<void> {
+  if (provider === 'claude-cli' || provider === 'codex-cli') return
   try {
     await keytar.setPassword(KEYTAR_SERVICE, keytarAccount(provider), key)
   } catch (err) {
@@ -111,7 +123,8 @@ export async function setApiKey(provider: AIProvider, key: string): Promise<void
   }
 }
 
-export async function clearApiKey(provider: AIProvider): Promise<void> {
+export async function clearApiKey(provider: AIProviderMode): Promise<void> {
+  if (provider === 'claude-cli' || provider === 'codex-cli') return
   try {
     await keytar.deletePassword(KEYTAR_SERVICE, keytarAccount(provider))
   } catch {

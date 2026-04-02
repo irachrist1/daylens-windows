@@ -180,12 +180,26 @@ export default function Focus() {
   const [targetMinutes, setTargetMinutes] = useState(50)
   const [justFinished, setJustFinished] = useState<number | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const intentDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [todaySummaries, setTodaySummaries] = useState<AppUsageSummary[]>([])
   const [todaySessions, setTodaySessions] = useState<AppSession[]>([])
   const [live, setLive] = useState<LiveSession | null>(null)
   const [recentSessions, setRecentSessions] = useState<FocusSession[]>([])
   const [peakHours, setPeakHours] = useState<PeakHoursResult | null>(null)
+  const [distractionThreshold, setDistractionThreshold] = useState(10)
+
+  // Post-session reflection
+  const [reflectionData, setReflectionData] = useState<{
+    sessionId: number
+    duration: number
+    distractionCount: number
+  } | null>(null)
+  const [reflectionNote, setReflectionNote] = useState('')
+  const [savingReflection, setSavingReflection] = useState(false)
+
+  // Break suggestion banner — track dismissed per session id
+  const [breakBannerDismissed, setBreakBannerDismissed] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -212,6 +226,14 @@ export default function Focus() {
         // Non-fatal. The view will recover on the next poll.
       }
     }
+
+    // Load persisted intent + distraction threshold once on mount
+    ipc.settings.get().then((s) => {
+      if (cancelled) return
+      const settings = s as { focusIntent?: string; distractionAlertThresholdMinutes?: number }
+      if (settings.focusIntent) setLabel(settings.focusIntent)
+      if (settings.distractionAlertThresholdMinutes != null) setDistractionThreshold(settings.distractionAlertThresholdMinutes)
+    }).catch(() => {})
 
     void refresh()
     const timer = setInterval(() => void refresh(), 30_000)
@@ -257,24 +279,44 @@ export default function Focus() {
   async function handleStop() {
     if (!active) return
     const completedDuration = elapsed
+    const sessionId = active.id
     track('focus_session_ended', {
       duration_seconds: completedDuration,
       target_minutes: active.targetMinutes ?? null,
       completed: true,
     })
     await ipc.focus.stop(active.id)
-    const [updatedRecent, updatedSummaries, updatedLive, updatedSessions] = await Promise.all([
+    const [updatedRecent, updatedSummaries, updatedLive, updatedSessions, distractionCount] = await Promise.all([
       ipc.focus.getRecent(10),
       ipc.db.getToday(),
       ipc.tracking.getLiveSession(),
       ipc.db.getHistory(todayString()),
+      ipc.focus.getDistractionCount({ sessionId }).catch(() => 0),
     ])
     setRecentSessions(updatedRecent as FocusSession[])
     setTodaySummaries(updatedSummaries as AppUsageSummary[])
     setLive(updatedLive as LiveSession | null)
     setTodaySessions(updatedSessions as AppSession[])
     setActive(null)
-    setJustFinished(completedDuration)
+    setReflectionData({ sessionId, duration: completedDuration, distractionCount: distractionCount as number })
+  }
+
+  async function handleSaveReflection() {
+    if (!reflectionData) return
+    setSavingReflection(true)
+    try {
+      await ipc.focus.saveReflection({ sessionId: reflectionData.sessionId, note: reflectionNote })
+    } catch { /* non-fatal */ } finally {
+      setSavingReflection(false)
+    }
+    dismissReflection()
+  }
+
+  function dismissReflection() {
+    const dur = reflectionData?.duration ?? 0
+    setReflectionData(null)
+    setReflectionNote('')
+    setJustFinished(dur)
     setTimeout(() => setJustFinished(null), 5000)
   }
 
@@ -308,6 +350,19 @@ export default function Focus() {
       : { text: `Peak focus window: ${fmtHour(peakHours.peakStart)}-${fmtHour(peakHours.peakEnd)}.`, color: 'var(--color-text-secondary)' }
   }
 
+  // Distraction banner
+  const isDistraction = active !== null && live !== null && !FOCUSED_CATEGORIES.includes(live.category)
+  const distractionElapsedMs = isDistraction ? Math.max(0, Date.now() - live!.startTime) : 0
+  const distractionElapsedMin = Math.floor(distractionElapsedMs / 60_000)
+  const distractionElapsedSec = Math.floor((distractionElapsedMs % 60_000) / 1000)
+  const distractionOverThreshold = distractionElapsedMin >= distractionThreshold
+  const distractionTimeLabel = distractionElapsedMin >= 1
+    ? `${distractionElapsedMin}m ${distractionElapsedSec}s`
+    : `${distractionElapsedSec}s`
+
+  // Break suggestion banner — show once per session after 50 continuous minutes
+  const showBreakBanner = active !== null && elapsed >= 50 * 60 && breakBannerDismissed !== active.id
+
   const targetSeconds = (active?.targetMinutes ?? targetMinutes) * 60
   const hasCountdown = (active?.targetMinutes ?? targetMinutes) > 0
   const remainingSeconds = hasCountdown ? Math.max(0, targetSeconds - elapsed) : 0
@@ -324,7 +379,55 @@ export default function Focus() {
   const liveDisplayName = live?.appName ? formatDisplayAppName(live.appName) : null
 
   return (
-    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%', boxSizing: 'border-box', position: 'relative' }}>
+
+      {/* ── Distraction banner ─────────────────────────────────────────────── */}
+      {isDistraction && (
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 10, marginBottom: 12, marginLeft: -40, marginRight: -40,
+          padding: '8px 40px',
+          background: distractionOverThreshold
+            ? 'rgba(255,185,95,0.12)'
+            : 'var(--color-surface-low)',
+          borderBottom: `1px solid ${distractionOverThreshold ? 'rgba(255,185,95,0.20)' : 'var(--color-border-ghost)'}`,
+          display: 'flex', alignItems: 'center', gap: 10,
+          transition: 'background 300ms, border-color 300ms',
+        }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+            background: distractionOverThreshold ? '#ffb95f' : 'var(--color-text-tertiary)',
+            display: 'inline-block',
+          }} />
+          <span style={{ fontSize: 12, color: distractionOverThreshold ? '#ffb95f' : 'var(--color-text-secondary)', flex: 1 }}>
+            On {formatDisplayAppName(live!.appName)} · {distractionTimeLabel}
+            {distractionOverThreshold && '  —  Back to focus?'}
+          </span>
+        </div>
+      )}
+
+      {/* ── Break suggestion banner ────────────────────────────────────────── */}
+      {showBreakBanner && (
+        <div style={{
+          marginBottom: 12, padding: '9px 16px',
+          background: 'var(--color-surface-low)',
+          borderRadius: 10, border: '1px solid var(--color-border-ghost)',
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', flex: 1 }}>
+            You've been focused for 50 min — consider a short break.
+          </span>
+          <button
+            onClick={() => setBreakBannerDismissed(active!.id)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
+              fontSize: 14, color: 'var(--color-text-tertiary)', lineHeight: 1, flexShrink: 0,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div style={{ maxWidth: 1080, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -506,7 +609,12 @@ export default function Focus() {
                       type="text"
                       placeholder="What are you working on?"
                       value={label}
-                      onChange={(event) => setLabel(event.target.value)}
+                      onChange={(event) => {
+                        const v = event.target.value
+                        setLabel(v)
+                        if (intentDebounceRef.current) clearTimeout(intentDebounceRef.current)
+                        intentDebounceRef.current = setTimeout(() => void ipc.settings.set({ focusIntent: v }), 500)
+                      }}
                       onKeyDown={(event) => event.key === 'Enter' && void handleStart()}
                       style={{
                         width: '100%',
@@ -757,6 +865,94 @@ export default function Focus() {
           </div>
         </div>
       </div>
+
+      {/* ── Post-session reflection card (bottom sheet) ───────────────────── */}
+      {reflectionData && (
+        <>
+          {/* Scrim */}
+          <div
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+              backdropFilter: 'blur(4px)', zIndex: 20,
+            }}
+            onClick={dismissReflection}
+          />
+          {/* Sheet */}
+          <div style={{
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 21,
+            background: 'var(--color-surface-container)',
+            borderTop: '1px solid var(--color-border-ghost)',
+            borderRadius: '16px 16px 0 0',
+            padding: '28px 40px 32px',
+            boxShadow: '0 -24px 60px rgba(0,0,0,0.35)',
+            transform: 'translateY(0)',
+            animation: 'slideUp 220ms ease-out',
+          }}>
+            <style>{`@keyframes slideUp { from { transform: translateY(100%) } to { transform: translateY(0) } }`}</style>
+            <div style={{ maxWidth: 560, margin: '0 auto' }}>
+              <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 10px', letterSpacing: '-0.02em' }}>
+                Session complete
+              </p>
+              <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+                <span style={{
+                  fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 999,
+                  background: 'var(--color-accent-dim)', color: 'var(--color-primary)',
+                }}>
+                  {formatDuration(reflectionData.duration)} focused
+                </span>
+                <span style={{
+                  fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 999,
+                  background: 'var(--color-surface-high)', color: 'var(--color-text-secondary)',
+                }}>
+                  {reflectionData.distractionCount === 1
+                    ? '1 distraction'
+                    : `${reflectionData.distractionCount} distractions`}
+                </span>
+              </div>
+              <textarea
+                value={reflectionNote}
+                onChange={(e) => setReflectionNote(e.target.value)}
+                placeholder="How did it go? Any notes for next time?"
+                rows={3}
+                style={{
+                  width: '100%', borderRadius: 10, padding: '12px 14px',
+                  background: 'var(--color-surface-low)',
+                  border: '1px solid var(--color-border-ghost)',
+                  fontSize: 13, color: 'var(--color-text-primary)',
+                  resize: 'none', outline: 'none', boxSizing: 'border-box',
+                  fontFamily: 'inherit', lineHeight: 1.6,
+                }}
+                onFocus={(e) => (e.currentTarget.style.borderColor = 'rgba(173,198,255,0.30)')}
+                onBlur={(e) => (e.currentTarget.style.borderColor = 'var(--color-border-ghost)')}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+                <button
+                  onClick={() => void handleSaveReflection()}
+                  disabled={savingReflection || !reflectionNote.trim()}
+                  style={{
+                    padding: '9px 22px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                    background: 'var(--gradient-primary)',
+                    color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700,
+                    opacity: savingReflection || !reflectionNote.trim() ? 0.5 : 1,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  {savingReflection ? 'Saving…' : 'Save note'}
+                </button>
+                <button
+                  onClick={dismissReflection}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer', padding: '9px 4px',
+                    fontSize: 13, color: 'var(--color-text-secondary)', fontFamily: 'inherit',
+                  }}
+                >
+                  Skip
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

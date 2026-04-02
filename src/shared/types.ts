@@ -87,6 +87,7 @@ export interface FocusSession {
   label: string | null
   targetMinutes: number | null
   plannedApps: string[]
+  reflectionNote?: string | null
 }
 
 export interface FocusStartPayload {
@@ -160,6 +161,7 @@ export interface BreakRecommendation {
 }
 
 export type AIProvider = 'anthropic' | 'openai' | 'google'
+export type AIProviderMode = AIProvider | 'claude-cli' | 'codex-cli'
 
 export interface ProcessSnapshot {
   pid: number
@@ -182,10 +184,15 @@ export interface AppSettings {
   dailyFocusGoalHours: number
   firstLaunchDate: number       // Unix ms — set on first launch, used for day-7 feedback prompt
   feedbackPromptShown: boolean  // true once the day-7 prompt has been shown
-  aiProvider: AIProvider
+  aiProvider: AIProviderMode
   anthropicModel: string
   openaiModel: string
   googleModel: string
+  dailySummaryEnabled?: boolean
+  morningNudgeEnabled?: boolean
+  distractionAlertThresholdMinutes?: number
+  distractionAlertsEnabled?: boolean
+  focusIntent?: string
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -244,6 +251,8 @@ export const IPC = {
     GET_ACTIVE: 'focus:get-active',
     GET_RECENT: 'focus:get-recent',
     GET_BREAK_RECOMMENDATION: 'focus:get-break-recommendation',
+    SAVE_REFLECTION: 'focus:save-reflection',
+    GET_DISTRACTION_COUNT: 'focus:get-distraction-count',
   },
   AI: {
     SEND_MESSAGE: 'ai:send-message',
@@ -251,6 +260,8 @@ export const IPC = {
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
     SUGGEST_APP_CATEGORY: 'ai:suggest-app-category',
+    DETECT_CLI_TOOLS: 'ai:detect-cli-tools',
+    TEST_CLI_TOOL: 'ai:test-cli-tool',
   },
   SETTINGS: {
     GET: 'settings:get',

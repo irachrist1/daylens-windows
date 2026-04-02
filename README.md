@@ -1,19 +1,27 @@
 # Daylens Windows
 
-Daylens is a Windows Electron app that passively tracks app and website activity, turns it into productivity insights, and helps users understand how their day is actually unfolding.
+**"Chrome: 6 hours."** Every other productivity tracker stops there and calls it insight. It isn't.
 
-## Features
+A developer debugging a production incident in Chrome for three hours is deeply focused. That same developer scrolling Reddit during a declared focus block is off-track. Knowing someone used Chrome for six hours tells you nothing about which one happened. Daylens does not stop at app names.
 
-- Interpreted Today, Focus, History, Apps, and Insights views that explain what tracked numbers mean instead of only listing raw data.
-- Short first-run onboarding that captures display name, goals, launch-on-login preference, and an optional Anthropic API key.
-- Algorithmic insight cards that work without an API key, including peak hours, context switching, focus streak, allocation, browser habit, and goal progress reads.
-- Optional AI chat layered on top of local tracked data for follow-up questions and deeper analysis.
-- Grouped activity feeds and grouped session history that filter out micro-session noise and surface real work blocks.
-- Focus sessions paired with live "what you're working on" feedback and on-task or off-task status from the current tracked app.
-- Daily summary notifications around 6 PM and weekday morning nudges when no activity has been tracked yet.
-- Distraction alerts after sustained time in entertainment or social apps.
-- App detail views with usage interpretation, grouped sessions, and hour-of-day mini charts.
-- GitHub-backed Windows releases with `electron-updater` metadata, in-app progress, and published "what's new" notes so installed apps can update without leaving Daylens.
+**The app is not the story. What you were doing inside it is.**
+
+Daylens uses AI to turn raw app and browser activity into a **timeline of actual work sessions** — what you were doing, not just where your cursor was. "Research for the auth migration: 2h 40m." "Off-plan browsing during your deep work block: 22m." The difference matters. We make it visible.
+
+No account. No cloud. No categorical labels that decide YouTube is always distracting and VS Code is always productive. Your data stays on your machine, and Daylens earns trust by being right about what actually happened.
+
+## What it does
+
+- Builds a labeled timeline of your work day from app usage and browser history — tasks, not app totals.
+- Distraction alerts that only fire when you've declared a focus intent and drifted from it — not because you opened a browser.
+- Focus score that reflects session depth and intent alignment — not how much time was in "productive" app categories.
+- AI chat that answers "what was I doing yesterday afternoon?" and "what kept pulling me away this week?" from your actual local history.
+- Algorithmic insight cards — peak hours, context switching patterns, focus streaks, goal progress — that work without any API key.
+- Focus sessions with live on-task or off-task feedback relative to your declared planned apps.
+- Daily recap at 6pm and morning focus nudge at 9am (only if you haven't started a session yet).
+- App detail views with session history, usage interpretation, and hour-of-day patterns.
+- Supports Claude Code CLI and Codex CLI as AI backends — use your existing subscription with no API key.
+- GitHub-backed automatic updates with in-app progress and release notes.
 
 ## MCP — Use Daylens with Claude Code, Cursor, and other AI agents
 

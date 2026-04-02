@@ -57,7 +57,7 @@ const UX_NOISE_SUBSTRINGS = [
 ]
 
 // Minimum session duration exposed to the UI (seconds).
-// Sessions shorter than this are noise from rapid app switches.
+// Sessions shorter than this are noise from brief app transitions.
 const MIN_DISPLAY_SEC = 15
 const SAME_APP_MERGE_GAP_MS = 15_000
 
@@ -169,6 +169,7 @@ interface FocusSessionRow {
   label: string | null
   target_minutes: number | null
   planned_apps: string | null
+  reflection_note: string | null
 }
 
 function mapFocusSessionRow(row: FocusSessionRow): FocusSession {
@@ -192,6 +193,7 @@ function mapFocusSessionRow(row: FocusSessionRow): FocusSession {
     label: row.label,
     targetMinutes: row.target_minutes,
     plannedApps,
+    reflectionNote: row.reflection_note,
   }
 }
 
@@ -539,19 +541,19 @@ export function getAppCharacter(
     label = 'Communication & calls'
   } else if (avgSessionMinutes >= 25 && FOCUSED_CATEGORIES.includes(dominantCategory)) {
     character = 'deep_focus'
-    label = 'Deep focus app'
+    label = 'Sustained use'
   } else if (avgSessionMinutes >= 15 && FOCUSED_CATEGORIES.includes(dominantCategory)) {
     character = 'flow_compatible'
-    label = 'Keeps you in flow'
+    label = 'Long sessions'
   } else if (sessions.length >= 8 && avgSessionMinutes < 4) {
     character = 'context_switching'
-    label = 'Context switching trigger'
+    label = 'Quick app returns'
   } else if (dominantCategory === 'entertainment' || dominantCategory === 'social') {
     character = 'distraction'
-    label = 'Frequent distraction'
+    label = 'Short leisure sessions'
   } else if (avgSessionMinutes < 5 && sessions.length >= 5) {
     character = 'context_switching'
-    label = 'Quick context switches'
+    label = 'Short repeated sessions'
   }
 
   return {
@@ -603,6 +605,42 @@ export function getActiveFocusSession(db: Database.Database): FocusSession | nul
     .get() as FocusSessionRow | undefined
   if (!row) return null
   return mapFocusSessionRow(row)
+}
+
+export function saveFocusReflection(
+  db: Database.Database,
+  sessionId: number,
+  note: string,
+): void {
+  db.prepare(`
+    UPDATE focus_sessions
+    SET reflection_note = ?
+    WHERE id = ?
+  `).run(note.trim(), sessionId)
+}
+
+export function recordDistractionEvent(
+  db: Database.Database,
+  payload: { sessionId: number | null; appName: string; bundleId: string; triggeredAt?: number },
+): void {
+  db.prepare(`
+    INSERT INTO distraction_events (session_id, app_name, bundle_id, triggered_at)
+    VALUES (?, ?, ?, ?)
+  `).run(payload.sessionId, payload.appName, payload.bundleId, payload.triggeredAt ?? Date.now())
+}
+
+export function getDistractionCountForSession(
+  db: Database.Database,
+  sessionId: number,
+): number {
+  const row = db
+    .prepare<number, { count: number }>(`
+      SELECT COUNT(*) AS count
+      FROM distraction_events
+      WHERE session_id = ?
+    `)
+    .get(sessionId)
+  return row?.count ?? 0
 }
 
 // ---------------------------------------------------------------------------

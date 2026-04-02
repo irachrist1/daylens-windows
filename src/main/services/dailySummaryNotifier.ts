@@ -1,25 +1,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { Notification, app } from 'electron'
-import { getAppSummariesForRange, getRecentFocusSessions } from '../db/queries'
-import { getDb } from './database'
+import { BrowserWindow, Notification, app } from 'electron'
+import { getActiveFocusSession, getRecentFocusSessions } from '../db/queries'
 import { localDateString, localDayBounds } from '../lib/localDate'
+import { getDb } from './database'
+import { getSettings } from './settings'
 
 interface DailyNotifierState {
   lastDailySummaryDate?: string
   lastMorningNudgeDate?: string
-  lastDigestDate?: string
 }
 
 let notifierTimer: ReturnType<typeof setInterval> | null = null
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  if (hours === 0) return `${minutes}m`
-  return `${hours}h ${minutes}m`
-}
+let navigationWindow: BrowserWindow | null = null
 
 function statePath(): string {
   return path.join(app.getPath('userData'), 'daily-summary-state.json')
@@ -37,109 +30,70 @@ function writeState(state: DailyNotifierState): void {
   fs.writeFileSync(statePath(), JSON.stringify(state, null, 2))
 }
 
-function sendNotification(title: string, body: string): void {
+function notifyWithNavigation(title: string, body: string, channel: 'navigate:today' | 'navigate:focus'): void {
   if (!Notification.isSupported()) return
-  new Notification({ title, body }).show()
+  const notification = new Notification({ title, body })
+  notification.on('click', () => {
+    if (!navigationWindow || navigationWindow.isDestroyed()) return
+    if (navigationWindow.isMinimized()) navigationWindow.restore()
+    navigationWindow.show()
+    navigationWindow.focus()
+    navigationWindow.webContents.send(channel)
+  })
+  notification.show()
+}
+
+function hasStartedFocusSessionToday(today: string): boolean {
+  const [fromMs, toMs] = localDayBounds(today)
+  const recentSession = getRecentFocusSessions(getDb(), 200)
+    .some((session) => session.startTime >= fromMs && session.startTime < toMs)
+  const activeSession = getActiveFocusSession(getDb())
+  return recentSession || Boolean(activeSession && activeSession.startTime >= fromMs && activeSession.startTime < toMs)
 }
 
 function checkDailySummary(): void {
+  const settings = getSettings()
+  if (!settings.dailySummaryEnabled) return
+
   const now = new Date()
-  const hour = now.getHours()
-  const minute = now.getMinutes()
   const today = localDateString(now)
   const state = readState()
+  if (state.lastDailySummaryDate === today) return
+  if (now.getHours() !== 18 || now.getMinutes() !== 0) return
 
-  const withinWindow = hour === 17 && minute >= 30 || hour === 18 && minute <= 30
-  if (!withinWindow || state.lastDailySummaryDate === today) return
-
-  const [fromMs, toMs] = localDayBounds(today)
-  const summaries = getAppSummariesForRange(getDb(), fromMs, toMs)
-  const totalTracked = summaries.reduce((sum, summary) => sum + summary.totalSeconds, 0)
-  const focusSeconds = summaries
-    .filter((summary) => summary.isFocused)
-    .reduce((sum, summary) => sum + summary.totalSeconds, 0)
-  const focusPct = totalTracked > 0 ? Math.round((focusSeconds / totalTracked) * 100) : 0
-  const topApp = summaries[0]?.appName ?? 'No app data yet'
-  const focusSessionsCount = getRecentFocusSessions(getDb(), 50)
-    .filter((session) => session.startTime >= fromMs && session.startTime < toMs)
-    .length
-
-  let prefix = ''
-  if (focusPct >= 80) prefix = 'Great day! '
-  else if (focusPct < 50 && totalTracked > 7200) prefix = 'Distracting day - '
-
-  const focusSuffix = focusSessionsCount > 0 ? ` · ${focusSessionsCount} focus sessions` : ''
-  sendNotification(
-    'Daylens - Your Day Summary',
-    `${prefix}${focusPct}% focused · ${formatDuration(totalTracked)} tracked · ${topApp} was your most used app${focusSuffix}`,
-  )
-
+  notifyWithNavigation('Daylens', 'See where your day went.', 'navigate:today')
   writeState({ ...state, lastDailySummaryDate: today })
 }
 
 function checkMorningNudge(): void {
+  const settings = getSettings()
+  if (!settings.morningNudgeEnabled) return
+
   const now = new Date()
-  const day = now.getDay()
-  const hour = now.getHours()
-  const minute = now.getMinutes()
   const today = localDateString(now)
   const state = readState()
+  if (state.lastMorningNudgeDate === today) return
+  if (now.getHours() !== 9 || now.getMinutes() !== 0) return
+  if (hasStartedFocusSessionToday(today)) return
 
-  const weekday = day >= 1 && day <= 5
-  const withinWindow = hour === 8 && minute >= 45 || hour === 9 && minute <= 30
-  if (!weekday || !withinWindow || state.lastMorningNudgeDate === today) return
-
-  const [fromMs, toMs] = localDayBounds(today)
-  const summaries = getAppSummariesForRange(getDb(), fromMs, toMs)
-  const totalTracked = summaries.reduce((sum, summary) => sum + summary.totalSeconds, 0)
-  if (totalTracked > 0) return
-
-  sendNotification(
-    'Daylens',
-    "Good morning - Daylens is tracking. Start a Focus Session when you're ready to do deep work.",
-  )
-
+  notifyWithNavigation('Daylens', "What's your focus for today?", 'navigate:focus')
   writeState({ ...state, lastMorningNudgeDate: today })
 }
 
-function checkDailyDigest(): void {
-  const now = new Date()
-  const hour = now.getHours()
-  const minute = now.getMinutes()
-  const today = localDateString(now)
-  const state = readState()
-
-  // Fire at exactly 6:00 PM (18:00), checked once per minute
-  if (hour !== 18 || minute !== 0) return
-  if (state.lastDigestDate === today) return
-
-  const [fromMs, toMs] = localDayBounds(today)
-  const summaries = getAppSummariesForRange(getDb(), fromMs, toMs)
-  const totalSecs = summaries.reduce((sum, s) => sum + s.totalSeconds, 0)
-
-  // Skip if nothing tracked
-  if (totalSecs < 60) return
-
-  const focusSecs = summaries.filter((s) => s.isFocused).reduce((sum, s) => sum + s.totalSeconds, 0)
-  const focusPct = Math.round((focusSecs / totalSecs) * 100)
-  const topApp = summaries[0]?.appName ?? '—'
-
-  sendNotification(
-    'Your day at a glance',
-    `You tracked ${formatDuration(totalSecs)} today, ${focusPct}% focused. Top app: ${topApp}. Open Daylens for full insights.`,
-  )
-
-  writeState({ ...state, lastDigestDate: today })
+export function setDailySummaryNotificationWindow(window: BrowserWindow | null): void {
+  navigationWindow = window
 }
 
-export function startDailySummaryNotifier(): void {
+export function startDailySummaryNotifier(window?: BrowserWindow | null): void {
+  if (window) {
+    navigationWindow = window
+  }
   if (notifierTimer) return
 
   const runChecks = () => {
     try {
       checkMorningNudge()
       checkDailySummary()
-      checkDailyDigest()
     } catch (err) {
       console.warn('[daily-summary] notifier check failed:', err)
     }

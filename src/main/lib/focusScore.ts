@@ -30,7 +30,6 @@ export function computeEnhancedFocusScore(params: {
   if (params.totalSeconds < 60) return 0
 
   const focusRatio = effectiveFocusedSeconds / params.totalSeconds
-  const switchPenalty = Math.min(params.switchesPerHour / 20, 0.25)
 
   const focusedSessions = params.sessions.filter((session) => session.isFocused)
   const avgSessionMin = focusedSessions.length > 0
@@ -45,7 +44,8 @@ export function computeEnhancedFocusScore(params: {
     ? 5
     : 0
 
-  const raw = (focusRatio * 100 * (1 - switchPenalty)) + consistencyBonus + flowBonus + peakBonus
+  // Raw switch frequency is descriptive telemetry, not direct evidence that focus was broken.
+  const raw = (focusRatio * 100) + consistencyBonus + flowBonus + peakBonus
   return Math.min(Math.round(raw), 100)
 }
 
