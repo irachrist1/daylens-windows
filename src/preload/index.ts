@@ -111,6 +111,15 @@ const api = {
     capture: (event: string, properties: Record<string, unknown>) =>
       ipcRenderer.send('analytics:capture', event, properties),
   },
+  navigation: {
+    // Subscribe to main-process navigation requests (e.g. notification click → route).
+    // Returns a cleanup function — call it in useEffect's return to avoid leaks.
+    onNavigate: (callback: (route: string) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, route: string) => callback(route)
+      ipcRenderer.on('navigate', handler)
+      return () => { ipcRenderer.removeListener('navigate', handler) }
+    },
+  },
   updater: {
     onStatus: (
       callback: (info: UpdaterStatusInfo) => void,

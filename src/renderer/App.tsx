@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
-import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
@@ -35,10 +35,18 @@ function LoadingFallback() {
   )
 }
 
-// Inner component — inside HashRouter so useLocation() works
+// Inner component — inside HashRouter so useLocation() and useNavigate() work
 function AppContent({ settings }: { settings: AppSettings | null }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+
+  // Route to the correct view when a notification is tapped
+  useEffect(() => {
+    return ipc.navigation.onNavigate((route) => {
+      navigate(route)
+    })
+  }, [navigate])
 
   // Track route changes
   useEffect(() => {

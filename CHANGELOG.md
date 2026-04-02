@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.18 - 2026-04-02
+
+### Fixed
+- Tapping the daily recap or morning nudge notification now navigates to the correct view (Today or Focus) instead of only bringing the window to the foreground
+
 ## v1.0.17 - 2026-04-02
 
 ### Added

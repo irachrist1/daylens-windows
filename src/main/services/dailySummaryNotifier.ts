@@ -30,7 +30,7 @@ function writeState(state: DailyNotifierState): void {
   fs.writeFileSync(statePath(), JSON.stringify(state, null, 2))
 }
 
-function notifyWithNavigation(title: string, body: string, channel: 'navigate:today' | 'navigate:focus'): void {
+function notifyWithNavigation(title: string, body: string, route: string): void {
   if (!Notification.isSupported()) return
   const notification = new Notification({ title, body })
   notification.on('click', () => {
@@ -38,7 +38,7 @@ function notifyWithNavigation(title: string, body: string, channel: 'navigate:to
     if (navigationWindow.isMinimized()) navigationWindow.restore()
     navigationWindow.show()
     navigationWindow.focus()
-    navigationWindow.webContents.send(channel)
+    navigationWindow.webContents.send('navigate', route)
   })
   notification.show()
 }
@@ -61,7 +61,7 @@ function checkDailySummary(): void {
   if (state.lastDailySummaryDate === today) return
   if (now.getHours() !== 18 || now.getMinutes() !== 0) return
 
-  notifyWithNavigation('Daylens', 'See where your day went.', 'navigate:today')
+  notifyWithNavigation('Daylens', 'See where your day went.', '/today')
   writeState({ ...state, lastDailySummaryDate: today })
 }
 
@@ -76,7 +76,7 @@ function checkMorningNudge(): void {
   if (now.getHours() !== 9 || now.getMinutes() !== 0) return
   if (hasStartedFocusSessionToday(today)) return
 
-  notifyWithNavigation('Daylens', "What's your focus for today?", 'navigate:focus')
+  notifyWithNavigation('Daylens', "What's your focus for today?", '/focus')
   writeState({ ...state, lastMorningNudgeDate: today })
 }
 
