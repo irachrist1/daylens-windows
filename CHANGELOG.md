@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.21 - 2026-04-03
+
+### Fixed
+- In-app updates no longer cause a "fresh install" experience: the app now backs up all user data (settings, activity database, API keys reference) immediately before any update installs — whether the user clicked "Install Update" or the update ran automatically on quit
+- A new startup recovery mechanism detects when a version upgrade has wiped user data (blank settings after a version change) and automatically restores the most recent valid backup, so history and preferences survive even if the NSIS installer cleared the app data folder
+- Added `deleteAppDataOnUninstall: false` explicitly to the NSIS config to prevent any future uninstaller from touching the activity database or settings
+
 ## v1.0.20 - 2026-04-03
 
 ### Fixed

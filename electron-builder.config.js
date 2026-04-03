@@ -52,6 +52,7 @@ module.exports = {
     oneClick: false,
     perMachine: false,
     allowToChangeInstallationDirectory: true,
+    deleteAppDataOnUninstall: false,
     installerIcon: 'build/icon.ico',
     uninstallerIcon: 'build/icon.ico',
     installerHeaderIcon: 'build/icon.ico',

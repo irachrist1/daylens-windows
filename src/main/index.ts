@@ -34,7 +34,7 @@ import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './serv
 import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray } from './tray'
-import { initUpdater, isInstallingUpdate, registerUpdaterShutdown } from './services/updater'
+import { initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
 import { setDailySummaryNotificationWindow, startDailySummaryNotifier } from './services/dailySummaryNotifier'
 import { registerDistractionAlerterHandlers, startDistractionAlerter } from './services/distractionAlerter'
 import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
@@ -103,6 +103,76 @@ async function backupUserDataForUpdate(): Promise<void> {
   }
 }
 
+// Detect a post-update launch where NSIS wiped userData, and restore from the most recent backup.
+// Must be called BEFORE initSettings() so electron-store reads the restored config on first open.
+async function recoverFromUpdateIfNeeded(): Promise<void> {
+  if (!app.isPackaged) return
+
+  const userDataPath = app.getPath('userData')
+  const versionFilePath = path.join(userDataPath, '.last-version')
+  const currentVersion = app.getVersion()
+
+  // Read which version last ran successfully
+  let lastVersion: string | null = null
+  try {
+    lastVersion = fs.readFileSync(versionFilePath, 'utf8').trim()
+  } catch { /* missing on first run — that's fine */ }
+
+  // Always write the current version so the next launch knows what ran
+  try { fs.writeFileSync(versionFilePath, currentVersion, 'utf8') } catch { /* non-fatal */ }
+
+  // Only recover if this is a first launch after a version change
+  if (!lastVersion || lastVersion === currentVersion) return
+
+  // Check whether config.json exists and has completed-onboarding data
+  const configPath = path.join(userDataPath, 'config.json')
+  let onboardingComplete = false
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8')
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    onboardingComplete = !!parsed.onboardingComplete
+  } catch { /* config missing or unreadable — treat as blank */ }
+
+  if (onboardingComplete) return  // data survived the update, nothing to do
+
+  // Settings look blank after an update. Restore from the most recent valid backup.
+  const backupRoot = path.join(userDataPath, 'pre-update-backups')
+  try {
+    const entries = fs.readdirSync(backupRoot).sort().reverse()
+    for (const entry of entries) {
+      const backupDir = path.join(backupRoot, entry)
+      const backupConfigPath = path.join(backupDir, 'config.json')
+      if (!fs.existsSync(backupConfigPath)) continue
+
+      let backupConfig: Record<string, unknown>
+      try {
+        backupConfig = JSON.parse(fs.readFileSync(backupConfigPath, 'utf8')) as Record<string, unknown>
+      } catch { continue }
+
+      if (!backupConfig.onboardingComplete) continue
+
+      // Valid backup found — restore all files from it
+      console.log('[update] restoring user data from backup after upgrade:', entry)
+      for (const file of fs.readdirSync(backupDir)) {
+        if (file === 'pre-update-backups') continue  // never restore nested backups
+        try {
+          fs.cpSync(path.join(backupDir, file), path.join(userDataPath, file), {
+            recursive: true,
+            force: true,
+          })
+        } catch (err) {
+          console.warn('[update] could not restore', file, ':', err)
+        }
+      }
+      console.log('[update] user data restored successfully from', backupDir)
+      return
+    }
+    console.warn('[update] post-upgrade blank state detected but no valid backup found')
+  } catch (err) {
+    console.warn('[update] recovery check failed:', err)
+  }
+}
+
 async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
   stopTracking()
   stopBrowserTracking()
@@ -118,7 +188,9 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
 
   closeDb()
 
-  if (options?.backupBeforeExit) {
+  // Back up userData if explicitly requested, OR if an update has been downloaded
+  // and will run automatically on quit via autoInstallOnAppQuit.
+  if (options?.backupBeforeExit || getUpdateAvailable() !== null) {
     await backupUserDataForUpdate()
   }
 
@@ -288,6 +360,9 @@ ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, u
 
 app.whenReady()
   .then(async () => {
+    // Must run before initSettings() — restores electron-store config.json from
+    // backup if NSIS wiped userData during the update, before electron-store reads it.
+    await recoverFromUpdateIfNeeded()
     await initSettings()
     if (app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
