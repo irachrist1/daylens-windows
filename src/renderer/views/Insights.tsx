@@ -390,7 +390,10 @@ export default function Insights() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [weeklySummary, setWeeklySummary] = useState<WeeklySummary | null>(null)
   const [hoveredTrendDate, setHoveredTrendDate] = useState<string | null>(null)
+  const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const loadingRef = useRef(false)
+  loadingRef.current = loading
 
   useEffect(() => {
     let cancelled = false
@@ -398,7 +401,7 @@ export default function Insights() {
     async function refresh() {
       if (document.hidden) return
       try {
-        const [history, hasKey, today, recentFocus, siteData, sessionData, currentSettings, weekly] = await Promise.all([
+        const [history, hasKey, today, recentFocus, siteData, sessionData, currentSettings, weekly, detectedCliTools] = await Promise.all([
           ipc.ai.getHistory().catch(() => []),
           ipc.settings.hasApiKey().catch(() => false),
           ipc.db.getToday().catch(() => []),
@@ -407,20 +410,34 @@ export default function Insights() {
           ipc.db.getHistory(todayString()).catch(() => []),
           ipc.settings.get(),
           ipc.db.getWeeklySummary(todayString()).catch(() => null),
+          ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null })),
         ])
         if (cancelled) return
-        setMessages(history as Message[])
-        setHasApiKey(!!hasKey)
+        // Don't overwrite messages while an AI request is in flight — the
+        // pending user message and optimistic state would be lost.
+        if (!loadingRef.current) {
+          setMessages(history as Message[])
+        }
+        const current = currentSettings as AppSettings
+        const resolvedCliTools = detectedCliTools as { claude: string | null; codex: string | null }
+        const cliReady = current.aiProvider === 'claude-cli'
+          ? !!resolvedCliTools.claude
+          : current.aiProvider === 'codex-cli'
+            ? !!resolvedCliTools.codex
+            : !!hasKey
+        setHasApiKey(cliReady)
         setSummaries(today as AppUsageSummary[])
         setFocusSessions(recentFocus as FocusSession[])
         setWebsites(siteData as WebsiteSummary[])
         setTodaySessions(sessionData as AppSession[])
-        setSettings(currentSettings as AppSettings)
+        setSettings(current)
         setWeeklySummary((weekly as WeeklySummary | null) ?? null)
+        setCliTools(resolvedCliTools)
       } catch (err) {
         if (cancelled) return
         setMessages([{ role: 'assistant', content: 'Error loading insights: ' + String(err) }])
         setHasApiKey(false)
+        setCliTools({ claude: null, codex: null })
       }
     }
 
@@ -439,8 +456,7 @@ export default function Insights() {
 
   async function handleSend(text?: string) {
     const message = (text ?? input).trim()
-    const isCliProvider = settings?.aiProvider === 'claude-cli' || settings?.aiProvider === 'codex-cli'
-    if (!message || loading || (!hasApiKey && !isCliProvider)) return
+    if (!message || loading || !hasApiKey) return
     track('insight_generated', { message_length: message.length })
     setInput('')
     setActiveTab('chat')
@@ -481,7 +497,13 @@ export default function Insights() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   const isCliProvider = settings.aiProvider === 'claude-cli' || settings.aiProvider === 'codex-cli'
-  const showChatInput = hasApiKey === true || isCliProvider
+  const selectedCliInstalled = settings.aiProvider === 'claude-cli'
+    ? !!cliTools?.claude
+    : settings.aiProvider === 'codex-cli'
+      ? !!cliTools?.codex
+      : false
+  const isAIReady = isCliProvider ? selectedCliInstalled : hasApiKey === true
+  const showChatInput = isAIReady
 
   const peakInsight = algorithmicInsights.find((i) => i.key === 'peak-hours')
   const peakHourText = peakInsight ? peakInsight.headline : null
@@ -929,7 +951,9 @@ export default function Insights() {
                     Ask about your day
                   </p>
                   <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', maxWidth: 260, margin: '0 auto' }}>
-                    Add your {providerMeta.label} API key to ask questions about your productivity.
+                    {isCliProvider
+                      ? `${providerMeta.label} needs to be installed and available before Daylens can answer with live context.`
+                      : `Add your ${providerMeta.label} API key to ask questions about your productivity.`}
                   </p>
                 </div>
                 <Link
@@ -940,7 +964,7 @@ export default function Insights() {
                     color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700, textDecoration: 'none',
                   }}
                 >
-                  Add API key →
+                  {isCliProvider ? 'Open Settings →' : 'Add API key →'}
                 </Link>
               </div>
             )}

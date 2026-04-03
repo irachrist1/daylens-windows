@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import { formatDateShort, formatDuration, formatTime, rollingDayBounds } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
-import { buildHourlyUsage, filterVisibleSessions, groupConsecutiveSessions } from '../lib/activity'
+import { filterVisibleSessions, groupConsecutiveSessions } from '../lib/activity'
 import type { AppCategory, AppCategorySuggestion, AppSession, AppUsageSummary, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
@@ -564,7 +564,6 @@ function AppDetailPanel({
   const [live, setLive] = useState<LiveSession | null>(null)
   const [backHovered, setBackHovered] = useState(false)
   const [hoveredSparkIndex, setHoveredSparkIndex] = useState<number | null>(null)
-  const [hoveredUsageLabel, setHoveredUsageLabel] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -618,9 +617,6 @@ function AppDetailPanel({
   const longestSession = visibleSessions.length > 0 ? Math.max(...visibleSessions.map((s) => s.durationSeconds)) : 0
 
   const usageInsight = buildUsageInsight(app.appName, visibleSessions.length, avgSessionSeconds, sessionTotalSeconds)
-  const usageBars = buildHourlyUsage(visibleSessions, 9, 17)
-  const maxHourSeconds = Math.max(...usageBars.map((bar) => bar.seconds), 1)
-  const maxBarIdx = usageBars.reduce((maxIdx, bar, i, arr) => bar.seconds > arr[maxIdx].seconds ? i : maxIdx, 0)
 
   // Intentionality breakdown
   const catMap = new Map<AppCategory, number>()
@@ -646,13 +642,6 @@ function AppDetailPanel({
   })
   const hoveredSparkText = hoveredSparkIndex !== null
     ? `${sparkLabels[hoveredSparkIndex]} · ${sparkBars[hoveredSparkIndex] > 0 ? formatDuration(sparkBars[hoveredSparkIndex]) : 'No usage'}`
-    : null
-  const hoveredUsageText = hoveredUsageLabel
-    ? (() => {
-        const bar = usageBars.find((entry) => entry.label === hoveredUsageLabel)
-        if (!bar) return null
-        return `${bar.label}:00 · ${bar.seconds > 0 ? formatDuration(bar.seconds) : 'No usage'}`
-      })()
     : null
 
   return (
@@ -727,8 +716,7 @@ function AppDetailPanel({
         </div>
       </div>
 
-      {/* Bento row 1: Total Usage (4/12) + Usage Activity (8/12) */}
-      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '4fr 8fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
+      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '1fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
         {/* Col A: Total Usage card */}
         <div style={{
           background: 'var(--color-surface-container)', borderRadius: 12, padding: 32,
@@ -785,63 +773,6 @@ function AppDetailPanel({
               )
             })}
           </div>
-        </div>
-
-        {/* Col B: Usage Activity card */}
-        <div style={{ background: 'var(--color-surface-container)', borderRadius: 12, padding: 32, border: '1px solid var(--color-border-ghost)' }}>
-          <div style={{ marginBottom: 20 }}>
-            <p style={{
-              fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-              letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
-              margin: '0 0 4px',
-            }}>
-              Usage Activity
-            </p>
-            <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)', margin: 0 }}>
-              {`Hourly breakdown - ${days === 1 ? 'today' : `last ${days} days`}`}
-            </p>
-          </div>
-
-          {/* Bar chart */}
-          {hoveredUsageText && (
-            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary)', margin: '0 0 14px' }}>
-              {hoveredUsageText}
-            </p>
-          )}
-          {usageBars.every((bar) => bar.seconds === 0) ? (
-            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', textAlign: 'center', padding: '32px 0', margin: 0 }}>
-              No activity recorded.
-            </p>
-          ) : (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', height: 96 }}>
-              {usageBars.map((bar, i) => {
-                const isMax = i === maxBarIdx && bar.seconds > 0
-                const h = Math.max(4, Math.round((bar.seconds / maxHourSeconds) * 96))
-                return (
-                  <div key={bar.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                    <div style={{ width: '100%', height: 96, display: 'flex', alignItems: 'flex-end' }}>
-                      <div
-                        title={`${bar.label}:00 - ${formatDuration(bar.seconds)}`}
-                        onMouseEnter={() => setHoveredUsageLabel(bar.label)}
-                        onMouseLeave={() => setHoveredUsageLabel(null)}
-                        style={{
-                          width: '100%',
-                          height: h,
-                          borderRadius: 6,
-                          background: isMax ? 'var(--gradient-primary)' : 'var(--color-surface-highest)',
-                          boxShadow: isMax || hoveredUsageLabel === bar.label ? '0 0 12px rgba(173,198,255,0.35)' : 'none',
-                          opacity: hoveredUsageLabel === null || hoveredUsageLabel === bar.label ? 1 : 0.42,
-                          transition: 'background 200ms, opacity 140ms ease',
-                          cursor: 'default',
-                        }}
-                      />
-                    </div>
-                    <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>{bar.label}</span>
-                  </div>
-                )
-              })}
-            </div>
-          )}
         </div>
       </div>
 
@@ -1069,57 +1000,6 @@ function AppDetailPanel({
           )}
         </div>
       </div>
-
-      {/* AI Insight footer banner */}
-      <div style={{ padding: '0 40px 32px' }}>
-        <div style={{
-          background: 'linear-gradient(to right, var(--color-surface-container), var(--color-surface-low))',
-          borderRadius: 12, padding: 40,
-          border: '1px solid var(--color-border-ghost)',
-          display: 'flex', alignItems: 'flex-start', gap: 32,
-        }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              display: 'inline-flex', alignItems: 'center',
-              padding: '3px 12px', borderRadius: 999,
-              background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)',
-              fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-              letterSpacing: '0.15em', marginBottom: 12,
-            }}>
-              AI Insight
-            </div>
-            <h2 style={{
-              fontSize: 18, fontWeight: 900, color: 'var(--color-text-primary)',
-              margin: '0 0 8px', letterSpacing: '-0.02em',
-            }}>
-              Usage Pattern Detected
-            </h2>
-            <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.6 }}>
-              {usageInsight}
-            </p>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-            <button style={{
-              padding: '10px 20px', borderRadius: 10,
-              background: 'var(--color-surface-highest)',
-              border: '1px solid var(--color-border-ghost)',
-              color: 'var(--color-text-primary)', fontSize: 13, fontWeight: 700,
-              cursor: 'pointer', whiteSpace: 'nowrap',
-            }}>
-              Snooze
-            </button>
-            <button style={{
-              padding: '10px 20px', borderRadius: 10,
-              background: 'var(--gradient-primary)',
-              border: 'none',
-              color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700,
-              cursor: 'pointer', whiteSpace: 'nowrap',
-            }}>
-              Optimize
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
@@ -1138,3 +1018,5 @@ function LoadingSkeleton() {
     </div>
   )
 }
+
+

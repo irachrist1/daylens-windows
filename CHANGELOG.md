@@ -1,11 +1,25 @@
 # Changelog
 
-## v1.0.21 - 2026-04-03
+## v1.0.22 - 2026-04-03
 
 ### Fixed
 - In-app updates no longer cause a "fresh install" experience: the app now backs up all user data (settings, activity database, API keys reference) immediately before any update installs — whether the user clicked "Install Update" or the update ran automatically on quit
 - A new startup recovery mechanism detects when a version upgrade has wiped user data (blank settings after a version change) and automatically restores the most recent valid backup, so history and preferences survive even if the NSIS installer cleared the app data folder
 - Added `deleteAppDataOnUninstall: false` explicitly to the NSIS config to prevent any future uninstaller from touching the activity database or settings
+- History timeline blocks no longer collapse long mixed stretches into one oversized session: Daylens now splits oversized heuristic blocks at natural internal boundaries so the block height, clock placement, and displayed duration stay in sync
+- The History timeline now scales to the current viewport more reliably, keeps the detail panel usable on smaller screens, and removes the old Stats tab path so the day view stays focused on the actual timeline
+- CLI-backed AI providers are more reliable on Windows: Daylens now injects the required Node/npm paths before launching Claude CLI or Codex CLI, which fixes `codex.cmd` failures where Electron could find the CLI wrapper but not `node.exe`
+- CLI health checks are now strict and reject generic banners or greetings unless the provider returns the exact expected token, preventing false-positive “Connected” states
+- Ask Daylens now answers core tracked-data questions like “What changed most?”, “What time changed most?”, “Where did my time go?”, and “When was I most focused?” directly from local analytics before falling back to model interpretation
+- The Insights workspace keeps provider context intact more reliably, avoids stale/generic hello responses, and preserves chat state better while the page refreshes
+- Focus timer changes now update the sidebar widget immediately, and Recent Focus Sessions can be filtered by day for a cleaner per-date session log
+- The Apps detail page removes the old Usage Activity panel and AI footer so Total Usage expands cleanly across the full row
+- Settings now use a cleaner single-column fallback on narrower windows, remove redundant helper copy, and streamline the AI/provider section layout
+- Daylens is filtered out more consistently from tracked history, including older self-window titles such as “Activity tracker and AI insights”
+- Today’s History timeline refreshes more frequently and keeps the live block anchored to its real timestamp, so current tracking stays visible instead of drifting away from the “now” line
+- AI-generated timeline names now persist locally per block range, so once Daylens has renamed a block it keeps that label across refreshes instead of re-labeling it every few minutes
+- The History day view now uses calendar-style time geometry again: block position stays tied to the real start time, block height scales directly with duration, and short sessions collapse their content instead of being stretched to match longer sessions
+- The History details interaction was rebuilt around a stable docked inspector, replacing the brittle floating popover so clicking a block reliably opens its time range, evidence, and re-analysis controls
 
 ## v1.0.20 - 2026-04-03
 

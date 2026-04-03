@@ -140,20 +140,28 @@ export default function Sidebar() {
   useEffect(() => {
     let cancelled = false
 
+    const loadDefaultFocusMinutes = async () => {
+      try {
+        const settings = await window.daylens.settings.get()
+        if (cancelled) return
+        const mins = (settings as { defaultFocusMinutes?: number }).defaultFocusMinutes
+        if (mins != null) setDefaultFocusMinutes(mins)
+      } catch {
+        // Keep the last known value if settings cannot be read.
+      }
+    }
+
     const refreshActive = async () => {
       try {
-        const [session, summaries, liveSession, settings] = await Promise.all([
+        const [session, summaries, liveSession] = await Promise.all([
           window.daylens.focus.getActive(),
           window.daylens.db.getToday(),
           window.daylens.tracking.getLiveSession(),
-          window.daylens.settings.get(),
         ])
         if (!cancelled) {
           setActiveSession((session as FocusSession | null) ?? null)
           setTodayApps(summaries as AppUsageSummary[])
           setLive((liveSession as LiveSession | null) ?? null)
-          const mins = (settings as { defaultFocusMinutes?: number }).defaultFocusMinutes
-          if (mins != null) setDefaultFocusMinutes(mins)
         }
       } catch {
         if (!cancelled) {
@@ -164,10 +172,17 @@ export default function Sidebar() {
       }
     }
 
+    const handleSettingsChanged = () => {
+      void loadDefaultFocusMinutes()
+    }
+
+    void loadDefaultFocusMinutes()
     void refreshActive()
+    window.addEventListener('daylens:settings-changed', handleSettingsChanged)
     const poll = setInterval(() => void refreshActive(), 10_000)
     return () => {
       cancelled = true
+      window.removeEventListener('daylens:settings-changed', handleSettingsChanged)
       clearInterval(poll)
     }
   }, [])

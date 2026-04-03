@@ -9,13 +9,15 @@ import type {
   WorkContextInsight,
 } from '@shared/types'
 
-const HOUR_HEIGHT = 120
+const CALENDAR_HOUR_HEIGHT = 80
 const TIME_AXIS_WIDTH = 56
 const RANGE_PADDING_MS = 30 * 60_000
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
 const REANALYZE_INTERVAL_MS = 30 * 60_000
+const MIN_BLOCK_HEIGHT = 20
+const DETAILS_PANEL_BREAKPOINT = 1260
 
-// Module-level cache — survives component unmount/remount (tab switches).
+// Module-level cache survives component remounts and day switches.
 const _insightCache: Record<string, WorkContextInsight> = {}
 const _lastAnalyzedAt: Record<string, number> = {}
 
@@ -131,8 +133,23 @@ function formatHourLabel(date: Date): string {
   return `${hour - 12} PM`
 }
 
+function formatClockTime(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(timestamp)
+}
+
 function formatShortBlockDuration(block: WorkContextBlock): string {
   return formatDuration(Math.round((block.endTime - block.startTime) / 1000))
+}
+
+function formatBlockRange(block: WorkContextBlock): string {
+  return `${formatClockTime(block.startTime)} - ${formatClockTime(block.endTime)}`
+}
+
+function blockHeightFor(block: WorkContextBlock, hourHeight: number): number {
+  return Math.max(MIN_BLOCK_HEIGHT, ((block.endTime - block.startTime) / 3_600_000) * hourHeight - 2)
 }
 
 function meaningfulApps(block: WorkContextBlock) {
@@ -152,7 +169,7 @@ function visibleLabel(block: WorkContextBlock, insight?: WorkContextInsight | nu
   const websiteLabels = block.websites
     .map((site) => shortDomainLabel(site.domain))
     .filter((label, index, labels) => labels.indexOf(label) === index)
-  if (websiteLabels.length >= 2) return `${websiteLabels[0]}, ${websiteLabels[1]}`
+  if (websiteLabels.length >= 2) return `${websiteLabels[0]} + ${websiteLabels[1]}`
   if (websiteLabels.length === 1) return websiteLabels[0]
 
   const apps = meaningfulApps(block)
@@ -216,21 +233,21 @@ export default function TimelineDayView({
     () => ({ ..._insightCache }),
   )
   const [loadingInsightFor, setLoadingInsightFor] = useState<string | null>(null)
-  const [layoutTick, setLayoutTick] = useState(0)
-  const blockRefs = useRef<Record<string, HTMLButtonElement | null>>({})
-  const popoverRef = useRef<HTMLDivElement | null>(null)
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
+  const detailsPanelRef = useRef<HTMLDivElement | null>(null)
 
   const filteredBlocks = useMemo(() => {
-    if (activeFilter === 'all') return payload.blocks
+    const sorted = [...payload.blocks].sort((a, b) => a.startTime - b.startTime)
+    if (activeFilter === 'all') return sorted
     if (activeFilter === 'development') {
-      return payload.blocks.filter((block) => (
+      return sorted.filter((block) => (
         Object.entries(block.categoryDistribution).some(([category, seconds]) => (
           ['development', 'research', 'writing', 'aiTools', 'design', 'productivity'].includes(category)
           && (seconds ?? 0) > 0
         ))
       ))
     }
-    return payload.blocks.filter((block) => block.dominantCategory === activeFilter)
+    return sorted.filter((block) => block.dominantCategory === activeFilter)
   }, [activeFilter, payload.blocks])
 
   const rangeStart = useMemo(() => {
@@ -250,10 +267,24 @@ export default function TimelineDayView({
       return Math.max(blockEnd, Date.now() + RANGE_PADDING_MS)
     }
     return blockEnd
-  }, [filteredBlocks, rangeStart])
+  }, [date, filteredBlocks, rangeStart])
 
-  const totalHeight = Math.max(420, ((rangeEnd - rangeStart) / 3_600_000) * HOUR_HEIGHT)
+  const rangeHours = Math.max(1, (rangeEnd - rangeStart) / 3_600_000)
+  const hourHeight = CALENDAR_HOUR_HEIGHT
+  const positionedBlocks = useMemo(() => filteredBlocks.map((block) => ({
+    block,
+    top: ((block.startTime - rangeStart) / 3_600_000) * hourHeight,
+    height: blockHeightFor(block, hourHeight),
+  })), [filteredBlocks, hourHeight, rangeStart])
+  const totalHeight = Math.max(
+    360,
+    rangeHours * hourHeight,
+    positionedBlocks.length > 0
+      ? Math.max(...positionedBlocks.map(({ top, height }) => top + height)) + 32
+      : 0,
+  )
   const selectedBlock = filteredBlocks.find((block) => block.id === selectedBlockId) ?? null
+  const showDesktopDetails = viewportWidth >= DETAILS_PANEL_BREAKPOINT
 
   async function requestInsight(block: WorkContextBlock): Promise<WorkContextInsight> {
     const fallback: WorkContextInsight = {
@@ -270,11 +301,16 @@ export default function TimelineDayView({
 
   useEffect(() => {
     setSelectedBlockId(null)
-  }, [date, activeFilter])
+  }, [activeFilter, date])
 
-  // Load AI insight when a block is selected.
   useEffect(() => {
-    if (!selectedBlock || insights[selectedBlock.id] !== undefined || loadingInsightFor === selectedBlock.id) return
+    if (selectedBlockId && !filteredBlocks.some((block) => block.id === selectedBlockId)) {
+      setSelectedBlockId(null)
+    }
+  }, [filteredBlocks, selectedBlockId])
+
+  useEffect(() => {
+    if (!selectedBlock || selectedBlock.isLive || insights[selectedBlock.id] !== undefined || loadingInsightFor === selectedBlock.id) return
     let cancelled = false
     setLoadingInsightFor(selectedBlock.id)
     void requestInsight(selectedBlock)
@@ -292,10 +328,10 @@ export default function TimelineDayView({
     }
   }, [insights, loadingInsightFor, selectedBlock])
 
-  // Auto-analyze all blocks when the day loads; re-analyze if stale (> 30 min old).
   useEffect(() => {
     let cancelled = false
     const blocksToAnalyze = payload.blocks.filter((block) => {
+      if (block.isLive) return false
       const lastAt = _lastAnalyzedAt[block.id] ?? 0
       return _insightCache[block.id] === undefined || (Date.now() - lastAt) > REANALYZE_INTERVAL_MS
     })
@@ -317,73 +353,37 @@ export default function TimelineDayView({
   }, [payload.blocks])
 
   useEffect(() => {
-    if (!selectedBlockId) return
-
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node
-      const blockNode = blockRefs.current[selectedBlockId]
-      if (popoverRef.current?.contains(target) || blockNode?.contains(target)) return
-      setSelectedBlockId(null)
+    const onResize = () => {
+      setViewportWidth(window.innerWidth)
     }
-
-    const onLayoutChange = () => setLayoutTick((value) => value + 1)
-
-    document.addEventListener('mousedown', onPointerDown)
-    window.addEventListener('resize', onLayoutChange)
-    window.addEventListener('scroll', onLayoutChange, true)
+    window.addEventListener('resize', onResize)
     return () => {
-      document.removeEventListener('mousedown', onPointerDown)
-      window.removeEventListener('resize', onLayoutChange)
-      window.removeEventListener('scroll', onLayoutChange, true)
+      window.removeEventListener('resize', onResize)
     }
-  }, [selectedBlockId])
+  }, [])
 
   useEffect(() => {
     const handleAISettingsChanged = () => {
-      // Clear module-level cache so re-analysis uses the new provider.
       for (const key of Object.keys(_insightCache)) delete _insightCache[key]
       for (const key of Object.keys(_lastAnalyzedAt)) delete _lastAnalyzedAt[key]
       setInsights({})
-      if (selectedBlockId) {
-        setSelectedBlockId(null)
-      }
+      setSelectedBlockId(null)
     }
 
     window.addEventListener('daylens:ai-settings-changed', handleAISettingsChanged as EventListener)
     return () => {
       window.removeEventListener('daylens:ai-settings-changed', handleAISettingsChanged as EventListener)
     }
-  }, [selectedBlockId])
+  }, [])
 
-  const selectedRect = selectedBlockId ? blockRefs.current[selectedBlockId]?.getBoundingClientRect() ?? null : null
-  void layoutTick
-
-  const popoverStyle = selectedRect
-    ? (() => {
-        const width = Math.min(352, window.innerWidth - 32)
-        const spaceLeft = selectedRect.left
-        const placeLeft = spaceLeft >= width + 24
-        const left = placeLeft
-          ? Math.max(8, selectedRect.left - width - 12)
-          : Math.max(8, Math.min(window.innerWidth - width - 8, selectedRect.right + 12))
-        const maxHeight = window.innerHeight - 32
-        // prefer below the block; if there's not enough room, flip above
-        const spaceBelow = window.innerHeight - selectedRect.bottom - 16
-        const spaceAbove = selectedRect.top - 16
-        let top: number
-        if (spaceBelow >= 180 || spaceBelow >= spaceAbove) {
-          top = Math.min(selectedRect.bottom + 8, window.innerHeight - maxHeight - 8)
-        } else {
-          top = Math.max(8, selectedRect.top - Math.min(maxHeight, 460) - 8)
-        }
-        top = Math.max(8, top)
-        return { left, top, width, maxHeight }
-      })()
-    : null
+  useEffect(() => {
+    if (!selectedBlock || showDesktopDetails) return
+    detailsPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [selectedBlock, showDesktopDetails])
 
   const nowLineOffset = (() => {
     if (date !== todayString()) return null
-    const currentY = ((Date.now() - rangeStart) / 3_600_000) * HOUR_HEIGHT
+    const currentY = ((Date.now() - rangeStart) / 3_600_000) * hourHeight
     return Math.max(0, Math.min(totalHeight, currentY))
   })()
 
@@ -396,9 +396,204 @@ export default function TimelineDayView({
     cursor.setHours(cursor.getHours() + 1)
   }
 
+  const renderDetailsPanel = () => (
+    <div
+      ref={detailsPanelRef}
+      style={{
+        background: 'var(--color-surface-card)',
+        border: '1px solid var(--color-border-ghost)',
+        borderRadius: 18,
+        boxShadow: '0 18px 48px rgba(15, 23, 42, 0.12)',
+        padding: 16,
+      }}
+    >
+      {!selectedBlock && (
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--color-text-primary)' }}>
+            Timeline details
+          </div>
+          <div style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-secondary)' }}>
+            Select a block to inspect the exact time range, top apps, websites, and the AI summary for that segment.
+          </div>
+        </div>
+      )}
+
+      {selectedBlock && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1.2 }}>
+                {visibleLabel(selectedBlock, insights[selectedBlock.id])}
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                {formatShortBlockDuration(selectedBlock)} · {formatBlockRange(selectedBlock)}
+              </div>
+            </div>
+            <button
+              onClick={() => setSelectedBlockId(null)}
+              style={{
+                border: 'none',
+                borderRadius: 999,
+                width: 28,
+                height: 28,
+                background: 'var(--color-surface-high)',
+                color: 'var(--color-text-secondary)',
+                cursor: 'pointer',
+                fontSize: 14,
+                lineHeight: 1,
+                flexShrink: 0,
+              }}
+              aria-label="Close details"
+            >
+              ×
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                borderRadius: 999,
+                padding: '4px 8px',
+                color: CATEGORY_COLORS[selectedBlock.dominantCategory],
+                background: withAlpha(CATEGORY_COLORS[selectedBlock.dominantCategory], 0.12),
+              }}
+            >
+              {categoryLabel(selectedBlock.dominantCategory)}
+            </span>
+            {selectedBlock.isLive && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-focus-green)' }}>
+                Active now
+              </span>
+            )}
+          </div>
+
+          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65, marginBottom: 12 }}>
+            {loadingInsightFor === selectedBlock.id && !insights[selectedBlock.id]
+              ? 'Analyzing block...'
+              : insights[selectedBlock.id]?.narrative || localNarrative(selectedBlock)}
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--color-border-ghost)', paddingTop: 12, display: 'grid', gap: 14 }}>
+            {selectedBlock.websites.length > 0 && (
+              <section>
+                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--color-text-secondary)', marginBottom: 7 }}>
+                  Websites
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {selectedBlock.websites.slice(0, 4).map((site) => (
+                    <div key={`${selectedBlock.id}-${site.domain}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>•</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                          {shortDomainLabel(site.domain)}
+                        </div>
+                        {site.topTitle && (
+                          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {site.topTitle}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', flexShrink: 0 }}>
+                        {formatDuration(site.totalSeconds)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {meaningfulApps(selectedBlock).length > 0 && (
+              <section>
+                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--color-text-secondary)', marginBottom: 7 }}>
+                  Apps
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {meaningfulApps(selectedBlock).slice(0, 4).map((app) => (
+                    <div key={`${selectedBlock.id}-${app.bundleId}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <AppIcon bundleId={app.bundleId} appName={app.appName} size={16} fontSize={8} cornerRadius={5} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                          {app.appName}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                          {categoryLabel(app.category)}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
+                        {formatDuration(app.totalSeconds)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {selectedBlock.keyPages.length > 0 && (
+              <section>
+                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--color-text-secondary)', marginBottom: 7 }}>
+                  Key pages and windows
+                </div>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {selectedBlock.keyPages.slice(0, 4).map((title) => (
+                    <div key={`${selectedBlock.id}-${title}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>•</span>
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-primary)' }}>
+                        {title}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14, borderTop: '1px solid var(--color-border-ghost)', paddingTop: 12 }}>
+            <button
+              onClick={() => {
+                setLoadingInsightFor(selectedBlock.id)
+                setInsights((current) => {
+                  const next = { ...current }
+                  delete next[selectedBlock.id]
+                  return next
+                })
+                void requestInsight(selectedBlock)
+                  .then((insight) => {
+                    _insightCache[selectedBlock.id] = insight
+                    _lastAnalyzedAt[selectedBlock.id] = Date.now()
+                    setInsights((current) => ({ ...current, [selectedBlock.id]: insight }))
+                  })
+                  .finally(() => {
+                    setLoadingInsightFor((current) => (current === selectedBlock.id ? null : current))
+                  })
+              }}
+              style={{
+                border: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                background: 'transparent',
+                color: 'var(--color-text-secondary)',
+                fontSize: 11.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              <span aria-hidden="true">↻</span>
+              {loadingInsightFor === selectedBlock.id ? 'Analyzing...' : 'Re-analyze'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+
   return (
     <div style={{ position: 'relative' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-focus-green)' }}>
             {payload.focusPct}%
@@ -435,324 +630,190 @@ export default function TimelineDayView({
         })}
       </div>
 
-      <div style={{ position: 'relative', borderTop: '1px solid var(--color-border-ghost)', paddingTop: 18 }}>
-        <div
-          style={{
-            position: 'relative',
-            minHeight: totalHeight + 24,
-          }}
-        >
-          {hours.map((hour) => {
-            const top = ((hour.getTime() - rangeStart) / 3_600_000) * HOUR_HEIGHT
-            return (
-              <div key={hour.toISOString()} style={{ position: 'absolute', left: 0, right: 0, top }}>
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: 0,
-                    top: -9,
-                    width: TIME_AXIS_WIDTH - 6,
-                    textAlign: 'right',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: 'var(--color-text-tertiary)',
-                    whiteSpace: 'nowrap',
-                    opacity: 0.7,
-                  }}
-                >
-                  {formatHourLabel(hour)}
-                </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: showDesktopDetails ? 'minmax(0, 1fr) 340px' : '1fr',
+          gap: 22,
+          alignItems: 'start',
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ position: 'relative', borderTop: '1px solid var(--color-border-ghost)', paddingTop: 18 }}>
+            <div
+              style={{
+                position: 'relative',
+                minHeight: totalHeight + 24,
+              }}
+            >
+              {hours.map((hour) => {
+                const top = ((hour.getTime() - rangeStart) / 3_600_000) * hourHeight
+                return (
+                  <div key={hour.toISOString()} style={{ position: 'absolute', left: 0, right: 0, top }}>
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        top: -9,
+                        width: TIME_AXIS_WIDTH - 6,
+                        textAlign: 'right',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: 'var(--color-text-tertiary)',
+                        whiteSpace: 'nowrap',
+                        opacity: 0.72,
+                      }}
+                    >
+                      {formatHourLabel(hour)}
+                    </div>
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: TIME_AXIS_WIDTH,
+                        right: 0,
+                        height: 1,
+                        background: 'var(--color-border-ghost)',
+                      }}
+                    />
+                  </div>
+                )
+              })}
+
+              {nowLineOffset !== null && (
                 <div
                   style={{
                     position: 'absolute',
                     left: TIME_AXIS_WIDTH,
                     right: 0,
-                    height: 1,
-                    background: 'var(--color-border-ghost)',
+                    top: nowLineOffset,
+                    height: 1.5,
+                    background: withAlpha(CATEGORY_COLORS.development, 0.85),
+                    zIndex: 1,
                   }}
                 />
-              </div>
-            )
-          })}
+              )}
 
-          {nowLineOffset !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                left: TIME_AXIS_WIDTH,
-                right: 0,
-                top: nowLineOffset,
-                height: 1.5,
-                background: withAlpha(CATEGORY_COLORS.development, 0.8),
-                zIndex: 1,
-              }}
-            />
-          )}
+              {positionedBlocks.map(({ block, top, height }) => {
+                const color = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
+                const isSelected = block.id === selectedBlockId
+                const insight = insights[block.id]
+                const isTinyBlock = height < 30
+                const isCompactBlock = height < 46
+                const showDuration = height >= 38
+                const iconCount = height >= 58 ? 3 : height >= 38 ? 2 : height >= 28 ? 1 : 0
+                const visibleApps = block.topApps.slice(0, iconCount)
 
-          {filteredBlocks.map((block) => {
-            const color = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
-            const top = ((block.startTime - rangeStart) / 3_600_000) * HOUR_HEIGHT
-            const height = Math.max(24, ((block.endTime - block.startTime) / 3_600_000) * HOUR_HEIGHT - 3)
-            const isSelected = block.id === selectedBlockId
-            const insight = insights[block.id]
-
-            return (
-              <button
-                key={block.id}
-                ref={(node) => { blockRefs.current[block.id] = node }}
-                onClick={() => setSelectedBlockId((current) => current === block.id ? null : block.id)}
-                style={{
-                  position: 'absolute',
-                  left: TIME_AXIS_WIDTH + 4,
-                  right: 0,
-                  top,
-                  height,
-                  display: 'flex',
-                  padding: 0,
-                  border: 'none',
-                  background: 'transparent',
-                  textAlign: 'left',
-                  cursor: 'pointer',
-                }}
-              >
-                <div
-                  style={{
-                    width: 3,
-                    flexShrink: 0,
-                    borderRadius: 999,
-                    background: color,
-                    boxShadow: isSelected ? `0 0 0 1px ${withAlpha(color, 0.18)}` : 'none',
-                  }}
-                />
-                <div
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    marginLeft: 0,
-                    borderRadius: 10,
-                    border: `1px solid ${withAlpha(color, isSelected ? 0.36 : 0.18)}`,
-                    background: withAlpha(color, isSelected ? 0.18 : 0.1),
-                    padding: '12px 14px',
-                    display: 'flex',
-                    alignItems: height >= 42 ? 'flex-start' : 'center',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                    boxShadow: isSelected ? '0 16px 40px rgba(15, 23, 42, 0.08)' : 'none',
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
+                return (
+                  <button
+                    key={block.id}
+                    onClick={() => setSelectedBlockId((current) => current === block.id ? null : block.id)}
+                    style={{
+                      position: 'absolute',
+                      left: TIME_AXIS_WIDTH + 6,
+                      right: 0,
+                      top,
+                      height,
+                      display: 'flex',
+                      alignItems: 'stretch',
+                      padding: 0,
+                      border: 'none',
+                      background: 'transparent',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      zIndex: isSelected ? 3 : block.isLive ? 2 : 1,
+                    }}
+                    aria-pressed={isSelected}
+                  >
                     <div
                       style={{
-                        fontSize: height < 54 ? 13 : 14,
-                        fontWeight: 800,
-                        color: 'var(--color-text-primary)',
-                        lineHeight: 1.18,
-                        marginBottom: 2,
-                        whiteSpace: 'nowrap',
+                        width: 3,
+                        flexShrink: 0,
+                        borderRadius: 999,
+                        background: color,
+                        boxShadow: isSelected ? `0 0 0 1px ${withAlpha(color, 0.22)}` : 'none',
+                      }}
+                    />
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        borderRadius: 12,
+                        border: `1px solid ${withAlpha(color, isSelected ? 0.42 : 0.2)}`,
+                        background: withAlpha(color, isSelected ? 0.18 : 0.1),
+                        padding: isTinyBlock ? '4px 10px' : isCompactBlock ? '8px 12px' : '12px 14px',
+                        display: 'flex',
+                        alignItems: isCompactBlock ? 'center' : 'flex-start',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        boxShadow: isSelected ? `0 18px 44px ${withAlpha(color, 0.12)}` : 'none',
                         overflow: 'hidden',
-                        textOverflow: 'ellipsis',
                       }}
                     >
-                      {visibleLabel(block, insight)}
-                    </div>
-                    {height >= 40 && (
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
-                        {formatShortBlockDuration(block)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-                    {height >= 40 && block.topApps.slice(0, 3).map((app) => (
-                      <AppIcon
-                        key={`${block.id}-${app.bundleId}`}
-                        bundleId={app.bundleId}
-                        appName={app.appName}
-                        size={18}
-                        fontSize={9}
-                        cornerRadius={6}
-                      />
-                    ))}
-                    {block.isLive && (
-                      <div
-                        title="Active now"
-                        style={{
-                          width: 7,
-                          height: 7,
-                          borderRadius: '50%',
-                          background: color,
-                          flexShrink: 0,
-                          boxShadow: `0 0 0 2px ${withAlpha(color, 0.3)}`,
-                        }}
-                      />
-                    )}
-                  </div>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      {selectedBlock && popoverStyle && (
-        <div
-          ref={popoverRef}
-          style={{
-            position: 'fixed',
-            left: popoverStyle.left,
-            top: popoverStyle.top,
-            width: popoverStyle.width,
-            maxHeight: popoverStyle.maxHeight,
-            overflowY: 'auto',
-            background: 'var(--color-surface-card)',
-            border: '1px solid var(--color-border-ghost)',
-            borderRadius: 18,
-            boxShadow: '0 28px 80px rgba(15, 23, 42, 0.22)',
-            padding: 14,
-            zIndex: 30,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--color-text-primary)', lineHeight: 1.2 }}>
-                {visibleLabel(selectedBlock, insights[selectedBlock.id])}
-              </div>
-              <div style={{ marginTop: 4, fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
-                {formatShortBlockDuration(selectedBlock)}
-              </div>
-            </div>
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                borderRadius: 999,
-                padding: '3px 7px',
-                color: CATEGORY_COLORS[selectedBlock.dominantCategory],
-                background: withAlpha(CATEGORY_COLORS[selectedBlock.dominantCategory], 0.12),
-                flexShrink: 0,
-              }}
-            >
-              {categoryLabel(selectedBlock.dominantCategory)}
-            </span>
-          </div>
-
-          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 12 }}>
-            {loadingInsightFor === selectedBlock.id && !insights[selectedBlock.id]
-              ? 'Analyzing block…'
-              : insights[selectedBlock.id]?.narrative || localNarrative(selectedBlock)}
-          </div>
-
-          <div style={{ borderTop: '1px solid var(--color-border-ghost)', paddingTop: 12, display: 'grid', gap: 12 }}>
-            {selectedBlock.websites.length > 0 && (
-              <section>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
-                  What You Were On
-                </div>
-                <div style={{ display: 'grid', gap: 6 }}>
-                  {selectedBlock.websites.slice(0, 4).map((site) => (
-                    <div key={`${selectedBlock.id}-${site.domain}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                      <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>⊕</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                          {shortDomainLabel(site.domain)}
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: isTinyBlock ? 11.5 : isCompactBlock ? 12.5 : 14,
+                            fontWeight: 800,
+                            color: 'var(--color-text-primary)',
+                            lineHeight: 1.16,
+                            marginBottom: showDuration ? 2 : 0,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {visibleLabel(block, insight)}
                         </div>
-                        {site.topTitle && (
-                          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {site.topTitle}
+                        {showDuration && (
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                            {formatShortBlockDuration(block)}
                           </div>
                         )}
                       </div>
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', flexShrink: 0 }}>
-                        {formatDuration(site.totalSeconds)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
 
-            {meaningfulApps(selectedBlock).length > 0 && (
-              <section>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
-                  Supporting Apps
-                </div>
-                <div style={{ display: 'grid', gap: 6 }}>
-                  {meaningfulApps(selectedBlock).slice(0, 4).map((app) => (
-                    <div key={`${selectedBlock.id}-${app.bundleId}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <AppIcon bundleId={app.bundleId} appName={app.appName} size={16} fontSize={8} cornerRadius={5} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                          {app.appName}
-                        </div>
-                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
-                          {categoryLabel(app.category)}
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
-                        {formatDuration(app.totalSeconds)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {selectedBlock.keyPages.length > 0 && (
-              <section>
-                <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--color-text-secondary)', marginBottom: 6 }}>
-                  Key Pages &amp; Windows
-                </div>
-                <div style={{ display: 'grid', gap: 5 }}>
-                  {selectedBlock.keyPages.slice(0, 4).map((title) => (
-                    <div key={`${selectedBlock.id}-${title}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                      <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>⊞</span>
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-primary)' }}>
-                        {title}
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                        {visibleApps.map((app) => (
+                          <AppIcon
+                            key={`${block.id}-${app.bundleId}`}
+                            bundleId={app.bundleId}
+                            appName={app.appName}
+                            size={18}
+                            fontSize={9}
+                            cornerRadius={6}
+                          />
+                        ))}
+                        {block.isLive && (
+                          <div
+                            title="Active now"
+                            style={{
+                              width: 7,
+                              height: 7,
+                              borderRadius: '50%',
+                              background: color,
+                              flexShrink: 0,
+                              boxShadow: `0 0 0 2px ${withAlpha(color, 0.3)}`,
+                            }}
+                          />
+                        )}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </section>
-            )}
+                  </button>
+                )
+              })}
+            </div>
           </div>
+        </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, borderTop: '1px solid var(--color-border-ghost)', paddingTop: 10 }}>
-            <button
-              onClick={() => {
-                setLoadingInsightFor(selectedBlock.id)
-                setInsights((current) => {
-                  const next = { ...current }
-                  delete next[selectedBlock.id]
-                  return next
-                })
-                void requestInsight(selectedBlock)
-                  .then((insight) => {
-                    _insightCache[selectedBlock.id] = insight
-                    _lastAnalyzedAt[selectedBlock.id] = Date.now()
-                    setInsights((current) => ({ ...current, [selectedBlock.id]: insight }))
-                  })
-                  .finally(() => {
-                    setLoadingInsightFor((current) => (current === selectedBlock.id ? null : current))
-                  })
-              }}
-              style={{
-                border: 'none',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                background: 'transparent',
-                color: 'var(--color-text-secondary)',
-                fontSize: 11.5,
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              <span aria-hidden="true">↻</span>
-              {loadingInsightFor === selectedBlock.id ? 'Analyzing…' : 'Re-analyze'}
-            </button>
+        {showDesktopDetails && (
+          <div style={{ position: 'sticky', top: 18 }}>
+            {renderDetailsPanel()}
           </div>
+        )}
+      </div>
+
+      {!showDesktopDetails && (
+        <div style={{ marginTop: 18 }}>
+          {renderDetailsPanel()}
         </div>
       )}
     </div>

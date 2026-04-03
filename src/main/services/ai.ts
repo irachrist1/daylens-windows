@@ -18,6 +18,7 @@ import {
   getWebsiteSummariesForRange,
   getRecentFocusSessions,
   getCategoryOverrides,
+  upsertWorkContextInsight,
 } from '../db/queries'
 import { routeInsightsQuestion, type TemporalContext } from '../lib/insightsQueryRouter'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
@@ -43,6 +44,17 @@ interface CLIToolDetectionResult {
   codex: string | null
 }
 
+interface CodexExecCapabilities {
+  supportsOutputLastMessage: boolean
+  supportsSandbox: boolean
+  supportsConfig: boolean
+}
+
+interface ResolvedCLITool {
+  executablePath: string
+  codexExecCapabilities: CodexExecCapabilities | null
+}
+
 class CLIProviderError extends Error {
   readonly code: 'not_found' | 'non_zero_exit' | 'timeout' | 'launch_failed'
 
@@ -55,6 +67,7 @@ class CLIProviderError extends Error {
 
 const CLI_TIMEOUT_MS = 180_000
 const conversationTemporalContext = new Map<number, TemporalContext | null>()
+const cliToolCache: Partial<Record<'claude' | 'codex', Promise<ResolvedCLITool | null>>> = {}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -83,7 +96,50 @@ function cliBinaryCandidates(tool: 'claude' | 'codex'): string[] {
   ].filter((candidate): candidate is string => Boolean(candidate))
 }
 
-async function resolveCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null> {
+function uniquePathEntries(entries: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+
+  for (const entry of entries) {
+    if (!entry) continue
+    const trimmed = entry.trim()
+    if (!trimmed) continue
+    const key = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push(trimmed)
+  }
+
+  return normalized
+}
+
+function buildCLIPath(executablePath: string, currentPath?: string): string {
+  const appData = process.env.APPDATA
+  const userProfile = process.env.USERPROFILE
+  const programFiles = process.env.ProgramFiles
+  const programFilesX86 = process.env['ProgramFiles(x86)']
+
+  return uniquePathEntries([
+    path.dirname(executablePath),
+    appData ? path.join(appData, 'npm') : null,
+    userProfile ? path.join(userProfile, 'AppData', 'Roaming', 'npm') : null,
+    userProfile ? path.join(userProfile, '.local', 'bin') : null,
+    userProfile ? path.join(userProfile, '.volta', 'bin') : null,
+    userProfile ? path.join(userProfile, '.npm-global', 'bin') : null,
+    programFiles ? path.join(programFiles, 'nodejs') : null,
+    programFilesX86 ? path.join(programFilesX86, 'nodejs') : null,
+    ...(currentPath ? currentPath.split(path.delimiter) : []),
+  ]).join(path.delimiter)
+}
+
+function buildCLIEnv(executablePath: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: buildCLIPath(executablePath, process.env.PATH),
+  }
+}
+
+async function findCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null> {
   for (const candidate of cliBinaryCandidates(tool)) {
     try {
       await fs.access(candidate)
@@ -112,6 +168,83 @@ async function resolveCLIToolPath(tool: 'claude' | 'codex'): Promise<string | nu
       resolve(match ?? null)
     })
   })
+}
+
+async function runCLIHelpCommand(executablePath: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn(executablePath, args, {
+      env: buildCLIEnv(executablePath),
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let finished = false
+    const timer = setTimeout(() => {
+      if (finished) return
+      finished = true
+      child.kill()
+      resolve(`${stdout}\n${stderr}`.trim())
+    }, 10_000)
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+    child.on('error', () => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      resolve('')
+    })
+    child.on('close', () => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      resolve(`${stdout}\n${stderr}`.trim())
+    })
+  })
+}
+
+async function inspectCodexExecCapabilities(executablePath: string): Promise<CodexExecCapabilities> {
+  const [codexHelp, codexExecHelp] = await Promise.all([
+    runCLIHelpCommand(executablePath, ['--help']),
+    runCLIHelpCommand(executablePath, ['exec', '--help']),
+  ])
+
+  const combinedHelp = `${codexHelp}\n${codexExecHelp}`
+  return {
+    supportsOutputLastMessage: combinedHelp.includes('--output-last-message'),
+    supportsSandbox: combinedHelp.includes('--sandbox'),
+    supportsConfig: combinedHelp.includes('--config'),
+  }
+}
+
+async function resolveCLITool(tool: 'claude' | 'codex'): Promise<ResolvedCLITool | null> {
+  if (!cliToolCache[tool]) {
+    cliToolCache[tool] = (async () => {
+      const executablePath = await findCLIToolPath(tool)
+      if (!executablePath) return null
+
+      return {
+        executablePath,
+        codexExecCapabilities: tool === 'codex'
+          ? await inspectCodexExecCapabilities(executablePath)
+          : null,
+      }
+    })()
+  }
+
+  return cliToolCache[tool] ?? null
+}
+
+async function resolveCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null> {
+  const resolved = await resolveCLITool(tool)
+  return resolved?.executablePath ?? null
 }
 
 export async function detectCLITools(): Promise<CLIToolDetectionResult> {
@@ -364,33 +497,41 @@ async function sendWithGoogle(
 
 async function runCLIProvider(
   tool: 'claude' | 'codex',
-  systemPrompt: string,
   prompt: string,
   model?: string,
 ): Promise<string> {
-  const detected = await detectCLITools()
-  const executablePath = detected[tool]
-  if (!executablePath) {
+  const resolvedTool = await resolveCLITool(tool)
+  if (!resolvedTool) {
     throw new CLIProviderError('not_found', `${tool} CLI not found`)
   }
+  const { executablePath, codexExecCapabilities } = resolvedTool
 
   const tmpFilePath = path.join(os.tmpdir(), `daylens-${tool}-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`)
   const args = tool === 'claude'
-    ? ['-p', prompt, '--output-format', 'text', '--tools', '', '--system-prompt', systemPrompt]
-    : ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', '--config', 'model_reasoning_effort="low"', '--color', 'never', '--output-last-message', tmpFilePath, `System instructions:\n${systemPrompt}\n\n${prompt}`]
-
-  if (model) {
-    args.splice(tool === 'claude' ? args.length : args.length - 1, 0, '--model', model)
-  }
+    ? ['-p', '--output-format', 'text', ...(model ? ['--model', model] : []), prompt]
+    : (() => {
+        const nextArgs = ['exec', '--skip-git-repo-check']
+        if (codexExecCapabilities?.supportsSandbox) {
+          nextArgs.push('--sandbox', 'read-only')
+        }
+        if (codexExecCapabilities?.supportsConfig) {
+          nextArgs.push('--config', 'model_reasoning_effort="low"')
+        }
+        nextArgs.push('--color', 'never')
+        if (codexExecCapabilities?.supportsOutputLastMessage) {
+          nextArgs.push('--output-last-message', tmpFilePath)
+        }
+        if (model) {
+          nextArgs.push('--model', model)
+        }
+        nextArgs.push(prompt)
+        return nextArgs
+      })()
 
   try {
     const output = await new Promise<string>((resolve, reject) => {
-      const env = { ...process.env }
-      const binaryDir = path.dirname(executablePath)
-      env.PATH = `${binaryDir};${env.PATH ?? ''}`
-
       const child = spawn(executablePath, args, {
-        env,
+        env: buildCLIEnv(executablePath),
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
@@ -423,10 +564,10 @@ async function runCLIProvider(
         finished = true
         clearTimeout(timer)
         try {
-          const fileOutput = tool === 'codex'
+          const fileOutput = tool === 'codex' && codexExecCapabilities?.supportsOutputLastMessage
             ? (await fs.readFile(tmpFilePath, 'utf8').catch(() => '')).trim()
             : ''
-          const finalOutput = (tool === 'codex' ? fileOutput : stdout).trim()
+          const finalOutput = (tool === 'codex' && fileOutput ? fileOutput : stdout).trim()
           if (code !== 0) {
             reject(new CLIProviderError('non_zero_exit', (stderr || finalOutput || `${tool} exited with code ${code ?? 1}`).trim()))
             return
@@ -440,7 +581,7 @@ async function runCLIProvider(
 
     return output
   } finally {
-    if (tool === 'codex') {
+    if (tool === 'codex' && codexExecCapabilities?.supportsOutputLastMessage) {
       await fs.unlink(tmpFilePath).catch(() => undefined)
     }
   }
@@ -455,13 +596,14 @@ async function sendWithProvider(
   switch (config.provider) {
     case 'claude-cli':
     case 'codex-cli': {
-      const cliPrompt = [
+      const existingCLIPrompt = [
         prior.length > 0
           ? `Conversation so far:\n${prior.map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}: ${message.content}`).join('\n\n')}`
           : null,
         `User: ${userMessage}`,
       ].filter(Boolean).join('\n\n')
-      return runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', systemPrompt, cliPrompt, config.model)
+      const cliPrompt = `System context:\n${systemPrompt}\n\n${existingCLIPrompt}`
+      return runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', cliPrompt, config.model)
     }
     case 'openai':
       return sendWithOpenAI(config, systemPrompt, prior, userMessage)
@@ -990,15 +1132,33 @@ export async function generateWorkBlockInsight(block: WorkContextBlock): Promise
     )
     const parsed = parseWorkBlockInsight(text)
 
-    return {
+    const insight = {
       label: parsed?.label || userVisibleLabelForBlock(block),
       narrative: parsed?.narrative || fallbackNarrativeForBlock(block),
     }
+    if (!block.isLive) {
+      upsertWorkContextInsight(getDb(), {
+        startMs: block.startTime,
+        endMs: block.endTime,
+        insight,
+        sourceBlockIds: [block.id],
+      })
+    }
+    return insight
   } catch {
-    return {
+    const insight = {
       label: userVisibleLabelForBlock(block),
       narrative: fallbackNarrativeForBlock(block),
     }
+    if (!block.isLive && block.aiLabel) {
+      upsertWorkContextInsight(getDb(), {
+        startMs: block.startTime,
+        endMs: block.endTime,
+        insight,
+        sourceBlockIds: [block.id],
+      })
+    }
+    return insight
   }
 }
 
@@ -1016,7 +1176,14 @@ export async function sendMessage(userMessage: string): Promise<string> {
   }
 
   const history = getConversationMessages(db, conversationId)
-  const prior = history
+  // Sanitize prior: remove any trailing user messages (orphaned from a previous
+  // failed request under the old code that inserted user messages before the API
+  // call). Consecutive user messages at the end would violate the alternating
+  // role requirement and cause the API to reject or mishandle the request.
+  const prior = history.slice()
+  while (prior.length > 0 && prior[prior.length - 1].role === 'user') {
+    prior.pop()
+  }
 
   const dayContext = buildDayContext()
   const specificTimeContext = buildSpecificTimeContext(userMessage)
@@ -1047,6 +1214,12 @@ export async function sendMessage(userMessage: string): Promise<string> {
 
   const { text: assistantText } = await sendWithFallback(systemPrompt, prior, userMessage)
 
+  // Don't save an empty assistant response — it would corrupt future prior
+  // history and cause the AI to receive empty content blocks.
+  if (!assistantText.trim()) {
+    throw new Error('The AI returned an empty response. Please try again.')
+  }
+
   appendConversationMessage(db, conversationId, 'user', userMessage)
   appendConversationMessage(db, conversationId, 'assistant', assistantText)
   conversationTemporalContext.set(conversationId, {
@@ -1071,8 +1244,19 @@ export function clearAIHistory(): void {
 
 export async function testCLITool(tool: 'claude' | 'codex'): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
   try {
-    const output = await runCLIProvider(tool, 'You are a test runner. Reply with the single word OK.', 'Reply with the single word OK')
-    return { ok: true, output: output.trim() }
+    const expectedToken = `DAYLENS_OK_${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+    const output = await runCLIProvider(
+      tool,
+      `System context:\nYou are a test runner. Reply with exactly ${expectedToken} and nothing else.\n\nUser: Reply with exactly ${expectedToken} and nothing else.`,
+    )
+    const normalizedOutput = output.trim()
+    if (normalizedOutput !== expectedToken) {
+      return {
+        ok: false,
+        error: `Unexpected CLI output: ${normalizedOutput.slice(0, 120) || '(empty response)'}`,
+      }
+    }
+    return { ok: true, output: normalizedOutput }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }

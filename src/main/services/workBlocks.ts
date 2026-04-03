@@ -3,6 +3,7 @@ import {
   getSessionsForRange,
   getTopPagesForDomains,
   getWebsiteSummariesForRange,
+  getWorkContextInsightForRange,
 } from '../db/queries'
 import type {
   AppCategory,
@@ -25,6 +26,10 @@ const SUSTAINED_CATEGORY_THRESHOLD_SEC = 15 * 60
 const COMMUNICATION_INTERRUPTION_THRESHOLD_SEC = 5 * 60
 const FAST_SWITCH_THRESHOLD_SEC = 5 * 60
 const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
+const TIMELINE_SOFT_MAX_BLOCK_SPAN_MS = 90 * 60_000
+const TIMELINE_HARD_MAX_BLOCK_SPAN_MS = 2 * 60 * 60_000
+const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
+const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 
 type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
 
@@ -149,6 +154,10 @@ function countAppSwitches(sessions: AppSession[]): number {
 function averageDwellTime(sessions: AppSession[]): number {
   if (sessions.length === 0) return 0
   return sessions.reduce((sum, session) => sum + session.durationSeconds, 0) / sessions.length
+}
+
+function sessionEndMs(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {
+  return session.endTime ?? (session.startTime + session.durationSeconds * 1000)
 }
 
 function effectiveSessionsFor(sessions: AppSession[]): EffectiveSession[] {
@@ -305,7 +314,7 @@ function coarseSegmentsFromSessions(sessions: AppSession[]): CoarseSegment[] {
   for (let index = 1; index < sessions.length; index++) {
     const previous = sessions[index - 1]
     const current = sessions[index]
-    const previousEnd = previous.endTime ?? (previous.startTime + previous.durationSeconds * 1000)
+    const previousEnd = sessionEndMs(previous)
     if (current.startTime - previousEnd > IDLE_GAP_THRESHOLD_MS) {
       segments.push({
         sessions: sessions.slice(startIndex, index),
@@ -323,6 +332,89 @@ function coarseSegmentsFromSessions(sessions: AppSession[]): CoarseSegment[] {
   })
 
   return segments
+}
+
+function candidateSpanMs(candidate: CandidateBlock): number {
+  if (candidate.sessions.length === 0) return 0
+  return sessionEndMs(candidate.sessions[candidate.sessions.length - 1]) - candidate.sessions[0].startTime
+}
+
+function validTimelineSplit(index: number, sessions: AppSession[]): boolean {
+  if (index <= 0 || index >= sessions.length) return false
+  const leftSpan = sessionEndMs(sessions[index - 1]) - sessions[0].startTime
+  const rightSpan = sessionEndMs(sessions[sessions.length - 1]) - sessions[index].startTime
+  return leftSpan >= TIMELINE_MIN_CHILD_SPAN_MS && rightSpan >= TIMELINE_MIN_CHILD_SPAN_MS
+}
+
+function bestTimelineGapSplitIndex(sessions: AppSession[]): number | null {
+  if (sessions.length < 2) return null
+  const midpoint = sessions[0].startTime + ((sessionEndMs(sessions[sessions.length - 1]) - sessions[0].startTime) / 2)
+
+  let bestIndex: number | null = null
+  let bestScore = Number.NEGATIVE_INFINITY
+
+  for (let index = 1; index < sessions.length; index++) {
+    const gapMs = sessions[index].startTime - sessionEndMs(sessions[index - 1])
+    if (gapMs < TIMELINE_SPLIT_GAP_THRESHOLD_MS || !validTimelineSplit(index, sessions)) continue
+
+    const midpointDistancePenalty = Math.abs(sessions[index].startTime - midpoint) / 4
+    const score = gapMs - midpointDistancePenalty
+    if (score > bestScore) {
+      bestScore = score
+      bestIndex = index
+    }
+  }
+
+  return bestIndex
+}
+
+function fallbackTimelineSplitIndex(sessions: AppSession[]): number | null {
+  if (sessions.length < 2) return null
+
+  const targetTime = sessions[0].startTime + TIMELINE_SOFT_MAX_BLOCK_SPAN_MS
+  for (let index = 1; index < sessions.length; index++) {
+    if (sessions[index].startTime >= targetTime && validTimelineSplit(index, sessions)) {
+      return index
+    }
+  }
+
+  for (let index = Math.floor(sessions.length / 2); index < sessions.length; index++) {
+    if (validTimelineSplit(index, sessions)) return index
+  }
+  for (let index = Math.floor(sessions.length / 2) - 1; index > 0; index--) {
+    if (validTimelineSplit(index, sessions)) return index
+  }
+
+  return null
+}
+
+function normalizeTimelineCandidates(candidates: CandidateBlock[]): CandidateBlock[] {
+  return candidates.flatMap((candidate) => {
+    const spanMs = candidateSpanMs(candidate)
+    const shouldPreserveLongSpan =
+      candidate.formation === 'meeting'
+      || candidate.formation === 'longSingleApp'
+
+    if (
+      candidate.sessions.length <= 1
+      || shouldPreserveLongSpan
+      || spanMs <= TIMELINE_SOFT_MAX_BLOCK_SPAN_MS
+    ) {
+      return [candidate]
+    }
+
+    const splitIndex =
+      bestTimelineGapSplitIndex(candidate.sessions)
+      ?? (spanMs > TIMELINE_HARD_MAX_BLOCK_SPAN_MS ? fallbackTimelineSplitIndex(candidate.sessions) : null)
+      ?? fallbackTimelineSplitIndex(candidate.sessions)
+
+    if (splitIndex === null) return [candidate]
+
+    return normalizeTimelineCandidates(
+      analyzeSessions(candidate.sessions.slice(0, splitIndex), candidate.boundedBeforeGap, false)
+        .concat(analyzeSessions(candidate.sessions.slice(splitIndex), false, candidate.boundedAfterGap)),
+    )
+  })
 }
 
 function splitAndAnalyze(
@@ -531,6 +623,7 @@ function buildBlockFromCandidate(
   const lastSession = candidate.sessions[candidate.sessions.length - 1]
   const blockEnd = lastSession.endTime ?? (lastSession.startTime + lastSession.durationSeconds * 1000)
   const isLive = candidate.sessions.some((session) => session.id === -1)
+  const storedInsight = isLive ? null : getWorkContextInsightForRange(db, blockStart, blockEnd)
   // For live blocks the end time changes every poll, which would continuously invalidate
   // the renderer's insight cache. Use only startTime in the ID so the cache key stays
   // stable for the duration of the live session.
@@ -543,7 +636,7 @@ function buildBlockFromCandidate(
     dominantCategory,
     categoryDistribution: distribution,
     ruleBasedLabel: labelForCandidate(candidate, dominantCategory, distribution, coherence, switchCount),
-    aiLabel: null,
+    aiLabel: storedInsight?.label ?? null,
     sessions: candidate.sessions,
     topApps: topAppsFromSessions(candidate.sessions),
     websites,
@@ -646,6 +739,7 @@ function analyzeSessions(
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[]): WorkContextBlock[] {
   return coarseSegmentsFromSessions(sessions)
     .flatMap((segment) => analyzeSessions(segment.sessions, segment.boundedBeforeGap, segment.boundedAfterGap))
+    .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
     .map((candidate) => buildBlockFromCandidate(candidate, db))
 }
 

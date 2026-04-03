@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { getAppSummariesForRange, getSessionsForRange, getWebsiteSummariesForRange } from '../db/queries'
+import { getAppSummariesForRange, getPeakHours, getSessionsForRange, getWebsiteSummariesForRange } from '../db/queries'
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import { computeFocusScore } from '../lib/focusScore'
@@ -150,26 +150,6 @@ function buildWorkThreadAnswer(
   const focusText = focusMinutes > 0 ? `, with about ${formatDuration(evidence.focusedSeconds)} in focused apps` : ''
 
   return `${resolvedPrefix} ${taskLabel}. The latest meaningful thread was ${sessionLabel} from ${start} to ${end}${focusText}. Strongest signals: ${signals}.`
-}
-
-function buildTimeAllocationAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[], sessions: AppSession[]): string | null {
-  if (apps.length === 0 && sites.length === 0) return null
-
-  const evidence = buildEvidence(apps, sites, sessions)
-  const strongestFocus = evidence.signals.filter((signal) => FOCUSED_CATEGORIES.includes(signal.category)).slice(0, 3)
-  const strongestNonFocus = evidence.signals.filter(isNonFocusSignal).slice(0, 3)
-  const focusSeconds = evidence.focusedSeconds
-  const totalSeconds = Math.max(evidence.totalSeconds, apps.reduce((sum, app) => sum + app.totalSeconds, 0))
-  const focusPct = totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0
-
-  const parts = [
-    `Most of your time went to ${evidence.task.label.toLowerCase()}.`,
-    strongestFocus.length > 0 ? `Strongest work signals: ${formatSignalList(strongestFocus, 3)}.` : null,
-    strongestNonFocus.length > 0 ? `Other notable activity: ${formatSignalList(strongestNonFocus, 3)}.` : null,
-    totalSeconds > 0 ? `Tracked focus time was about ${focusPct}% of app time.` : null,
-  ].filter(Boolean)
-
-  return parts.join(' ')
 }
 
 function buildDistractionAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[], sessions: AppSession[]): string | null {
@@ -380,6 +360,112 @@ function isFocusedCategory(category: AppCategory): boolean {
   return FOCUSED_CATEGORIES.includes(category)
 }
 
+function formatCategoryName(category: AppCategory): string {
+  if (category === 'aiTools') return 'AI Tools'
+  return category
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (match) => match.toUpperCase())
+}
+
+function rankedCategoryBreakdown(apps: AppUsageSummary[]): Array<{ category: AppCategory; totalSeconds: number }> {
+  const categoryTotals = new Map<AppCategory, number>()
+  for (const app of apps) {
+    categoryTotals.set(app.category, (categoryTotals.get(app.category) ?? 0) + app.totalSeconds)
+  }
+  return [...categoryTotals.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([category, totalSeconds]) => ({ category, totalSeconds }))
+}
+
+function largestChangeAnswer(date: Date, db: Database.Database): string | null {
+  const [currentFrom, currentTo] = dayBounds(date)
+  const currentApps = getAppSummariesForRange(db, currentFrom, currentTo)
+  if (currentApps.length === 0) return null
+
+  const previousDate = new Date(date)
+  previousDate.setDate(previousDate.getDate() - 1)
+  const [previousFrom, previousTo] = dayBounds(previousDate)
+  const previousApps = getAppSummariesForRange(db, previousFrom, previousTo)
+
+  const baselineLabel = previousApps.length > 0 ? 'yesterday' : 'your 7-day average'
+  const currentCategoryTotals = new Map<AppCategory, number>()
+  const baselineCategoryTotals = new Map<AppCategory, number>()
+  const currentAppTotals = new Map<string, { label: string; totalSeconds: number }>()
+  const baselineAppTotals = new Map<string, { label: string; totalSeconds: number }>()
+
+  for (const app of currentApps) {
+    currentCategoryTotals.set(app.category, (currentCategoryTotals.get(app.category) ?? 0) + app.totalSeconds)
+    currentAppTotals.set(app.bundleId, { label: app.appName, totalSeconds: app.totalSeconds })
+  }
+
+  if (previousApps.length > 0) {
+    for (const app of previousApps) {
+      baselineCategoryTotals.set(app.category, (baselineCategoryTotals.get(app.category) ?? 0) + app.totalSeconds)
+      baselineAppTotals.set(app.bundleId, { label: app.appName, totalSeconds: app.totalSeconds })
+    }
+  } else {
+    for (let offset = 1; offset <= 7; offset++) {
+      const sampleDate = new Date(date)
+      sampleDate.setDate(sampleDate.getDate() - offset)
+      const [sampleFrom, sampleTo] = dayBounds(sampleDate)
+      const sampleApps = getAppSummariesForRange(db, sampleFrom, sampleTo)
+      for (const app of sampleApps) {
+        baselineCategoryTotals.set(app.category, (baselineCategoryTotals.get(app.category) ?? 0) + app.totalSeconds / 7)
+        const existing = baselineAppTotals.get(app.bundleId)
+        baselineAppTotals.set(app.bundleId, {
+          label: app.appName,
+          totalSeconds: (existing?.totalSeconds ?? 0) + (app.totalSeconds / 7),
+        })
+      }
+    }
+  }
+
+  const candidates: Array<{ label: string; currentSeconds: number; baselineSeconds: number; deltaSeconds: number }> = []
+  const collectCandidate = (label: string, currentSeconds: number, baselineSeconds: number) => {
+    const deltaSeconds = currentSeconds - baselineSeconds
+    if (deltaSeconds === 0) return
+    candidates.push({ label, currentSeconds, baselineSeconds, deltaSeconds })
+  }
+
+  for (const category of new Set([...currentCategoryTotals.keys(), ...baselineCategoryTotals.keys()])) {
+    collectCandidate(
+      formatCategoryName(category),
+      currentCategoryTotals.get(category) ?? 0,
+      Math.round(baselineCategoryTotals.get(category) ?? 0),
+    )
+  }
+
+  for (const bundleId of new Set([...currentAppTotals.keys(), ...baselineAppTotals.keys()])) {
+    collectCandidate(
+      currentAppTotals.get(bundleId)?.label ?? baselineAppTotals.get(bundleId)?.label ?? bundleId,
+      currentAppTotals.get(bundleId)?.totalSeconds ?? 0,
+      Math.round(baselineAppTotals.get(bundleId)?.totalSeconds ?? 0),
+    )
+  }
+
+  const bestChange = candidates.sort((left, right) => Math.abs(right.deltaSeconds) - Math.abs(left.deltaSeconds))[0] ?? null
+  if (!bestChange) return null
+
+  const direction = bestChange.deltaSeconds > 0 ? 'up' : 'down'
+  return `Biggest change: ${bestChange.label}, ${direction} ${formatDuration(Math.abs(bestChange.deltaSeconds))} vs ${baselineLabel} (current ${formatDuration(bestChange.currentSeconds)}, baseline ${formatDuration(bestChange.baselineSeconds)}).`
+}
+
+function peakFocusWindowAnswer(date: Date, db: Database.Database): string | null {
+  const [, dayEnd] = dayBounds(date)
+  const peakHours = getPeakHours(db, dayEnd - 14 * 86_400_000, dayEnd)
+  if (!peakHours) return "I need at least a few days of tracked activity before I can estimate your peak focus window."
+  return `Peak focus window: ${formatTime(new Date(date.getFullYear(), date.getMonth(), date.getDate(), peakHours.peakStart, 0, 0, 0).getTime())}-${formatTime(new Date(date.getFullYear(), date.getMonth(), date.getDate(), peakHours.peakEnd, 0, 0, 0).getTime())} (${peakHours.focusPct}% focus).`
+}
+
+function rankedTimeAllocationAnswer(apps: AppUsageSummary[]): string | null {
+  const ranked = rankedCategoryBreakdown(apps)
+  if (ranked.length === 0) return null
+  return [
+    'Category breakdown:',
+    ...ranked.map((item, index) => `${index + 1}. ${formatCategoryName(item.category)} — ${formatDuration(item.totalSeconds)}`),
+  ].join('\n')
+}
+
 function dailyTopCategoryAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[]): string | null {
   if (apps.length === 0 && sites.length === 0) return null
   const evidence = buildEvidence(apps, sites, [])
@@ -522,6 +608,21 @@ export async function routeInsightsQuestion(
   const sites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const sessions = getSessionsForRange(db, fromMs, toMs)
 
+  if (normalized.includes('what changed most') || normalized.includes('what time changed most')) {
+    const answer = largestChangeAnswer(resolvedContext.date, db)
+    return answer ? { answer, resolvedContext } : null
+  }
+
+  if (normalized.includes('when was i most focused')) {
+    const answer = peakFocusWindowAnswer(resolvedContext.date, db)
+    return answer ? { answer, resolvedContext } : null
+  }
+
+  if (normalized.includes('where did my time go') || normalized.includes('where did the time go')) {
+    const answer = rankedTimeAllocationAnswer(apps)
+    return answer ? { answer, resolvedContext } : null
+  }
+
   if (normalized.includes('what distracted me') || normalized.includes('biggest distraction')) {
     const answer = buildDistractionAnswer(apps, sites, sessions)
     return answer ? { answer, resolvedContext } : null
@@ -566,11 +667,6 @@ export async function routeInsightsQuestion(
       answer: `${topSite.domain} was your top site at ${formatDuration(topSite.totalSeconds)}.`,
       resolvedContext,
     }
-  }
-
-  if (normalized.includes('where did my time go') || normalized.includes('where did the time go')) {
-    const answer = buildTimeAllocationAnswer(apps, sites, sessions)
-    return answer ? { answer, resolvedContext } : null
   }
 
   if (normalized.includes('how much time') || normalized.includes('how long')) {

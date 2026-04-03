@@ -142,6 +142,7 @@ function PillToggle({ checked, onChange }: { checked: boolean; onChange: (v: boo
 
 export default function Settings() {
   const navigate = useNavigate()
+  const [isCompactLayout, setIsCompactLayout] = useState(() => window.innerWidth < 1120)
   const [settings, setSettings] = useState<AppSettings>({
     analyticsOptIn: false,
     launchOnLogin: true,
@@ -210,6 +211,12 @@ export default function Settings() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [linking])
+
+  useEffect(() => {
+    const onResize = () => setIsCompactLayout(window.innerWidth < 1120)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   function flashSaved(message: string) {
     setSaved(message)
@@ -458,7 +465,6 @@ export default function Settings() {
     borderRadius: 14,
     border: '1px solid var(--color-border-ghost)',
     padding: '4px 0',
-    marginBottom: 4,
   }
 
   return (
@@ -466,7 +472,7 @@ export default function Settings() {
       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
 
         {/* ── PAGE HEADER ─────────────────────────────────────────────── */}
-        <div style={{ marginBottom: 32 }}>
+        <div style={{ marginBottom: 28 }}>
           <h1 style={{
             fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)',
             margin: 0, letterSpacing: '-0.02em', lineHeight: 1,
@@ -481,7 +487,7 @@ export default function Settings() {
         {/* Update banner */}
         {updater && ['checking', 'downloading', 'downloaded', 'error', 'installing'].includes(updater.status) && (
           <div style={{
-            borderRadius: 12, padding: '12px 18px', marginBottom: 24,
+            borderRadius: 12, padding: '12px 18px', marginBottom: 28,
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             background: 'rgba(173,198,255,0.08)', border: '1px solid rgba(173,198,255,0.15)',
             gap: 12,
@@ -529,7 +535,7 @@ export default function Settings() {
         )}
 
         {/* ── 12-COL GRID ─────────────────────────────────────────────── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 32, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isCompactLayout ? '1fr' : '7fr 5fr', gap: 28, alignItems: 'start' }}>
 
           {/* ════════════════════════════════════════════════════════════
               LEFT COLUMN  (7 / 12)
@@ -588,7 +594,7 @@ export default function Settings() {
               {/* Icon box row helper */}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 12,
-                minHeight: 52, padding: '0 16px', borderRadius: 10,
+                minHeight: 48, padding: '0 16px', borderRadius: 10,
               }}>
                 <div style={{
                   width: 40, height: 40, borderRadius: 10, flexShrink: 0,
@@ -604,9 +610,6 @@ export default function Settings() {
                   <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>
                     Automatic App Tracking
                   </p>
-                  <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '2px 0 0' }}>
-                    Always active — tracks foreground app in real-time
-                  </p>
                 </div>
                 <span style={{
                   fontSize: 10, fontWeight: 900, padding: '3px 10px', borderRadius: 999,
@@ -621,7 +624,7 @@ export default function Settings() {
 
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 12,
-                minHeight: 52, padding: '0 16px', borderRadius: 10,
+                minHeight: 48, padding: '0 16px', borderRadius: 10,
               }}>
                 <div style={{
                   width: 40, height: 40, borderRadius: 10, flexShrink: 0,
@@ -637,9 +640,6 @@ export default function Settings() {
                 <div style={{ flex: 1 }}>
                   <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text-primary)', margin: 0 }}>
                     Work Hours
-                  </p>
-                  <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '2px 0 0' }}>
-                    Define active hours
                   </p>
                 </div>
                 <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Not set</span>
@@ -658,9 +658,6 @@ export default function Settings() {
                   <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
                     No overrides yet
                   </p>
-                  <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '3px 0 0' }}>
-                    Manual category mappings will show up here after you add one.
-                  </p>
                 </div>
                 <button
                   onClick={openAppMapping}
@@ -673,13 +670,6 @@ export default function Settings() {
                   Bulk Edit
                 </button>
               </div>
-
-              <p style={{
-                fontSize: 12, color: 'var(--color-text-secondary)', margin: 0,
-                padding: '4px 16px 12px',
-              }}>
-                Reclassify an app once and Daylens will keep using that decision.
-              </p>
 
               {/* Map New Application — cosmetic dashed button */}
               <div style={{ padding: '0 16px 16px' }}>
@@ -714,9 +704,6 @@ export default function Settings() {
                     <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
                       Add your first override
                     </p>
-                    <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '3px 0 0' }}>
-                      Manual category mappings will show up here once you create one.
-                    </p>
                   </div>
                   <button
                     onClick={openAppMapping}
@@ -743,7 +730,6 @@ export default function Settings() {
             <div style={cardStyle}>
               <SettingsRow
                 label="Alert me when I'm distracted"
-                sublabel="Get a notification when you've been on a non-focus app for too long."
                 control={
                   <PillToggle
                     checked={settings.distractionAlertsEnabled ?? true}
@@ -791,7 +777,6 @@ export default function Settings() {
             <div style={cardStyle}>
               <SettingsRow
                 label="Daily recap at 6pm"
-                sublabel="A nudge to check where your day went."
                 control={
                   <PillToggle
                     checked={settings.dailySummaryEnabled ?? true}
@@ -806,7 +791,7 @@ export default function Settings() {
               <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
               <SettingsRow
                 label="Morning focus nudge"
-                sublabel="A 9am reminder to set your focus goal — skipped if you've already started a session."
+                sublabel="Sent at 9am if you haven't started a session yet."
                 control={
                   <PillToggle
                     checked={settings.morningNudgeEnabled ?? true}
@@ -833,7 +818,6 @@ export default function Settings() {
               {/* Dark mode — uses PillToggle, wired to theme dark/system */}
               <SettingsRow
                 label="Dark Mode"
-                sublabel="Follow system or force dark"
                 control={
                   <PillToggle
                     checked={settings.theme === 'dark'}
@@ -1136,7 +1120,6 @@ export default function Settings() {
               {/* Focus goal */}
               <SettingsRow
                 label="Focus Goal"
-                sublabel="Shown as a progress bar on the Dashboard"
                 control={
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <input
@@ -1171,7 +1154,6 @@ export default function Settings() {
               {/* Launch on login */}
               <SettingsRow
                 label="Launch on Login"
-                sublabel="Start Daylens automatically when you sign in"
                 control={
                   <PillToggle
                     checked={settings.launchOnLogin}
@@ -1183,17 +1165,6 @@ export default function Settings() {
                   />
                 }
               />
-
-              <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
-
-              {/* Focus Assist — coming soon on Windows */}
-              <div style={{ opacity: 0.4, pointerEvents: 'none' }}>
-                <SettingsRow
-                  label="Enable Focus Assist when session starts"
-                  sublabel="Coming soon on Windows."
-                  control={<PillToggle checked={false} onChange={() => {}} />}
-                />
-              </div>
             </div>
 
             {/* ── SECURITY & SOVEREIGNTY ──────────────────────────── */}
@@ -1203,7 +1174,6 @@ export default function Settings() {
               {/* Data stored locally */}
               <SettingsRow
                 label="Data stored locally"
-                sublabel="All activity data is kept on your device"
                 control={
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--color-text-tertiary)" strokeWidth="1.4">
@@ -1611,3 +1581,5 @@ function DebugRow({ label, value, error }: { label: string; value: string; error
     </div>
   )
 }
+
+

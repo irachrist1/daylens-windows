@@ -63,6 +63,7 @@ const api = {
     stop: (id: number) => ipcRenderer.invoke(IPC.FOCUS.STOP, id),
     getActive: () => ipcRenderer.invoke(IPC.FOCUS.GET_ACTIVE),
     getRecent: (limit?: number) => ipcRenderer.invoke(IPC.FOCUS.GET_RECENT, limit),
+    getByDateRange: (payload: { fromMs: number; toMs: number }) => ipcRenderer.invoke(IPC.FOCUS.GET_BY_DATE_RANGE, payload),
     saveReflection: (payload: { sessionId: number; note: string }) => ipcRenderer.invoke(IPC.FOCUS.SAVE_REFLECTION, payload),
     getDistractionCount: (payload: { sessionId: number }) => ipcRenderer.invoke(IPC.FOCUS.GET_DISTRACTION_COUNT, payload),
     getBreakRecommendation: (): Promise<BreakRecommendation | null> =>

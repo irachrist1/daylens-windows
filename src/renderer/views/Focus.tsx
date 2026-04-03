@@ -1,13 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
-import { dateStringFromMs, formatDuration, formatRelativeDate, percentOf, rollingDayBounds, todayString } from '../lib/format'
+import { dateStringFromMs, dayBounds, formatDuration, formatRelativeDate, formatTime, percentOf, rollingDayBounds, todayString } from '../lib/format'
 import type { AppSession, AppUsageSummary, FocusSession, LiveSession, PeakHoursResult } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import { buildAppBundleLookup, formatDisplayAppName, resolveBundleIdForName } from '../lib/apps'
 
 const TARGET_PRESETS = [25, 50, 90]
+
+function shiftDateString(dateStr: string, days: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const next = new Date(year, month - 1, day + days)
+  return dateStringFromMs(next.getTime())
+}
+
+function recentFocusDateOptions(sessions: FocusSession[]): string[] {
+  const sessionDates = new Set(sessions.map((session) => dateStringFromMs(session.startTime)))
+  return Array.from({ length: 7 }, (_, index) => shiftDateString(todayString(), -index))
+    .filter((dateStr) => sessionDates.has(dateStr))
+}
 
 function mergeLiveSummary(
   summaries: AppUsageSummary[],
@@ -186,6 +198,9 @@ export default function Focus() {
   const [todaySessions, setTodaySessions] = useState<AppSession[]>([])
   const [live, setLive] = useState<LiveSession | null>(null)
   const [recentSessions, setRecentSessions] = useState<FocusSession[]>([])
+  const [recentSessionDates, setRecentSessionDates] = useState<string[]>([])
+  const [selectedRecentDate, setSelectedRecentDate] = useState(todayString())
+  const [selectedRecentSessions, setSelectedRecentSessions] = useState<FocusSession[]>([])
   const [peakHours, setPeakHours] = useState<PeakHoursResult | null>(null)
   const [distractionThreshold, setDistractionThreshold] = useState(10)
 
@@ -207,10 +222,14 @@ export default function Focus() {
     async function refresh() {
       if (document.hidden) return
       try {
-        const [activeSession, summaries, recent, liveSession, peak, daySessions] = await Promise.all([
+        const oldestRecentDate = shiftDateString(todayString(), -6)
+        const [recentFromMs] = dayBounds(oldestRecentDate)
+        const [, recentToMs] = dayBounds(todayString())
+        const [activeSession, summaries, recent, recentWindowSessions, liveSession, peak, daySessions] = await Promise.all([
           ipc.focus.getActive(),
           ipc.db.getToday(),
-          ipc.focus.getRecent(10),
+          ipc.focus.getRecent(50),
+          ipc.focus.getByDateRange({ fromMs: recentFromMs, toMs: recentToMs }),
           ipc.tracking.getLiveSession(),
           ipc.db.getPeakHours().catch(() => null),
           ipc.db.getHistory(todayString()),
@@ -219,6 +238,12 @@ export default function Focus() {
         setActive((activeSession as FocusSession | null) ?? null)
         setTodaySummaries(summaries as AppUsageSummary[])
         setRecentSessions(recent as FocusSession[])
+        const chipDates = recentFocusDateOptions(recentWindowSessions as FocusSession[])
+        setRecentSessionDates(chipDates)
+        setSelectedRecentDate((current) => {
+          if (chipDates.includes(current)) return current
+          return chipDates.includes(todayString()) ? todayString() : (chipDates[0] ?? todayString())
+        })
         setLive((liveSession as LiveSession | null) ?? null)
         setPeakHours((peak as PeakHoursResult | null) ?? null)
         setTodaySessions(daySessions as AppSession[])
@@ -245,6 +270,25 @@ export default function Focus() {
       if (timerRef.current) clearInterval(timerRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const [fromMs, toMs] = dayBounds(selectedRecentDate)
+
+    void ipc.focus.getByDateRange({ fromMs, toMs }).then((sessions) => {
+      if (!cancelled) {
+        setSelectedRecentSessions(sessions as FocusSession[])
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setSelectedRecentSessions([])
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedRecentDate])
 
   useEffect(() => {
     if (!active) {
@@ -281,20 +325,31 @@ export default function Focus() {
     if (!active) return
     const completedDuration = elapsed
     const sessionId = active.id
+    const stoppedDate = dateStringFromMs(active.startTime)
+    const oldestRecentDate = shiftDateString(todayString(), -6)
+    const [recentFromMs] = dayBounds(oldestRecentDate)
+    const [, recentToMs] = dayBounds(todayString())
+    const [selectedFromMs, selectedToMs] = dayBounds(stoppedDate)
     track('focus_session_ended', {
       duration_seconds: completedDuration,
       target_minutes: active.targetMinutes ?? null,
       completed: true,
     })
     await ipc.focus.stop(active.id)
-    const [updatedRecent, updatedSummaries, updatedLive, updatedSessions, distractionCount] = await Promise.all([
-      ipc.focus.getRecent(10),
+    const [updatedRecent, recentWindowSessions, selectedDaySessions, updatedSummaries, updatedLive, updatedSessions, distractionCount] = await Promise.all([
+      ipc.focus.getRecent(50),
+      ipc.focus.getByDateRange({ fromMs: recentFromMs, toMs: recentToMs }),
+      ipc.focus.getByDateRange({ fromMs: selectedFromMs, toMs: selectedToMs }),
       ipc.db.getToday(),
       ipc.tracking.getLiveSession(),
       ipc.db.getHistory(todayString()),
       ipc.focus.getDistractionCount({ sessionId }).catch(() => 0),
     ])
     setRecentSessions(updatedRecent as FocusSession[])
+    const chipDates = recentFocusDateOptions(recentWindowSessions as FocusSession[])
+    setRecentSessionDates(chipDates)
+    setSelectedRecentDate(chipDates.includes(todayString()) ? todayString() : (chipDates[0] ?? stoppedDate))
+    setSelectedRecentSessions(selectedDaySessions as FocusSession[])
     setTodaySummaries(updatedSummaries as AppUsageSummary[])
     setLive(updatedLive as LiveSession | null)
     setTodaySessions(updatedSessions as AppSession[])
@@ -641,9 +696,10 @@ export default function Focus() {
                         return (
                           <button
                             key={preset}
-                            onClick={() => {
+                            onClick={async () => {
                               setTargetMinutes(preset)
-                              void ipc.settings.set({ defaultFocusMinutes: preset })
+                              await ipc.settings.set({ defaultFocusMinutes: preset })
+                              window.dispatchEvent(new CustomEvent('daylens:settings-changed'))
                             }}
                             style={{
                               minWidth: 88,
@@ -806,64 +862,82 @@ export default function Focus() {
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
                 <span className="section-label" style={{ color: 'var(--color-text-secondary)' }}>
-                  Recent Sessions
+                  Recent Focus Sessions
                 </span>
                 {streak > 0 && <GlassBadge>{streak} day streak</GlassBadge>}
               </div>
 
-              {recentSessions.length === 0 ? (
+              {recentSessionDates.length === 0 ? (
                 <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: 0 }}>
                   No focus sessions yet. Start one above.
                 </p>
               ) : (
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  border: '1px solid var(--color-border-ghost)',
-                  borderRadius: 10,
-                  overflow: 'hidden',
-                  background: 'var(--color-surface-low)',
-                }}>
-                  {recentSessions.map((session) => {
-                    const dateLabel = session.startTime ? formatRelativeDate(dateStringFromMs(session.startTime)) : ''
-                    const tooShort = session.durationSeconds < 120
-                    const isLast = recentSessions[recentSessions.length - 1]?.id === session.id
-                    return (
-                      <div
-                        key={session.id}
-                        style={{
-                          padding: 14,
-                          borderBottom: isLast ? 'none' : '1px solid var(--color-border-ghost)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 8,
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: '50%',
-                            background: tooShort ? '#ffb95f' : 'var(--color-tertiary)',
+                <>
+                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4, marginBottom: 14 }}>
+                    {recentSessionDates.map((dateStr) => {
+                      const activeDate = selectedRecentDate === dateStr
+                      return (
+                        <button
+                          key={dateStr}
+                          onClick={() => setSelectedRecentDate(dateStr)}
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: 999,
+                            border: activeDate ? '1px solid rgba(173,198,255,0.22)' : '1px solid var(--color-border-ghost)',
+                            cursor: 'pointer',
+                            fontSize: 11,
+                            fontWeight: 800,
+                            background: activeDate ? 'var(--gradient-primary)' : 'var(--color-surface-low)',
+                            color: activeDate ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                            whiteSpace: 'nowrap',
                             flexShrink: 0,
-                          }} />
-                          <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                            {session.label || 'Focus session'}
-                          </span>
-                          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
-                            {dateLabel}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                          <GlassBadge>{formatDuration(session.durationSeconds)}</GlassBadge>
-                          {session.targetMinutes && <GlassBadge>{session.targetMinutes}m target</GlassBadge>}
-                          {session.plannedApps.length > 0 && <GlassBadge>{session.plannedApps.slice(0, 2).join(' + ')}</GlassBadge>}
-                          {tooShort && <GlassBadge>Too short</GlassBadge>}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                          }}
+                        >
+                          {formatRelativeDate(dateStr)}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {selectedRecentSessions.length === 0 ? (
+                    <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: 0 }}>
+                      No sessions on this day.
+                    </p>
+                  ) : (
+                    <div style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      border: '1px solid var(--color-border-ghost)',
+                      borderRadius: 10,
+                      overflow: 'hidden',
+                      background: 'var(--color-surface-low)',
+                    }}>
+                      {selectedRecentSessions.map((session, index) => {
+                        const isLast = index === selectedRecentSessions.length - 1
+                        return (
+                          <div
+                            key={session.id}
+                            style={{
+                              padding: 14,
+                              borderBottom: isLast ? 'none' : '1px solid var(--color-border-ghost)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 12,
+                            }}
+                          >
+                            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums', minWidth: 64 }}>
+                              {formatTime(session.startTime)}
+                            </span>
+                            <GlassBadge>{formatDuration(session.durationSeconds)}</GlassBadge>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {session.label || 'Focus session'}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

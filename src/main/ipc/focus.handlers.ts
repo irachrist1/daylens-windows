@@ -4,6 +4,7 @@ import type { FocusStartPayload } from '@shared/types'
 import {
   getActiveFocusSession,
   getDistractionCountForSession,
+  getFocusSessionsForDateRange,
   getRecentFocusSessions,
   saveFocusReflection,
   getSessionsForRange,
@@ -31,6 +32,10 @@ export function registerFocusHandlers(): void {
 
   ipcMain.handle(IPC.FOCUS.GET_RECENT, (_e, limit: number = 20) => {
     return getRecentFocusSessions(getDb(), limit)
+  })
+
+  ipcMain.handle(IPC.FOCUS.GET_BY_DATE_RANGE, (_e, payload: { fromMs: number; toMs: number }) => {
+    return getFocusSessionsForDateRange(getDb(), payload.fromMs, payload.toMs)
   })
 
   ipcMain.handle(IPC.FOCUS.SAVE_REFLECTION, (_e, payload: { sessionId: number; note: string }) => {

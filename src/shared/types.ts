@@ -251,6 +251,7 @@ export const IPC = {
     STOP: 'focus:stop',
     GET_ACTIVE: 'focus:get-active',
     GET_RECENT: 'focus:get-recent',
+    GET_BY_DATE_RANGE: 'focus:get-by-date-range',
     GET_BREAK_RECOMMENDATION: 'focus:get-break-recommendation',
     SAVE_REFLECTION: 'focus:save-reflection',
     GET_DISTRACTION_COUNT: 'focus:get-distraction-count',

@@ -13,6 +13,7 @@ import type {
   PeakHoursResult,
   WeeklySummary,
   WebsiteSummary,
+  WorkContextInsight,
 } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
 import { localDayBounds } from '../lib/localDate'
@@ -52,6 +53,7 @@ function resolveDisplayName(bundleId: string, fallbackName: string): string {
 const UX_NOISE_SUBSTRINGS = [
   'electron',   // Electron shell (dev mode) and helper processes
   'daylens',    // This app tracking itself in production
+  'activity tracker and ai insights', // Older app shell title / product description
   'cmux',       // tmux manager shim
   'node.js',    // Node.js runtime windows
 ]
@@ -904,4 +906,90 @@ export function getRecentFocusSessions(
     `)
     .all(limit) as FocusSessionRow[]
   return rows.map(mapFocusSessionRow)
+}
+
+export function getFocusSessionsForDateRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): FocusSession[] {
+  const rows = db
+    .prepare<[number, number]>(`
+      SELECT * FROM focus_sessions
+      WHERE end_time IS NOT NULL AND start_time >= ? AND start_time < ?
+      ORDER BY start_time DESC
+    `)
+    .all(fromMs, toMs) as FocusSessionRow[]
+  return rows.map(mapFocusSessionRow)
+}
+
+function parseStoredWorkContextObservation(raw: string | null | undefined): WorkContextInsight | null {
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      kind?: unknown
+      label?: unknown
+      narrative?: unknown
+    }
+    if (parsed.kind !== 'blockInsight') return null
+
+    const label = typeof parsed.label === 'string' ? parsed.label.trim() : null
+    const narrative = typeof parsed.narrative === 'string' ? parsed.narrative.trim() : null
+    if (!label && !narrative) return null
+
+    return { label, narrative }
+  } catch {
+    return null
+  }
+}
+
+export function getWorkContextInsightForRange(
+  db: Database.Database,
+  startMs: number,
+  endMs: number,
+): WorkContextInsight | null {
+  const row = db
+    .prepare<[number, number]>(`
+      SELECT observation
+      FROM work_context_observations
+      WHERE start_ts = ? AND end_ts = ?
+      LIMIT 1
+    `)
+    .get(startMs, endMs) as { observation: string } | undefined
+
+  return parseStoredWorkContextObservation(row?.observation)
+}
+
+export function upsertWorkContextInsight(
+  db: Database.Database,
+  payload: {
+    startMs: number
+    endMs: number
+    insight: WorkContextInsight
+    sourceBlockIds?: string[]
+  },
+): void {
+  const label = payload.insight.label?.trim() || null
+  const narrative = payload.insight.narrative?.trim() || null
+  if (!label && !narrative) return
+
+  const observation = JSON.stringify({
+    kind: 'blockInsight',
+    label,
+    narrative,
+  })
+
+  db.prepare(`
+    INSERT INTO work_context_observations (start_ts, end_ts, observation, source_block_ids)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(start_ts, end_ts) DO UPDATE SET
+      observation = excluded.observation,
+      source_block_ids = excluded.source_block_ids
+  `).run(
+    payload.startMs,
+    payload.endMs,
+    observation,
+    JSON.stringify(payload.sourceBlockIds ?? []),
+  )
 }
