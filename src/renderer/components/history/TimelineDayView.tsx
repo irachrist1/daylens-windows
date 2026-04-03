@@ -9,7 +9,7 @@ import type {
   WorkContextInsight,
 } from '@shared/types'
 
-const HOUR_HEIGHT = 76
+const HOUR_HEIGHT = 120
 const TIME_AXIS_WIDTH = 56
 const RANGE_PADDING_MS = 30 * 60_000
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
@@ -360,14 +360,24 @@ export default function TimelineDayView({
 
   const popoverStyle = selectedRect
     ? (() => {
-        const width = 352
+        const width = Math.min(352, window.innerWidth - 32)
         const spaceLeft = selectedRect.left
         const placeLeft = spaceLeft >= width + 24
         const left = placeLeft
-          ? Math.max(16, selectedRect.left - width - 12)
-          : Math.min(window.innerWidth - width - 16, selectedRect.right + 12)
-        const top = Math.max(16, Math.min(window.innerHeight - 420, selectedRect.top + 12))
-        return { left, top, width }
+          ? Math.max(8, selectedRect.left - width - 12)
+          : Math.max(8, Math.min(window.innerWidth - width - 8, selectedRect.right + 12))
+        const maxHeight = window.innerHeight - 32
+        // prefer below the block; if there's not enough room, flip above
+        const spaceBelow = window.innerHeight - selectedRect.bottom - 16
+        const spaceAbove = selectedRect.top - 16
+        let top: number
+        if (spaceBelow >= 180 || spaceBelow >= spaceAbove) {
+          top = Math.min(selectedRect.bottom + 8, window.innerHeight - maxHeight - 8)
+        } else {
+          top = Math.max(8, selectedRect.top - Math.min(maxHeight, 460) - 8)
+        }
+        top = Math.max(8, top)
+        return { left, top, width, maxHeight }
       })()
     : null
 
@@ -592,6 +602,8 @@ export default function TimelineDayView({
             left: popoverStyle.left,
             top: popoverStyle.top,
             width: popoverStyle.width,
+            maxHeight: popoverStyle.maxHeight,
+            overflowY: 'auto',
             background: 'var(--color-surface-card)',
             border: '1px solid var(--color-border-ghost)',
             borderRadius: 18,

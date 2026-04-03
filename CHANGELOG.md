@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.20 - 2026-04-03
+
+### Fixed
+- History timeline blocks now render at correct proportional heights — the hour height was increased from 76 px to 120 px so the visual difference between a 30-minute and a 40-minute block is clearly legible, and a 1h 35m block no longer looks the same as a short session
+- Timeline popover (block detail / re-analyze) is now fully visible on smaller windows: it is capped to the available viewport height with overflow scroll, correctly flips above or below the selected block depending on available space, and the width shrinks to fit narrow windows so the re-analyze button is never clipped off-screen
+
 ## v1.0.19 - 2026-04-03
 
 ### Fixed
