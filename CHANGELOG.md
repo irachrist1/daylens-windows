@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.0.24 - 2026-04-07
+
+### Added
+- Entity identity routing: "who is ASYV?", "what do I do for Acme Corp?", "tell me about X" now return a grounded answer inferred from window titles, categories, and time patterns — no AI provider required
+- Client listing routing: "list all my clients today", "who are my clients?", "how much time per client?", "export clientele list" now extract named entities from session titles and rank by tracked time
+- Comparison routing: "ASYV vs Acme Corp today" and "compare X versus Y" return a side-by-side time breakdown from local evidence
+- Day summary routing: "summarize my day", "how was my day?", "give me a summary", "recap my day", "what happened today?" now return a full narrative — top apps, named entities, focus %, last active thread
+- "App breakdown today" and related phrases now correctly route to the app breakdown answer
+
+### Fixed
+- Work-thread answers ("what was I working on today?") no longer falsely trigger "light evidence" on normal mixed days — the lowCoverage threshold was firing when no single category dominated even with hours of data
+- Signal double-counting eliminated: buildWorkThreadAnswer, buildDistractionAnswer, buildFocusScoreAnswer, buildTimeAllocationAnswer, and buildTimelineSummary no longer pass both app summaries and individual sessions to the evidence engine, which was doubling every app's second count and corrupting confidence scores
+- Distraction answers no longer repeat the primary source in the "other signals" list
+- Focus score routing runs before entity extraction so "what is my focus score?" is not misidentified as an entity identity question
+- App breakdown now matches "break down my apps today" and similar phrasings
+
 ## v1.0.23 - 2026-04-06
 
 ### Added

@@ -719,6 +719,11 @@ function extractEntity(question: string): string | null {
     /\b(?:hours\s+(?:on|for|with|in)\s+)(.+)$/i,
     /\b(?:related to|about)\s+(.+)$/i,
     /\b(?:break\s+down)\s+(.+?)(?:\s+(?:this week|that week|last week|past week|today|yesterday|last \d+ days?|past \d+ days?))*\s*\??$/i,
+    // Identity patterns — "who is X", "what is X", "tell me about X", "what do I do for X"
+    /\b(?:who|what)\s+is\s+(.+?)(?:\s+(?:today|this week|yesterday))?\s*\??$/i,
+    /\b(?:tell\s+me\s+about|describe)\s+(.+?)(?:\s+(?:today|this week|yesterday))?\s*\??$/i,
+    /\b(?:what\s+do\s+i\s+(?:do|work)\s+(?:for|on))\s+(.+?)(?:\s+(?:today|this week|yesterday))?\s*\??$/i,
+    /\b(?:what\s+project\s+(?:am\s+i\s+building|do\s+i\s+have)\s+(?:for|on))\s+(.+?)(?:\s+(?:today|this week|yesterday))?\s*\??$/i,
   ]
 
   for (const pattern of patterns) {
@@ -1060,8 +1065,10 @@ function isTitleMatchQuestion(normalized: string): boolean {
 
 function isAppBreakdownQuestion(normalized: string): boolean {
   return normalized.includes('by app')
-    || /\bbreak\b.*\bdown\b.*\bapp\b/.test(normalized)
-    || /\bapp\b.*\bbreak\b.*\bdown\b/.test(normalized)
+    || /\bbreak\b.*\bdown\b.*\bapps?\b/.test(normalized)
+    || /\bapps?\b.*\bbreak\b.*\bdown\b/.test(normalized)
+    || /\bapp\s+breakdown\b/.test(normalized)
+    || /\bbreakdown\b.*\bapp\b/.test(normalized)
 }
 
 function buildEntityAppBreakdown(
@@ -1299,46 +1306,82 @@ function buildWorkThreadAnswer(
 ): string | null {
   if (apps.length === 0 && sites.length === 0 && sessions.length === 0) return null
 
-  const evidence = buildEvidence(apps, sites, sessions)
-  const fallbackLatest = sortedSessions(sessions).at(-1) ?? null
-  const latest = (resolvedPrefix === 'Resume'
+  const meaningfulSessions = sessions.filter(isMeaningfulSession)
+  const totalSeconds = apps.reduce((sum, app) => sum + app.totalSeconds, 0)
+  if (totalSeconds === 0 && meaningfulSessions.length === 0) return null
+
+  // Use apps only for evidence — sessions are already aggregated into apps, passing both doubles counts
+  const evidence = buildEvidence(apps, sites, [])
+
+  const latestActive = (resolvedPrefix === 'Resume'
     ? latestFocusedSession(sessions) ?? latestMeaningfulSession(sessions)
     : latestMeaningfulSession(sessions))
-    ?? fallbackLatest
-  const signals = formatSignalList(evidence.signals, 3)
-  const focusMinutes = Math.round(evidence.focusedSeconds / 60)
-  const taskLabel = evidence.task.label.toLowerCase()
-  const latestTitledSession = [...sortedSessions(sessions)]
-    .reverse()
-    .find((session) => session.windowTitle?.trim())
-  const latestTitle = latestTitledSession?.windowTitle?.trim()
-  const titledSessionCount = sessions.filter((session) => session.windowTitle?.trim()).length
-  const lowCoverage = evidence.totalSeconds < 5 * 60
-    || evidence.task.category === 'browsing'
-    || evidence.task.confidence < 0.45
-    || titledSessionCount <= 1
+    ?? sortedSessions(sessions).at(-1) ?? null
 
-  if (!latest) {
-    return `${resolvedPrefix} ${taskLabel}. The clearest signals were ${signals}.`
+  // Build per-app title map from individual sessions (not summaries — sessions carry window titles)
+  const appTitleMap = new Map<string, string[]>()
+  for (const session of [...sortedSessions(meaningfulSessions)].reverse()) {
+    const title = session.windowTitle?.trim()
+    if (!title) continue
+    const cleaned = stripKnownAppSuffixes(title)
+    if (!cleaned || cleaned.length < 3) continue
+    const existing = appTitleMap.get(session.bundleId) ?? []
+    if (!existing.includes(cleaned) && existing.length < 2) existing.push(cleaned)
+    appTitleMap.set(session.bundleId, existing)
   }
 
-  const end = formatTime(sessionEnd(latest))
-  const start = formatTime(latest.startTime)
-  const sessionLabel = latest.appName
-  const focusText = focusMinutes > 0 ? `, with about ${formatDuration(evidence.focusedSeconds)} in focused apps` : ''
+  // Meaningful apps with at least 1 minute
+  const visibleApps = apps.filter((app) => app.totalSeconds >= 60).slice(0, 5)
 
-  if (lowCoverage) {
-    const concreteLead = latestTitle
-      ? `The clearest concrete signal is ${latestTitledSession!.appName} on "${stripKnownAppSuffixes(latestTitle)}" around ${formatTime(latestTitledSession!.startTime)}.`
-      : `The clearest concrete signal is ${sessionLabel} from ${start} to ${end}.`
+  const appLines = visibleApps.map((app) => {
+    const titles = appTitleMap.get(app.bundleId) ?? []
+    const titleSuffix = titles.length > 0 ? ` — ${humanQuotedList(titles, 2)}` : ''
+    return `${app.appName} (${formatDuration(app.totalSeconds)})${titleSuffix}`
+  })
+
+  const latestLine = latestActive
+    ? (() => {
+        const t = latestActive.windowTitle?.trim()
+        const tDisplay = t ? ` on "${stripKnownAppSuffixes(t)}"` : ''
+        return `Last active: ${latestActive.appName}${tDisplay} at ${formatTime(latestActive.startTime)}.`
+      })()
+    : null
+
+  if (resolvedPrefix === 'Resume' && latestActive) {
+    const t = latestActive.windowTitle?.trim()
+    const tDisplay = t ? ` — "${stripKnownAppSuffixes(t)}"` : ''
+    const otherLines = appLines.filter((_, i) => visibleApps[i]?.bundleId !== latestActive.bundleId).slice(0, 3)
     return [
-      'I only have light evidence for that period so far, so I would not over-interpret it.',
-      concreteLead,
-      `Beyond that, the strongest signals are ${signals}.`,
-    ].join(' ')
+      `Resume with ${latestActive.appName}${tDisplay} (left off at ${formatTime(latestActive.startTime)}).`,
+      otherLines.length > 0 ? `Before that: ${otherLines.join(', ')}.` : null,
+    ].filter(Boolean).join(' ')
   }
 
-  return `${resolvedPrefix} ${taskLabel}. The latest meaningful thread was ${sessionLabel} from ${start} to ${end}${focusText}. Strongest signals: ${signals}.`
+  // Only use "light evidence" when genuinely insufficient — not just because the day is mixed
+  const titledSessionCount = sessions.filter((session) => session.windowTitle?.trim()).length
+  const genuinelyThinData = totalSeconds < 5 * 60 || (titledSessionCount === 0 && visibleApps.length <= 1)
+
+  if (genuinelyThinData) {
+    const latestTitled = [...sortedSessions(sessions)].reverse().find((s) => s.windowTitle?.trim())
+    const latestTitle = latestTitled?.windowTitle?.trim()
+    const concreteLead = latestTitle
+      ? `The clearest signal is ${latestTitled!.appName} on "${stripKnownAppSuffixes(latestTitle)}" around ${formatTime(latestTitled!.startTime)}.`
+      : latestActive ? `The clearest signal is ${latestActive.appName} from ${formatTime(latestActive.startTime)}.` : null
+    return [
+      'I only have light evidence for that period so far.',
+      concreteLead,
+      evidence.signals.length > 0 ? `Strongest signals: ${formatSignalList(evidence.signals, 3)}.` : null,
+    ].filter(Boolean).join(' ')
+  }
+
+  const taskLabel = evidence.task.label
+  const totalLine = `${taskLabel} (${formatDuration(totalSeconds)} tracked).`
+
+  return [
+    totalLine,
+    appLines.length > 0 ? appLines.join(', ') + '.' : null,
+    latestLine,
+  ].filter(Boolean).join(' ')
 }
 
 function buildGeneralAppBreakdown(
@@ -1403,10 +1446,10 @@ function buildGeneralTitleAnswer(
   return `The clearest titles ${windowReferenceLabel(rangeLabel)} were ${humanQuotedList(titles, 6)}.`
 }
 
-function buildTimeAllocationAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[], sessions: AppSession[]): string | null {
+function buildTimeAllocationAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[]): string | null {
   if (apps.length === 0 && sites.length === 0) return null
 
-  const evidence = buildEvidence(apps, sites, sessions)
+  const evidence = buildEvidence(apps, sites, [])
   const strongestFocus = evidence.signals.filter((signal) => FOCUSED_CATEGORIES.includes(signal.category)).slice(0, 3)
   const strongestNonFocus = evidence.signals.filter(isNonFocusSignal).slice(0, 3)
   const focusSeconds = evidence.focusedSeconds
@@ -1423,10 +1466,11 @@ function buildTimeAllocationAnswer(apps: AppUsageSummary[], sites: WebsiteSummar
   return parts.join(' ')
 }
 
-function buildDistractionAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[], sessions: AppSession[]): string | null {
+function buildDistractionAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[]): string | null {
   if (apps.length === 0 && sites.length === 0) return null
 
-  const evidence = buildEvidence(apps, sites, sessions)
+  // Use apps only to avoid double-counting sessions that are already aggregated in apps
+  const evidence = buildEvidence(apps, sites, [])
   const distractingSignals = evidence.signals.filter(isDistractingSignal)
   const nonFocusSignals = evidence.signals.filter(isNonFocusSignal)
   const topSignals = distractingSignals.length > 0 ? distractingSignals : nonFocusSignals
@@ -1436,13 +1480,28 @@ function buildDistractionAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[]
   }
 
   const label = distractingSignals.length > 0 ? 'the clearest distraction pull' : 'the strongest non-focus pull'
-  return `${topSignals[0].label} was ${label} at ${formatDuration(topSignals[0].seconds)}. Other signals: ${formatSignalList(topSignals, 3)}.`
+  const topSignal = topSignals[0]
+  const leadSite = topSignal.source === 'website'
+    ? sites.find((site) => site.topTitle?.trim() === topSignal.label || site.domain === topSignal.label)
+    : null
+  const leadApp = topSignal.source !== 'website'
+    ? apps.find((app) => app.appName === topSignal.label)
+    : null
+  const leadLabel = leadSite
+    ? `${leadSite.domain}${leadSite.topTitle?.trim() ? ` ("${leadSite.topTitle.trim()}")` : ''}`
+    : leadApp
+      ? leadApp.appName
+      : topSignal.label
+  // Slice off the first signal so "other signals" doesn't repeat the lead
+  const rest = topSignals.slice(1)
+  const otherPart = rest.length > 0 ? ` Other signals: ${formatSignalList(rest, 2)}.` : ''
+  return `${leadLabel} was ${label} at ${formatDuration(topSignal.seconds)}.${otherPart}`
 }
 
 function buildFocusScoreAnswer(apps: AppUsageSummary[], sessions: AppSession[], sites: WebsiteSummary[]): string | null {
   if (apps.length === 0 && sessions.length === 0 && sites.length === 0) return null
 
-  const evidence = buildEvidence(apps, sites, sessions)
+  const evidence = buildEvidence(apps, sites, [])
   const totalSeconds = Math.max(evidence.totalSeconds, apps.reduce((sum, app) => sum + app.totalSeconds, 0))
   const focusSeconds = evidence.focusedSeconds
   const switchesPerHour = totalSeconds > 0 ? Math.max(0, sessions.length - 1) / Math.max(totalSeconds / 3600, 0.25) : 0
@@ -1467,7 +1526,7 @@ function buildFocusScoreAnswer(apps: AppUsageSummary[], sessions: AppSession[], 
 
 function buildTimelineSummary(apps: AppUsageSummary[], sites: WebsiteSummary[], sessions: AppSession[]): string | null {
   if (sessions.length === 0 && apps.length === 0 && sites.length === 0) return null
-  const evidence = buildEvidence(apps, sites, sessions)
+  const evidence = buildEvidence(apps, sites, [])
   const recent = sortedSessions(sessions)
     .slice(-5)
     .map((session) => {
@@ -1727,6 +1786,367 @@ function timeRangeAnswer(window: { start: Date; end: Date }, sessions: AppSessio
   return `Between ${formatTime(window.start.getTime())} and ${formatTime(window.end.getTime())}, the main thread was ${evidence.task.label.toLowerCase()}. Top sessions: ${topSessions.join(', ')}. Strongest signals: ${formatSignalList(evidence.signals, 3)}.`
 }
 
+// ── Entity identity ("who is X", "what do I do for X") ────────────────────────
+
+function isEntityIdentityQuestion(normalized: string): boolean {
+  return /\bwho\s+is\b/.test(normalized)
+    || /\bwhat\s+is\b/.test(normalized)
+    || /\btell\s+me\s+about\b/.test(normalized)
+    || /\bdescribe\b/.test(normalized)
+    || /\bwhat\s+do\s+i\s+(?:do|work)\s+(?:for|on)\b/.test(normalized)
+    || /\bwhat\s+(?:kind\s+of\s+work|work)\s+(?:do\s+i\s+do|am\s+i\s+doing)\s+(?:for|on)\b/.test(normalized)
+    || /\bwhat\s+project\s+(?:am\s+i\s+building|is\s+this|do\s+i\s+have)\b/.test(normalized)
+}
+
+function buildEntityIdentityAnswer(
+  evidence: EntityEvidence,
+  resolvedContext: TemporalContext,
+): RouterResult | null {
+  const directSessions = evidence.directSessions.filter(isMeaningfulSession)
+  const directVisits = evidence.directWebsiteVisits
+
+  if (directSessions.length === 0 && directVisits.length === 0) {
+    return {
+      answer: `I don't have tracked activity for "${evidence.entity}" ${windowReferenceLabel(evidence.range.label)}. If this is a client or project, its name needs to appear in a window title, email subject, workbook name, or browser page title for me to attribute time to it.`,
+      resolvedContext,
+      suggestions: [
+        `How much time did I spend on ${evidence.entity} today?`,
+        'What was I working on today?',
+        'List my clients today.',
+      ],
+    }
+  }
+
+  const devSessions = directSessions.filter(isCodingLikeApp)
+  const terminalSess = directSessions.filter(isTerminalLikeApp)
+  const emailSessions = directSessions.filter((s) => s.category === 'email')
+  const docSessions = directSessions.filter((s) => s.category === 'productivity' || s.category === 'writing')
+  const hasDevWork = devSessions.length > 0 || terminalSess.length > 0
+  const hasClientComms = emailSessions.length > 0
+  const hasDocWork = docSessions.length > 0
+  const hasBrowserWork = directVisits.length > 0
+
+  // Infer entity type from activity mix
+  let entityType: string
+  if (hasDevWork && hasClientComms) {
+    entityType = `a client or project — there's both development work and email communication tied to it`
+  } else if (hasDevWork && hasDocWork) {
+    entityType = `a project — evidence spans coding and document/spreadsheet work`
+  } else if (hasDevWork) {
+    entityType = `a project or codebase you're actively developing`
+  } else if (hasClientComms && hasDocWork) {
+    entityType = `a client — the evidence is email and document work`
+  } else if (hasDocWork) {
+    entityType = `a client or project with document/spreadsheet work`
+  } else if (hasBrowserWork) {
+    entityType = `a project or account you're reviewing in a browser`
+  } else {
+    entityType = `a work entity that shows up in your tracked sessions`
+  }
+
+  const allTitles = dedupeStrings([
+    ...directSessions.map((s) => s.windowTitle?.trim() ?? '').filter(Boolean),
+    ...directVisits.map((v) => v.pageTitle?.trim() ?? '').filter(Boolean),
+  ], 5).map(stripKnownAppSuffixes).filter(Boolean)
+
+  const breakdown: string[] = []
+  if (devSessions.length > 0) {
+    breakdown.push(`${formatDuration(devSessions.reduce((sum, s) => sum + s.durationSeconds, 0))} coding`)
+  }
+  if (terminalSess.length > 0) {
+    breakdown.push(`${formatDuration(terminalSess.reduce((sum, s) => sum + s.durationSeconds, 0))} in terminal`)
+  }
+  if (emailSessions.length > 0) {
+    breakdown.push(`${formatDuration(emailSessions.reduce((sum, s) => sum + s.durationSeconds, 0))} in email`)
+  }
+  if (docSessions.length > 0) {
+    breakdown.push(`${formatDuration(docSessions.reduce((sum, s) => sum + s.durationSeconds, 0))} in docs/spreadsheets`)
+  }
+  if (hasBrowserWork) {
+    const browserSeconds = directVisits.reduce((sum, v) => sum + v.durationSeconds, 0)
+    const domains = dedupeStrings(directVisits.map((v) => v.domain), 2)
+    breakdown.push(`${formatDuration(browserSeconds)} in browser (${humanList(domains, 2)})`)
+  }
+
+  const totalSeconds = directSessions.reduce((sum, s) => sum + s.durationSeconds, 0)
+    + directVisits.reduce((sum, v) => sum + v.durationSeconds, 0)
+
+  const parts: string[] = [
+    `Based on tracked activity, ${evidence.entity} looks like ${entityType}.`,
+  ]
+  if (allTitles.length > 0) {
+    parts.push(`Evidence in titles: ${humanQuotedList(allTitles, 4)}.`)
+  }
+  if (breakdown.length > 0) {
+    parts.push(`Work breakdown: ${humanList(breakdown, 4)}.`)
+  }
+  parts.push(`Total tracked ${windowReferenceLabel(evidence.range.label)}: ${formatDuration(totalSeconds)}.`)
+
+  return {
+    answer: parts.join(' '),
+    resolvedContext,
+    suggestions: [
+      `How many hours have I spent on ${evidence.entity} today?`,
+      `Break ${evidence.entity} down by app today.`,
+      `Which ${evidence.entity} titles matched?`,
+    ],
+  }
+}
+
+// ── Client listing ────────────────────────────────────────────────────────────
+
+const APP_DISPLAY_NOISE = new Set([
+  'Visual Studio Code', 'VS Code', 'Microsoft Outlook', 'Outlook',
+  'Microsoft Excel', 'Excel', 'Google Chrome', 'Chrome', 'Windows Terminal',
+  'Microsoft Word', 'Word', 'Microsoft Edge', 'Edge', 'Firefox', 'Safari',
+  'Microsoft Teams', 'Teams', 'Slack', 'Finder', 'Explorer', 'Settings',
+  'New Tab', 'Start Page', 'Home', 'Inbox', 'Untitled',
+])
+
+const ENTITY_STOP_WORDS = new Set([
+  'VS', 'RE', 'FW', 'FWD', 'HTTP', 'HTTPS', 'URL', 'ID', 'API', 'SQL',
+  'PDF', 'UI', 'UX', 'PR', 'WIP', 'TBD', 'EOD', 'THE', 'AND', 'OR',
+  'FOR', 'NOT', 'BUT', 'NEW', 'OLD', 'ALL', 'ANY', 'MY', 'README',
+])
+
+function extractEntitiesFromActivity(
+  sessions: AppSession[],
+  visits: WebsiteVisit[],
+): Map<string, number> {
+  const entitySeconds = new Map<string, number>()
+
+  function addEntity(entity: string, seconds: number): void {
+    if (ENTITY_STOP_WORDS.has(entity.toUpperCase())) return
+    if (entity.length < 2 || entity.length > 30) return
+    if (APP_DISPLAY_NOISE.has(entity)) return
+    entitySeconds.set(entity, (entitySeconds.get(entity) ?? 0) + seconds)
+  }
+
+  for (const session of sessions) {
+    const title = session.windowTitle ?? ''
+    // All-caps acronyms (ASYV, IBM, KPMG — 2 to 8 chars)
+    for (const match of title.matchAll(/\b([A-Z][A-Z0-9]{1,7})\b/g)) {
+      addEntity(match[1], session.durationSeconds)
+    }
+    // Capitalized multi-word proper nouns (Acme Corp, Project Alpha)
+    for (const match of title.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b/g)) {
+      if (!APP_DISPLAY_NOISE.has(match[1])) addEntity(match[1], session.durationSeconds)
+    }
+  }
+
+  for (const visit of visits) {
+    const title = visit.pageTitle ?? ''
+    for (const match of title.matchAll(/\b([A-Z][A-Z0-9]{1,7})\b/g)) {
+      addEntity(match[1], visit.durationSeconds)
+    }
+    for (const match of title.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b/g)) {
+      if (!APP_DISPLAY_NOISE.has(match[1])) addEntity(match[1], visit.durationSeconds)
+    }
+  }
+
+  return entitySeconds
+}
+
+function isClientListQuestion(normalized: string): boolean {
+  return /\blist\b.*\b(?:clients?|projects?|accounts?|entities)\b/.test(normalized)
+    || /\bwho\s+are\s+my\s+(?:clients?|projects?)\b/.test(normalized)
+    || /\ball\s+(?:my\s+)?(?:clients?|projects?)\b/.test(normalized)
+    || /\b(?:clients?|projects?)\s+(?:list|today|this\s+week)\b/.test(normalized)
+    || /\bhow\s+much\s+time\s+(?:per|for\s+each)\s+client\b/.test(normalized)
+    || /\btime\s+(?:per|for\s+each)\s+client\b/.test(normalized)
+    || /\b(?:export|analyze)\b.*\bclientele\b/.test(normalized)
+    || /\bclientele\b/.test(normalized)
+    || /\btime\s+(?:per|by)\s+(?:client|project)\b/.test(normalized)
+}
+
+function buildClientListAnswer(
+  rangeLabel: string,
+  sessions: AppSession[],
+  visits: WebsiteVisit[],
+  resolvedContext: TemporalContext,
+): RouterResult | null {
+  const meaningfulSessions = sessions.filter(isMeaningfulSession)
+  const entitySeconds = extractEntitiesFromActivity(meaningfulSessions, visits)
+
+  const ranked = [...entitySeconds.entries()]
+    .filter(([, seconds]) => seconds >= 60)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 10)
+
+  if (ranked.length === 0) {
+    return {
+      answer: `I couldn't identify named clients or projects from titles ${windowReferenceLabel(rangeLabel)}. Attribution requires the client or project name to appear in window titles, email subjects, workbook names, or page titles.`,
+      resolvedContext,
+      suggestions: [
+        'What was I working on today?',
+        'Break my work down by app today.',
+        'What was I doing this week?',
+      ],
+    }
+  }
+
+  const lines = ranked.map(([entity, seconds], index) =>
+    `${index + 1}. ${entity}: ${formatDuration(seconds)}`,
+  )
+
+  const totalTracked = ranked.reduce((sum, [, s]) => sum + s, 0)
+  const footnote = 'Time per entity is inferred from window titles and may overlap when multiple entities appeared in the same session.'
+
+  return {
+    answer: [
+      `Named entities by tracked time ${windowReferenceLabel(rangeLabel)} (${formatDuration(totalTracked)} total):`,
+      ...lines,
+      '',
+      footnote,
+    ].join('\n'),
+    resolvedContext,
+    suggestions: ranked.slice(0, 3).map(([entity]) => `How many hours have I spent on ${entity} today?`),
+  }
+}
+
+// ── Comparison ("ASYV vs Acme Corp today") ────────────────────────────────────
+
+function isComparisonQuestion(normalized: string): boolean {
+  return /\bvs\.?\s|\bversus\b|\bcompare\b|\bcompared\s+to\b/.test(normalized)
+}
+
+function extractTwoEntities(question: string): [string, string] | null {
+  const vsMatch = question.match(
+    /(.+?)\s+(?:vs\.?|versus|compared?\s+to)\s+(.+?)(?:\s+(?:today|yesterday|this week|that week|last week|past week|last \d+ days?))*\s*\??$/i,
+  )
+  if (!vsMatch) return null
+
+  const rawA = vsMatch[1].replace(/^(?:compare\s+|how\s+much\s+time\s+(?:on|for)\s+|time\s+on\s+)/i, '').trim()
+  const rawB = vsMatch[2]
+    .replace(/\s*[—–-]+\s+(?:which|who|what)\b.*$/i, '')  // strip "— which took more time"
+    .replace(/\s*\b(?:which|who)\s+(?:took|had|has|is|was)\b.*$/i, '')
+    .trim()
+
+  const a = cleanedEntityCandidate(rawA)
+  const b = cleanedEntityCandidate(rawB)
+
+  if (!a || !b || meaningfulQueryTokens(a).length === 0 || meaningfulQueryTokens(b).length === 0) return null
+  return [a, b]
+}
+
+function buildComparisonAnswer(
+  entityA: string,
+  entityB: string,
+  range: ResolvedRange,
+  sessions: AppSession[],
+  visits: WebsiteVisit[],
+  resolvedContext: TemporalContext,
+): RouterResult | null {
+  const evidenceA = buildEntityEvidence(entityA, range, '', sessions, visits)
+  const evidenceB = buildEntityEvidence(entityB, range, '', sessions, visits)
+
+  const secondsA = evidenceA.contextualSessions.filter(isMeaningfulSession).reduce((sum, s) => sum + s.durationSeconds, 0)
+    + evidenceA.contextualWebsiteVisits.reduce((sum, v) => sum + v.durationSeconds, 0)
+  const secondsB = evidenceB.contextualSessions.filter(isMeaningfulSession).reduce((sum, s) => sum + s.durationSeconds, 0)
+    + evidenceB.contextualWebsiteVisits.reduce((sum, v) => sum + v.durationSeconds, 0)
+
+  if (secondsA === 0 && secondsB === 0) {
+    return {
+      answer: `I couldn't find tracked evidence for either ${entityA} or ${entityB} ${windowReferenceLabel(range.label)}.`,
+      resolvedContext,
+      suggestions: ['What was I working on today?', 'List my clients today.'],
+    }
+  }
+
+  const lineA = secondsA > 0
+    ? `${entityA}: ${formatDuration(secondsA)}`
+    : `${entityA}: no tracked evidence ${windowReferenceLabel(range.label)}`
+  const lineB = secondsB > 0
+    ? `${entityB}: ${formatDuration(secondsB)}`
+    : `${entityB}: no tracked evidence ${windowReferenceLabel(range.label)}`
+
+  const winner = secondsA > secondsB ? entityA : secondsB > secondsA ? entityB : null
+  const closingLine = winner
+    ? `${winner} had more tracked time ${windowReferenceLabel(range.label)}.`
+    : `Both had the same tracked time ${windowReferenceLabel(range.label)}.`
+
+  return {
+    answer: [
+      `Comparison ${windowReferenceLabel(range.label)}: ${entityA} vs ${entityB}.`,
+      lineA,
+      lineB,
+      '',
+      closingLine,
+    ].join('\n'),
+    resolvedContext,
+    suggestions: [
+      `Break ${entityA} down by app today.`,
+      `Break ${entityB} down by app today.`,
+      'List my clients today.',
+    ],
+  }
+}
+
+// ── Day summary ("summarize my day", "how was my day") ────────────────────────
+
+function isDaySummaryQuestion(normalized: string): boolean {
+  return normalized.includes('summarize my day')
+    || normalized.includes('summarize today')
+    || normalized.includes('daily summary')
+    || normalized.includes('how was my day')
+    || normalized.includes('give me a summary')
+    || normalized.includes('overview of today')
+    || normalized.includes('overview of my day')
+    || normalized.includes('what happened today')
+    || normalized.includes('recap my day')
+    || normalized.includes('day recap')
+    || normalized.includes('summary of today')
+    || normalized.includes('summary of my day')
+    || (normalized.includes('analyze') && (normalized.includes('clientele') || normalized.includes('client')))
+}
+
+function buildDaySummaryAnswer(
+  apps: AppUsageSummary[],
+  sites: WebsiteSummary[],
+  sessions: AppSession[],
+  visits: WebsiteVisit[],
+  rangeLabel: string,
+): string | null {
+  if (apps.length === 0 && sessions.length === 0) return null
+
+  const totalSeconds = apps.reduce((sum, app) => sum + app.totalSeconds, 0)
+  const focusedSeconds = apps.filter((app) => isFocusedCategory(app.category)).reduce((sum, app) => sum + app.totalSeconds, 0)
+  const focusPct = totalSeconds > 0 ? Math.round((focusedSeconds / totalSeconds) * 100) : 0
+
+  // Extract named entities from session/visit titles
+  const entitySeconds = extractEntitiesFromActivity(sessions.filter(isMeaningfulSession), visits)
+  const topEntities = [...entitySeconds.entries()]
+    .filter(([, s]) => s >= 60)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 4)
+
+  const topAppsLine = apps
+    .slice(0, 4)
+    .map((app) => `${app.appName} (${formatDuration(app.totalSeconds)})`)
+    .join(', ')
+
+  const entityLine = topEntities.length > 0
+    ? topEntities.map(([e, s]) => `${e} (${formatDuration(s)})`).join(', ')
+    : null
+
+  const topSite = sites[0]
+  const latestSession = [...sortedSessions(sessions)].at(-1)
+
+  const parts: string[] = [
+    `${windowLeadLabel(rangeLabel).charAt(0).toUpperCase() + windowLeadLabel(rangeLabel).slice(1)}: ${formatDuration(totalSeconds)} tracked, ${focusPct}% in focused apps.`,
+  ]
+
+  if (topAppsLine) parts.push(`Top apps: ${topAppsLine}.`)
+  if (entityLine) parts.push(`Clients/projects in titles: ${entityLine}.`)
+  if (topSite) parts.push(`Most visited site: ${topSite.domain} (${formatDuration(topSite.totalSeconds)}).`)
+  if (latestSession) {
+    const t = latestSession.windowTitle?.trim()
+    parts.push(`Last active: ${latestSession.appName}${t ? ` on "${stripKnownAppSuffixes(t)}"` : ''} at ${formatTime(latestSession.startTime)}.`)
+  }
+
+  return parts.join(' ')
+}
+
 export async function routeInsightsQuestion(
   question: string,
   defaultDate: Date,
@@ -1738,25 +2158,75 @@ export async function routeInsightsQuestion(
 
   const normalized = trimmed.toLowerCase()
   const resolvedContext = resolveTemporalContext(trimmed, defaultDate, previousContext)
+
+  // Resolve the date-scoped range used by most routes
+  const dayRange = resolveQuestionRange(trimmed, resolvedContext.date, !hasTemporalCue(normalized))
+
+  // ── Client list / clientele export ─────────────────────────────────────────
+  if (isClientListQuestion(normalized)) {
+    const sessions = getSessionsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+    const visits = getWebsiteVisitsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+    const result = buildClientListAnswer(dayRange.label, sessions, visits, resolvedContext)
+    if (result) return result
+  }
+
+  // ── Comparison ("ASYV vs Acme") ─────────────────────────────────────────────
+  if (isComparisonQuestion(normalized)) {
+    const entities = extractTwoEntities(trimmed)
+    if (entities) {
+      const [entityA, entityB] = entities
+      const sessions = getSessionsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+      const visits = getWebsiteVisitsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+      const result = buildComparisonAnswer(entityA, entityB, dayRange, sessions, visits, resolvedContext)
+      if (result) return result
+    }
+  }
+
+  // ── Known metric / scoring questions — route before entity extraction hijacks them ─
+  if (normalized.includes('focus score') || /\bwas\s+i\s+focused\b/.test(normalized)) {
+    const [fromMsMetric, toMsMetric] = dayBounds(resolvedContext.date)
+    const appsMetric = getAppSummariesForRange(db, fromMsMetric, toMsMetric)
+    const sessionsMetric = getSessionsForRange(db, fromMsMetric, toMsMetric)
+    const sitesMetric = getWebsiteSummariesForRange(db, fromMsMetric, toMsMetric)
+    const answer = buildFocusScoreAnswer(appsMetric, sessionsMetric, sitesMetric)
+    if (answer) return { answer, resolvedContext }
+  }
+
+  // ── Entity quantity + title questions ("how many hours on X", "break X down") ─
   const entity = extractEntity(trimmed)
   if (isEntityQuestion(normalized, entity)) {
-    const range = resolveQuestionRange(
-      trimmed,
-      resolvedContext.date,
-      !hasTemporalCue(normalized),
-    )
-    const sessions = getSessionsForRange(db, range.startMs, range.endMs + 1)
-    const visits = getWebsiteVisitsForRange(db, range.startMs, range.endMs + 1)
-    const evidence = buildEntityEvidence(entity!, range, trimmed, sessions, visits)
+    const sessions = getSessionsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+    const visits = getWebsiteVisitsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+    const evidence = buildEntityEvidence(entity!, dayRange, trimmed, sessions, visits)
     const result = buildEntityAnswer(evidence, trimmed, sessions, resolvedContext)
     if (result) return result
   }
 
+  // ── Entity identity ("who is X", "what do I do for X") ─────────────────────
+  if (isEntityIdentityQuestion(normalized) && entity) {
+    const sessions = getSessionsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+    const visits = getWebsiteVisitsForRange(db, dayRange.startMs, dayRange.endMs + 1)
+    const evidence = buildEntityEvidence(entity, dayRange, trimmed, sessions, visits)
+    const result = buildEntityIdentityAnswer(evidence, resolvedContext)
+    if (result) return result
+  }
+
+  // ── Weekly questions ────────────────────────────────────────────────────────
   if (isWeeklyQuestion(normalized)) {
     const weeklyRange = resolveWeeklyRange(normalized, resolvedContext.date)
     const apps = getAppSummariesForRange(db, weeklyRange.startMs, weeklyRange.endMs + 1)
     const sites = getWebsiteSummariesForRange(db, weeklyRange.startMs, weeklyRange.endMs + 1)
     const sessions = getSessionsForRange(db, weeklyRange.startMs, weeklyRange.endMs + 1)
+    const visits = getWebsiteVisitsForRange(db, weeklyRange.startMs, weeklyRange.endMs + 1)
+
+    if (isClientListQuestion(normalized)) {
+      const result = buildClientListAnswer(weeklyRange.label, sessions, visits, resolvedContext)
+      if (result) return result
+    }
+    if (isDaySummaryQuestion(normalized) || normalized.includes('summarize this week') || normalized.includes('what happened this week')) {
+      const answer = buildDaySummaryAnswer(apps, sites, sessions, visits, weeklyRange.label)
+      return answer ? { answer, resolvedContext } : null
+    }
     if (isAppBreakdownQuestion(normalized)) {
       const answer = buildGeneralAppBreakdown(weeklyRange.label, apps, sites)
       return answer ? { answer, resolvedContext } : null
@@ -1782,14 +2252,15 @@ export async function routeInsightsQuestion(
       || normalized.includes('what did i work on')
       || normalized.includes('what did i do')
       || normalized.includes('where did my time go')
-      || normalized.includes('what happened this week')
-      || normalized.includes('summarize this week')
     ) {
-      const answer = buildTimelineSummary(apps, sites, sessions) ?? dailyTopCategoryAnswer(apps, sites)
+      const answer = buildWorkThreadAnswer(apps, sites, sessions, 'You were mostly working on')
+        ?? buildTimelineSummary(apps, sites, sessions)
+        ?? dailyTopCategoryAnswer(apps, sites)
       return answer ? { answer, resolvedContext } : null
     }
   }
 
+  // ── Time-window exact lookups ───────────────────────────────────────────────
   if (resolvedContext.timeWindow) {
     const sessions = getSessionsForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
     const sites = getWebsiteSummariesForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
@@ -1797,10 +2268,18 @@ export async function routeInsightsQuestion(
     return answer ? { answer, resolvedContext } : null
   }
 
+  // ── Day-scoped routes ───────────────────────────────────────────────────────
   const [fromMs, toMs] = dayBounds(resolvedContext.date)
   const apps = getAppSummariesForRange(db, fromMs, toMs)
   const sites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const sessions = getSessionsForRange(db, fromMs, toMs)
+  const visits = getWebsiteVisitsForRange(db, fromMs, toMs)
+
+  // Day summary / "summarize my day" / "how was my day" / "give me a summary"
+  if (isDaySummaryQuestion(normalized)) {
+    const answer = buildDaySummaryAnswer(apps, sites, sessions, visits, 'today')
+    return answer ? { answer, resolvedContext } : null
+  }
 
   if (isAppBreakdownQuestion(normalized)) {
     const answer = buildGeneralAppBreakdown('today', apps, sites)
@@ -1813,7 +2292,7 @@ export async function routeInsightsQuestion(
   }
 
   if (normalized.includes('what distracted me') || normalized.includes('biggest distraction')) {
-    const answer = buildDistractionAnswer(apps, sites, sessions)
+    const answer = buildDistractionAnswer(apps, sites)
     return answer ? { answer, resolvedContext } : null
   }
 
@@ -1826,6 +2305,11 @@ export async function routeInsightsQuestion(
   ) {
     const prefix = normalized.includes('what should i resume') ? 'Resume' : 'You were mostly working on'
     const answer = buildWorkThreadAnswer(apps, sites, sessions, prefix)
+    return answer ? { answer, resolvedContext } : null
+  }
+
+  if (normalized.includes('where did my time go') || normalized.includes('where did the time go') || normalized.includes('time allocation')) {
+    const answer = buildTimeAllocationAnswer(apps, sites)
     return answer ? { answer, resolvedContext } : null
   }
 
@@ -1858,11 +2342,6 @@ export async function routeInsightsQuestion(
       answer: `${topSite.domain} was your top site at ${formatDuration(topSite.totalSeconds)}.`,
       resolvedContext,
     }
-  }
-
-  if (normalized.includes('where did my time go') || normalized.includes('where did the time go')) {
-    const answer = buildTimeAllocationAnswer(apps, sites, sessions)
-    return answer ? { answer, resolvedContext } : null
   }
 
   if (normalized.includes('how much time') || normalized.includes('how long')) {
