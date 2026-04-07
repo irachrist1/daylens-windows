@@ -12,6 +12,7 @@ Before tagging:
 npm run typecheck
 npm run build:all
 npm run benchmark:ai-workspace
+npm run benchmark:ai-workspace:extended
 ```
 
 Also confirm:

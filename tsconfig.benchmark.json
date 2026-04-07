@@ -13,6 +13,7 @@
   },
   "include": [
     "scripts/benchmark-ai-workspace.ts",
+    "scripts/benchmark-ai-workspace-extended.ts",
     "src/main/db/queries.ts",
     "src/main/db/schema.ts",
     "src/main/lib/focusScore.ts",

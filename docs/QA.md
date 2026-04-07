@@ -8,6 +8,7 @@ Use this before shipping changes to the Insights page, AI Workspace, tracking, t
 npm run typecheck
 npm run build:all
 npm run benchmark:ai-workspace
+npm run benchmark:ai-workspace:extended
 ```
 
 ## What `benchmark:ai-workspace` validates
@@ -29,6 +30,19 @@ Then it verifies that the local AI Workspace router can answer benchmark-shaped 
 - by-app follow-up: `Break ASYV down by app today.`
 - scoped native-app attribution: `How much ASYV time was in Outlook today?`
 - exact-time lookup: `What was I doing today at 10:58 am?`
+
+## What `benchmark:ai-workspace:extended` adds
+
+The extended runner uses the same standalone Electron harness, but exercises broader product-shaped prompts instead of only the core benchmark.
+
+It verifies that the local router can now handle:
+
+- open-ended work-thread prompts like `What was I working on today?` and `What should I resume?`
+- distraction questions without duplicate signals
+- client and project identity questions like `Who is ASYV?` and `What do I do for ASYV?`
+- client listing and comparison prompts like `List all my clients today.` and `ASYV versus Acme Corp`
+- day-summary prompts like `Summarize my day.` and `How was my day?`
+- generic routed questions like focus score, time allocation, top app, and app breakdown
 
 ## What this does not prove
 

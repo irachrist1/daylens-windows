@@ -10,7 +10,7 @@
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
     "benchmark:ai-workspace": "tsc -p tsconfig.benchmark.json && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/run-benchmark-ai-workspace.mjs",
-    "benchmark:ai-workspace:extended": "tsc -p tsconfig.benchmark.json && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/run-extended-test.mjs",
+    "benchmark:ai-workspace:extended": "tsc -p tsconfig.benchmark.json && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/run-benchmark-ai-workspace-extended.mjs",
     "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
     "build:preload": "cross-env STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
     "build:renderer": "cross-env STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",

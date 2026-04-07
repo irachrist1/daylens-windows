@@ -43,4 +43,6 @@ claude mcp add daylens -- npx -y daylens-mcp
 - `npm start` runs the Electron app in development mode.
 - `npm run typecheck` checks TypeScript without emitting build output.
 - `npm run build:all` builds the main, preload, and renderer bundles.
+- `npm run benchmark:ai-workspace` runs the release benchmark for grounded client-time and follow-up answers.
+- `npm run benchmark:ai-workspace:extended` runs the broader routed-question regression suite for summaries, distractions, identity, client listing, comparisons, and focus questions.
 - `npm run dist:win` builds the NSIS installer and update metadata into `dist-release/`.
