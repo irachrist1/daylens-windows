@@ -433,14 +433,23 @@ export default function Insights() {
     return `You spent about ${formatDuration(totalTracked)} on ${catDesc} workflows today.${peakNote}${switching.count > 5 ? ` ${switching.count} short app sessions suggest some context switching.` : ''}`
   })()
 
-  // Observation chips as follow-up starters
-  const observationChips = [
-    'How many hours on focused work today?',
-    'What repeated most today?',
-    'When did focus break down?',
-    'Where did my time go this week?',
-    'What was my most used app?',
-  ]
+  // Observation chips — always shown so the AI screen never feels dead.
+  // When there's data, prefer data-aware prompts; fall back to universal starters.
+  const observationChips = totalTracked > 0
+    ? [
+        'What did I actually get done today?',
+        'Where did my time go today?',
+        'What was I most focused on?',
+        'What kept interrupting me?',
+        'How does today compare to my usual week?',
+      ]
+    : [
+        'What should I focus on today?',
+        'How can I structure a deep work session?',
+        'What does a productive day look like for me?',
+        'How do I reduce context switching?',
+        'What tools am I using most this week?',
+      ]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -506,24 +515,8 @@ export default function Insights() {
             </div>
           )}
 
-          {/* ── State 2: AI ready, no data ────────────────────────────────────── */}
-          {isAIReady && totalTracked === 0 && messages.length === 0 && (
-            <div style={{
-              padding: '48px 24px', textAlign: 'center',
-              background: 'var(--color-surface-container)',
-              borderRadius: 12, border: '1px solid var(--color-border-ghost)',
-            }}>
-              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 8px' }}>
-                Not enough data tracked yet.
-              </p>
-              <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>
-                Check back after a full day of activity.
-              </p>
-            </div>
-          )}
-
-          {/* ── State 3/4: Data present — show summary + conversation ─────────── */}
-          {isAIReady && (totalTracked > 0 || messages.length > 0) && (
+          {/* ── State 2+3: AI ready — always show prompts, add summary when data exists ── */}
+          {isAIReady && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
               {/* Proactive summary */}
@@ -538,7 +531,7 @@ export default function Insights() {
                 </div>
               )}
 
-              {/* Observation chips — shown when no conversation yet */}
+              {/* Starter prompts — shown when no conversation yet */}
               {messages.length === 0 && !loading && (
                 <div>
                   <div style={{
@@ -546,7 +539,7 @@ export default function Insights() {
                     letterSpacing: '0.1em', color: 'var(--color-text-tertiary)',
                     marginBottom: 10,
                   }}>
-                    Observations
+                    {totalTracked > 0 ? 'Ask about today' : 'Get started'}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {observationChips.map((chip) => (

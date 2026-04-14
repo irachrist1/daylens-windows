@@ -267,7 +267,14 @@ export function getAppSummariesForRange(
     rows
       .filter((row) => !isUxNoise(row.app_name))
       .map((row) => {
-        const category: AppCategory = overrides[row.bundle_id] ?? row.category ?? 'uncategorized'
+        // User overrides first; fall through to catalog's default category for
+        // sessions that were captured before the catalog was fully populated.
+        const catalogCategory = resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
+        const category: AppCategory =
+          overrides[row.bundle_id]
+          ?? (row.category && row.category !== 'uncategorized' ? row.category : null)
+          ?? catalogCategory
+          ?? 'uncategorized'
         return clipRowToRange(row, fromMs, toMs, category)
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
@@ -281,10 +288,11 @@ export function getAppSummariesForRange(
       existing.totalSeconds += session.durationSeconds
       existing.sessionCount = (existing.sessionCount ?? 0) + 1
     } else {
+      const identity = resolveCanonicalApp(session.bundleId, session.appName)
       summaryMap.set(session.bundleId, {
         bundleId: session.bundleId,
-        canonicalAppId: session.canonicalAppId ?? resolveCanonicalApp(session.bundleId, session.appName).canonicalAppId ?? session.bundleId,
-        appName: resolveDisplayName(session.bundleId, session.appName),
+        canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId,
+        appName: identity.displayName || session.appName,
         category: session.category,
         totalSeconds: session.durationSeconds,
         isFocused: isCategoryFocused(session.category),
@@ -317,7 +325,12 @@ export function getSessionsForRange(
     rows
       .filter((row) => !isUxNoise(row.app_name))
       .map((row) => {
-        const category: AppCategory = overrides[row.bundle_id] ?? row.category
+        const catalogCategory = resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
+        const category: AppCategory =
+          overrides[row.bundle_id]
+          ?? (row.category && row.category !== 'uncategorized' ? row.category : null)
+          ?? catalogCategory
+          ?? 'uncategorized'
         return clipRowToRange(row, fromMs, toMs, category, resolveDisplayName(row.bundle_id, row.app_name))
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)

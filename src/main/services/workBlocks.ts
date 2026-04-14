@@ -34,6 +34,30 @@ import { localDayBounds } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import { normalizeUrlForStorage, resolveCanonicalApp, titleLooksUseful } from '../lib/appIdentity'
 
+/**
+ * Sanitize a label that might be a raw file path or bundle path.
+ * e.g. "/System/Volumes/.../Safari.app/Contents/MacOS/Safari" → "Safari"
+ * Returns null if the result is still not display-worthy.
+ */
+function sanitizeBlockLabel(label: string | null | undefined): string | null {
+  if (!label) return null
+  // Path-like strings: contain slashes and likely contain an app path segment
+  if ((label.includes('/') || label.includes('\\')) && label.length > 40) {
+    // Try to extract the last meaningful path component (strip .app/.exe suffix)
+    const parts = label.replace(/\\/g, '/').split('/')
+    const appPart = parts.find((p) => p.endsWith('.app')) ?? parts.find((p) => p.endsWith('.exe'))
+    if (appPart) {
+      const name = appPart.replace(/\.(app|exe)$/i, '')
+      if (name.length > 0) return name
+    }
+    // Try the last non-empty segment
+    const lastName = parts.filter(Boolean).pop()
+    if (lastName && lastName.length > 0 && !lastName.includes(':')) return lastName
+    return null
+  }
+  return label
+}
+
 const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
 const MEETING_THRESHOLD_SEC = 20 * 60
 const LONG_SINGLE_APP_THRESHOLD_SEC = 45 * 60
@@ -614,9 +638,10 @@ function topAppsFromSessions(sessions: AppSession[]): WorkContextAppSummary[] {
       continue
     }
 
+    const identity = resolveCanonicalApp(session.bundleId, session.appName)
     grouped.set(session.bundleId, {
       bundleId: session.bundleId,
-      appName: session.appName,
+      appName: identity.displayName || sanitizeBlockLabel(session.appName) || session.appName,
       category: session.category,
       totalSeconds: session.durationSeconds,
       sessionCount: 1,
@@ -2167,13 +2192,17 @@ export function getAppDetailPayload(
     topArtifacts,
     topPages,
     pairedApps,
-    blockAppearances: relatedBlocks.slice(0, 12).map((block) => ({
-      blockId: block.id,
-      startTime: block.startTime,
-      endTime: block.endTime,
-      label: block.label.current,
-      dominantCategory: block.dominantCategory,
-    })),
+    blockAppearances: relatedBlocks.slice(0, 12).map((block) => {
+      const rawLabel = block.label.current
+      const cleanLabel = sanitizeBlockLabel(rawLabel) ?? prettyCategory(block.dominantCategory)
+      return {
+        blockId: block.id,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        label: cleanLabel,
+        dominantCategory: block.dominantCategory,
+      }
+    }),
     workflowAppearances: relatedBlocks.flatMap((block) => block.workflowRefs)
       .filter((workflow, index, workflows) => workflows.findIndex((entry) => entry.id === workflow.id) === index)
       .slice(0, 10),

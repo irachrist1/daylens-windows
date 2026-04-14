@@ -1366,28 +1366,37 @@ export default function Timeline() {
 
   const timeMarkers = useMemo(() => {
     const markers: Array<{ topPx: number; label: string }> = []
+    const MIN_LABEL_GAP = 28 // px — prevent label crowding
 
     for (const group of mergedBlocks) {
       const topPx = compressedYForTime(group.mergedStart)
       const label = formatClockTime(group.mergedStart)
       const previous = markers[markers.length - 1]
-      if (!previous || Math.abs(previous.topPx - topPx) > 18) {
+      if (!previous || Math.abs(previous.topPx - topPx) > MIN_LABEL_GAP) {
         markers.push({ topPx, label })
       }
     }
 
+    // Only add gap segment markers for large gaps (>= 30 min) and only if not too close
     for (const entry of positionedSegments) {
-      if (entry.segment.kind === 'work_block' || entry.heightPx < 16) continue
+      if (entry.segment.kind === 'work_block' || entry.heightPx < 24) continue
+      const durationMs = entry.segment.endTime - entry.segment.startTime
+      if (durationMs < 30 * 60_000) continue // skip small gaps
       const label = formatClockTime(entry.segment.startTime)
       const previous = markers[markers.length - 1]
-      if (!previous || Math.abs(previous.topPx - entry.topPx) > 18) {
+      if (!previous || Math.abs(previous.topPx - entry.topPx) > MIN_LABEL_GAP) {
         markers.push({ topPx: entry.topPx, label })
       }
     }
 
+    // End time marker: only add if it won't crowd the last marker
     if (positionedSegments.length > 0) {
       const last = positionedSegments[positionedSegments.length - 1]
-      markers.push({ topPx: last.topPx + last.heightPx - 10, label: formatClockTime(last.segment.endTime) })
+      const endTop = last.topPx + last.heightPx - 10
+      const previous = markers[markers.length - 1]
+      if (!previous || Math.abs(previous.topPx - endTop) > MIN_LABEL_GAP) {
+        markers.push({ topPx: endTop, label: formatClockTime(last.segment.endTime) })
+      }
     }
 
     return markers
@@ -1649,14 +1658,14 @@ export default function Timeline() {
               <>
                 {/* Status strip */}
                 {payload.totalSeconds > 0 && (
-                  <div style={{ padding: '0 36px' }}>
+                  <div style={{ padding: '0 36px 4px' }}>
                     <StatusStrip payload={payload} isToday={isToday} />
                   </div>
                 )}
 
                 {/* Filter pills */}
                 {payload.blocks.length > 0 && (
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '10px 36px 6px' }}>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '12px 36px 8px' }}>
                     {FILTER_PILLS.map((pill) => {
                       const active = activeFilter === pill.key
                       return (
@@ -1721,7 +1730,7 @@ export default function Timeline() {
 
                 {/* ── Calendar time grid ── */}
                 {filteredBlocks.length > 0 && (
-                  <div style={{ display: 'flex', paddingTop: 10, paddingBottom: 24 }}>
+                  <div style={{ display: 'flex', paddingTop: 16, paddingBottom: 40 }}>
 
                     {/* Time rail */}
                     <div style={{
@@ -1774,16 +1783,17 @@ export default function Timeline() {
                           const label = durationMs >= GAP_BAND_THRESHOLD_MS ? gapLabel(entry.segment) : null
 
                           if (isDashed) {
+                            // Small gaps: just a faint horizontal rule — no box, no pattern
                             return (
                               <div
                                 key={key}
                                 style={{
                                   position: 'absolute',
                                   top: entry.topPx + entry.heightPx / 2,
-                                  left: 4,
-                                  right: 4,
-                                  borderTop: '1px dashed var(--color-border-ghost)',
-                                  opacity: 0.8,
+                                  left: 12,
+                                  right: 12,
+                                  borderTop: '1px solid var(--color-border-ghost)',
+                                  opacity: 0.4,
                                   pointerEvents: 'none',
                                 }}
                               />
@@ -1808,13 +1818,14 @@ export default function Timeline() {
                                 left: 4,
                                 right: 4,
                                 height: entry.heightPx,
-                                borderRadius: 8,
-                                border: '1px solid var(--color-border-ghost)',
-                                background: durationMs >= GAP_EXPANDABLE_THRESHOLD_MS
-                                  ? 'repeating-linear-gradient(45deg, var(--color-surface-low), var(--color-surface-low) 6px, rgba(255,255,255,0.02) 6px, rgba(255,255,255,0.02) 12px)'
-                                  : 'var(--color-surface-low)',
+                                borderRadius: 6,
+                                border: 'none',
+                                borderTop: '1px solid var(--color-border-ghost)',
+                                borderBottom: '1px solid var(--color-border-ghost)',
+                                background: 'transparent',
                                 color: 'var(--color-text-tertiary)',
-                                fontSize: durationMs >= GAP_EXPANDABLE_THRESHOLD_MS ? 11 : 10,
+                                fontSize: 11,
+                                opacity: 0.7,
                                 cursor: expandable ? 'pointer' : 'default',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -1824,7 +1835,7 @@ export default function Timeline() {
                               }}
                               title={expandable ? (isExpanded ? 'Collapse gap' : 'Expand gap') : undefined}
                             >
-                              <span style={{ pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                              <span style={{ pointerEvents: 'none', whiteSpace: 'nowrap', letterSpacing: '0.01em' }}>
                                 {label}
                               </span>
                             </button>

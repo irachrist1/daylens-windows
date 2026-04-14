@@ -36,12 +36,12 @@
     "spotify.exe": "spotify",
 
     "ghostty": "ghostty", "ghostty.exe": "ghostty", "com.mitchellh.ghostty": "ghostty",
-    "codex": "codex", "codex.exe": "codex",
+    "codex": "codex", "codex.exe": "codex", "com.openai.codex": "codex", "codex cli": "codex",
     "ticktick.exe": "ticktick", "com.ticktick.task": "ticktick", "ticktick": "ticktick",
     "toggltrack.exe": "toggltrack", "toggl track.exe": "toggltrack", "com.toggl.toggldesktop": "toggltrack", "toggl track": "toggltrack",
     "journal.exe": "journal", "com.apple.journal": "journal",
     "iphone mirroring.exe": "iphone-mirroring", "com.apple.iphonemirroring": "iphone-mirroring", "iphone mirroring": "iphone-mirroring",
-    "windowmanager.exe": "windowmanager", "windowmanager": "windowmanager",
+    "windowmanager.exe": "windowmanager", "windowmanager": "windowmanager", "window manager": "windowmanager", "com.manytricks.windowmanager": "windowmanager", "com.apple.WindowManager": "windowmanager", "com.resolvedlabs.Spaces": "windowmanager",
     "spark.exe": "spark", "spark desktop.exe": "spark", "com.readdle.SparkDesktop": "spark", "spark desktop": "spark",
     "com.apple.iCal": "calendar", "calendar.exe": "calendar", "calendar": "calendar",
 
@@ -73,7 +73,7 @@
     "zed.exe": "zed", "dev.zed.Zed": "zed",
     "perplexity.exe": "perplexity", "com.perplexity.Perplexity": "perplexity",
     "copilot.exe": "copilot",
-    "dia.exe": "dia",
+    "dia.exe": "dia", "dia": "dia", "com.dia.app": "dia", "app.dia.desktop": "dia", "ai.dia.mac": "dia",
     "com.google.android.apps.docs": "google-docs",
     "bear": "bear", "bear.exe": "bear", "net.shinyfrog.bear": "bear",
     "craft.exe": "craft", "com.luki.Craft": "craft",
@@ -96,7 +96,14 @@
     "sketch": "sketch", "com.bohemiancoding.sketch3": "sketch",
     "canva.exe": "canva",
     "miro.exe": "miro",
-    "excalidraw": "excalidraw"
+    "excalidraw": "excalidraw",
+    "screenshot": "screenshot", "screenshot.exe": "screenshot", "com.apple.Screenshot": "screenshot",
+    "com.apple.screencaptureui": "screenshot",
+    "cursor": "cursor", "com.todesktop.230313mzl4w4u92": "cursor",
+    "spotify": "spotify", "com.spotify.client": "spotify",
+    "t3 code": "t3code", "t3code.exe": "t3code", "t3 code (alpha)": "t3code",
+    "linear.exe": "linear", "com.linear": "linear",
+    "arc.exe": "arc", "company.thebrowser.browser": "arc"
   },
   "catalog": {
     "chrome": { "displayName": "Google Chrome", "defaultCategory": "browsing" },
@@ -205,6 +212,8 @@
     "journal": { "displayName": "Journal", "defaultCategory": "writing" },
     "iphone-mirroring": { "displayName": "iPhone Mirroring", "defaultCategory": "system" },
 
-    "google-docs": { "displayName": "Google Docs", "defaultCategory": "writing" }
+    "google-docs": { "displayName": "Google Docs", "defaultCategory": "writing" },
+    "screenshot": { "displayName": "Screenshot", "defaultCategory": "system" },
+    "t3code": { "displayName": "T3 Code", "defaultCategory": "development" }
   }
 }

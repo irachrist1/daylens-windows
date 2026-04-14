@@ -8,6 +8,20 @@ import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import { formatDisplayAppName } from '../lib/apps'
 
+// Strip file paths that leak into labels (e.g. /System/Volumes/.../Safari → Safari)
+function sanitizeLabel(label: string | null | undefined): string | null {
+  if (!label) return null
+  if ((label.includes('/') || label.includes('\\')) && label.length > 40) {
+    const parts = label.replace(/\\/g, '/').split('/')
+    const appPart = parts.find((p) => p.endsWith('.app')) ?? parts.find((p) => p.endsWith('.exe'))
+    if (appPart) return appPart.replace(/\.(app|exe)$/i, '')
+    const last = parts.filter(Boolean).pop()
+    if (last && !last.includes(':')) return last
+    return null
+  }
+  return label
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ALL_CATEGORIES: AppCategory[] = [
@@ -943,13 +957,13 @@ function AppDetailPanel({
                 )}
 
                 {/* Workflow appearance */}
-                {detail.workflowAppearances.length > 0 && (
+                {detail.workflowAppearances.filter((w) => !!sanitizeLabel(w.label)).length > 0 && (
                   <div>
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>
-                      Part of workflow
+                      Common workflow
                     </div>
                     <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
-                      {detail.workflowAppearances[0].label}
+                      {sanitizeLabel(detail.workflowAppearances[0].label) ?? ''}
                     </p>
                   </div>
                 )}
