@@ -930,7 +930,7 @@ function AppDetailPanel({
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       {pairedApps.slice(0, 4).map((entry) => (
-                        <span key={entry.bundleId} style={{
+                        <span key={entry.canonicalAppId} style={{
                           fontSize: 12, color: 'var(--color-text-secondary)',
                           padding: '3px 10px', borderRadius: 6,
                           background: 'var(--color-surface-low)',
