@@ -1280,8 +1280,22 @@ export default function Timeline() {
   const rawDisplaySegments = useMemo(() => {
     if (!payload) return []
 
+    // For today's view: cap all segments at the current time so we never
+    // render empty future space stretching to midnight.
+    const cutoffMs = isToday ? currentTimeMs : Infinity
+
+    const trimSegment = (seg: TimelineSegment): TimelineSegment | null => {
+      if (seg.startTime >= cutoffMs) return null
+      if (seg.kind === 'work_block') return seg
+      const endTime = Math.min(seg.endTime, cutoffMs)
+      return endTime <= seg.startTime ? null : { ...seg, endTime }
+    }
+
     if (activeFilter === 'all') {
-      return [...payload.segments].sort((left, right) => left.startTime - right.startTime)
+      return [...payload.segments]
+        .sort((left, right) => left.startTime - right.startTime)
+        .map(trimSegment)
+        .filter((s): s is TimelineSegment => s !== null)
     }
 
     const segments: TimelineSegment[] = []
@@ -1303,8 +1317,8 @@ export default function Timeline() {
         blockId: block.id,
       })
     }
-    return segments
-  }, [payload, activeFilter, filteredBlocks])
+    return segments.map(trimSegment).filter((s): s is TimelineSegment => s !== null)
+  }, [payload, activeFilter, filteredBlocks, isToday, currentTimeMs])
 
   const positionedSegments = useMemo<PositionedSegment[]>(() => {
     let topPx = 0
@@ -1360,12 +1374,13 @@ export default function Timeline() {
       }
     }
 
-    // End anchor: show when the last segment ends (only if it won't crowd the last marker)
+    // End anchor: on today's view show current time label; on past days show the end time
     const last = positionedSegments[positionedSegments.length - 1]
     const endTop = last.topPx + last.heightPx
     const prevLast = markers[markers.length - 1]
     if (!prevLast || endTop - prevLast.topPx >= MIN_LABEL_GAP) {
-      markers.push({ topPx: endTop, label: formatClockTime(last.segment.endTime) })
+      const endLabel = isToday ? formatClockTime(currentTimeMs) : formatClockTime(last.segment.endTime)
+      markers.push({ topPx: endTop, label: endLabel })
     }
 
     return markers
