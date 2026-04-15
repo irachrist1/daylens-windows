@@ -1,21 +1,5 @@
 @import "tailwindcss";
 
-@font-face {
-  font-family: "Inter";
-  src: url("../assets/fonts/InterVariable.ttf") format("truetype");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Inter";
-  src: url("../assets/fonts/InterVariable-Italic.ttf") format("truetype");
-  font-weight: 100 900;
-  font-style: italic;
-  font-display: swap;
-}
-
 :root {
   color-scheme: dark;
 
@@ -50,7 +34,7 @@
   --gradient-primary-from:     #adc6ff;
   --gradient-primary-to:       #4d8eff;
   --gradient-primary:          linear-gradient(135deg, #adc6ff, #4d8eff);
-  --font-sans: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   --radius-card:              10px;
   --radius-panel:             12px;
   --radius-pill:              999px;
@@ -138,7 +122,6 @@
 *::before,
 *::after {
   box-sizing: border-box;
-  font-family: var(--font-sans) !important;
 }
 
 html,
@@ -154,7 +137,7 @@ body,
   font-weight: 400;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  text-rendering: auto;
 }
 
 button,

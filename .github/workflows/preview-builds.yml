@@ -1,0 +1,71 @@
+name: Preview Builds
+
+on:
+  push:
+    tags-ignore:
+      - "v*-win"
+      - "v*-mac"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-preview:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_name: daylens-preview-macos
+            artifact_paths: |
+              dist-release/*.dmg
+              dist-release/*.zip
+          - os: windows-latest
+            platform: win
+            artifact_name: daylens-preview-windows
+            artifact_paths: |
+              dist-release/*.exe
+              dist-release/*.blockmap
+              dist-release/latest*.yml
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package preview build
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
+          else
+            npx electron-builder --win nsis --publish never --config electron-builder.config.js
+          fi
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_paths }}
+          if-no-files-found: error

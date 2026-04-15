@@ -4,6 +4,7 @@ import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import { computeFocusScore } from '../lib/focusScore'
 import { deriveWorkEvidenceSummary, type WorkEvidenceSignal } from '../lib/workEvidence'
+import { findClientByName, resolveClientQuery } from '../core/query/attributionResolvers'
 
 export interface TemporalContext {
   date: Date
@@ -553,6 +554,81 @@ function timeRangeAnswer(window: { start: Date; end: Date }, sessions: AppSessio
   return `Between ${formatTime(window.start.getTime())} and ${formatTime(window.end.getTime())}, the main thread was ${evidence.task.label.toLowerCase()}. Top sessions: ${topSessions.join(', ')}. Strongest signals: ${formatSignalList(evidence.signals, 3)}.`
 }
 
+const CLIENT_QUESTION_PATTERNS = [
+  /(?:how (?:many|much) (?:hours?|time))\s+(?:did i|have i|i)\s+(?:spend|spent|log(?:ged)?|work(?:ed)?)\s+(?:on|for|with|at)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\s*\?|$)/i,
+  /(?:hours?|time)\s+(?:on|for|with)\s+['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
+  /(?:client|project)\s+['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
+  /(?:what (?:did i|was i) (?:work(?:ing)?|do(?:ing)?) (?:on|for))\s+['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
+]
+
+function tryRouteClientQuestion(
+  normalized: string,
+  original: string,
+  context: TemporalContext,
+  db: Database.Database,
+): string | null {
+  let clientName: string | null = null
+  for (const pattern of CLIENT_QUESTION_PATTERNS) {
+    const match = original.match(pattern)
+    if (match?.[1]) {
+      clientName = match[1].trim().replace(/[?.!]+$/, '').trim()
+      break
+    }
+  }
+  if (!clientName) return null
+
+  const client = findClientByName(clientName, db)
+  if (!client) return null
+
+  const isWeekly = normalized.includes('this week') || normalized.includes('last week')
+  let fromMs: number
+  let toMs: number
+
+  if (isWeekly) {
+    const end = new Date(context.date)
+    end.setHours(23, 59, 59, 999)
+    const start = new Date(end)
+    start.setDate(end.getDate() - 6)
+    start.setHours(0, 0, 0, 0)
+    fromMs = start.getTime()
+    toMs = end.getTime()
+  } else {
+    const [f, t] = dayBounds(context.date)
+    fromMs = f
+    toMs = t
+  }
+
+  const payload = resolveClientQuery(client.id, fromMs, toMs, original, db)
+  if (!payload) return null
+
+  const { totals } = payload
+  if (totals.session_count === 0) {
+    return `No tracked work sessions for ${client.name} in that period.`
+  }
+
+  const parts: string[] = []
+  const attrHours = Math.round((totals.attributed_ms / 3_600_000) * 10) / 10
+  parts.push(`${attrHours}h attributed to ${client.name}`)
+  if (totals.ambiguous_ms > 0) {
+    const ambigMin = Math.round(totals.ambiguous_ms / 60_000)
+    parts.push(`plus ${ambigMin}m ambiguous`)
+  }
+  parts.push(`across ${totals.session_count} session${totals.session_count !== 1 ? 's' : ''}`)
+
+  const sessionDetails = payload.sessions.slice(0, 5).map((s) => {
+    const start = s.start.replace(/T/, ' ').replace(/[+-]\d{2}:\d{2}$/, '')
+    const apps = s.apps.slice(0, 3).map((a) => a.app_name).join(', ')
+    const conf = s.confidence ? ` (${Math.round(s.confidence * 100)}%)` : ''
+    return `  ${start}: ${s.project_name ?? 'no project'} — ${apps}${conf}`
+  })
+
+  return [
+    parts.join(', ') + '.',
+    sessionDetails.length > 0 ? 'Sessions:' : null,
+    ...sessionDetails,
+  ].filter(Boolean).join('\n')
+}
+
 export async function routeInsightsQuestion(
   question: string,
   defaultDate: Date,
@@ -564,6 +640,10 @@ export async function routeInsightsQuestion(
 
   const normalized = trimmed.toLowerCase()
   const resolvedContext = resolveTemporalContext(trimmed, defaultDate, previousContext)
+
+  // ─── Client/project attribution routing ──────────────────────────────────
+  const clientAnswer = tryRouteClientQuestion(normalized, trimmed, resolvedContext, db)
+  if (clientAnswer) return { answer: clientAnswer, resolvedContext }
 
   if (isWeeklyQuestion(normalized)) {
     const end = new Date(resolvedContext.date)

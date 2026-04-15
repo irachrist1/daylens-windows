@@ -22,10 +22,14 @@ import {
 } from '../db/queries'
 import { routeInsightsQuestion, type TemporalContext } from '../lib/insightsQueryRouter'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
+import { buildAssistantEvidencePack } from '../core/query/assistantEvidence'
+import { resolveDayContext, findClientByName, resolveClientQuery } from '../core/query/attributionResolvers'
+import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from './database'
-import { getApiKey, getSettings, getSettingsAsync } from './settings'
+import { getSettings } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
-import type { AIProviderMode, AppCategorySuggestion, WorkContextBlock, WorkContextInsight } from '@shared/types'
+import type { AppCategorySuggestion, DayTimelinePayload, WorkContextBlock, WorkContextInsight } from '@shared/types'
+import { executeTextAIJob, modelForProvider, providerLabel, type ProviderTextResponse, type ResolvedProviderConfig } from './aiOrchestration'
 import {
   fallbackNarrativeForBlock,
   getTimelineDayPayload,
@@ -35,12 +39,6 @@ import {
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
-
-interface ResolvedProviderConfig {
-  provider: AIProviderMode
-  apiKey: string | null
-  model: string
-}
 
 type ConversationMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -260,157 +258,11 @@ export async function detectCLITools(): Promise<CLIToolDetectionResult> {
   return { claude, codex }
 }
 
-function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | 'codex-cli' {
-  return provider === 'claude-cli' || provider === 'codex-cli'
-}
-
-function uniqueProviders(preferredProvider: AIProviderMode): AIProviderMode[] {
-  return [
-    preferredProvider,
-    'google',
-    'anthropic',
-    'openai',
-  ].filter((provider, index, providers) => providers.indexOf(provider) === index) as AIProviderMode[]
-}
-
-async function resolveProviderConfigs(): Promise<ResolvedProviderConfig[]> {
-  const settings = await getSettingsAsync()
-  const preferred = settings.aiProvider ?? 'anthropic'
-
-  // CLI providers only participate if they are the user's selected provider AND installed.
-  // They are never auto-inserted into the fallback chain because a missing binary throws
-  // a non-quota error that would abort the entire chain before reaching API providers.
-  let orderedProviders: AIProviderMode[]
-  if (providerUsesCLI(preferred)) {
-    orderedProviders = [preferred]
-  } else {
-    orderedProviders = uniqueProviders(preferred)
-  }
-
-  const configs: ResolvedProviderConfig[] = []
-
-  for (const provider of orderedProviders) {
-    const apiKey = await getApiKey(provider)
-    if (!providerUsesCLI(provider) && !apiKey) continue
-
-    configs.push({
-      provider,
-      apiKey,
-      model: modelForProvider(provider, settings),
-    })
-  }
-
-  if (configs.length === 0) {
-    throw new Error('No API key configured for the selected AI provider')
-  }
-
-  return configs
-}
-
-function modelForProvider(provider: AIProviderMode, settings = getSettings()): string {
-  switch (provider) {
-    case 'openai':
-    case 'codex-cli':
-      return settings.openaiModel || 'gpt-5.4'
-    case 'google':
-      return settings.googleModel || 'gemini-3.1-flash-lite-preview'
-    case 'claude-cli':
-      return settings.anthropicModel || 'claude-opus-4-6'
-    case 'anthropic':
-    default:
-      return settings.anthropicModel || 'claude-opus-4-6'
-  }
-}
-
-function providerLabel(provider: AIProviderMode): string {
-  switch (provider) {
-    case 'openai':
-      return 'OpenAI'
-    case 'google':
-      return 'Google Gemini'
-    case 'claude-cli':
-      return 'Claude CLI'
-    case 'codex-cli':
-      return 'Codex CLI'
-    case 'anthropic':
-    default:
-      return 'Anthropic Claude'
-  }
-}
-
 function openAIInputFromHistory(messages: ConversationMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
   return messages.map((message) => ({
     role: message.role,
     content: message.content,
   }))
-}
-
-function isQuotaOrAuthError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-  const maybeError = error as { status?: number; code?: string; type?: string; message?: string; error?: { code?: string | number; status?: string; type?: string } }
-  return maybeError.status === 401
-    || maybeError.status === 403
-    || maybeError.status === 429
-    || maybeError.status === 400  // Anthropic credit_balance_too_low returns HTTP 400
-    || maybeError.code === 'insufficient_quota'
-    || maybeError.type === 'insufficient_quota'
-    || maybeError.error?.code === 'insufficient_quota'
-    || maybeError.error?.code === 429
-    || maybeError.error?.status === 'RESOURCE_EXHAUSTED'
-    || maybeError.error?.type === 'credit_balance_too_low'
-    || (typeof maybeError.message === 'string' && maybeError.message.toLowerCase().includes('credit balance'))
-}
-
-function friendlyProviderError(error: unknown, providerLabel: string): Error {
-  if (!error || typeof error !== 'object') {
-    return new Error(`${providerLabel} request failed. Please try again.`)
-  }
-  const maybeError = error as { status?: number; message?: string; error?: { code?: number; status?: string; type?: string; message?: string } }
-
-  // Anthropic credit balance exhausted (HTTP 400 with specific error type)
-  if (
-    maybeError.error?.type === 'credit_balance_too_low'
-    || (maybeError.status === 400 && typeof maybeError.message === 'string' && maybeError.message.toLowerCase().includes('credit balance'))
-  ) {
-    return new Error(`${providerLabel} credit balance is too low. Visit console.anthropic.com to top up, or switch AI provider in Settings.`)
-  }
-
-  // Rate limit / quota exhausted
-  const status = maybeError.status ?? maybeError.error?.code
-  if (status === 429 || maybeError.error?.status === 'RESOURCE_EXHAUSTED') {
-    return new Error(`${providerLabel} quota exceeded. You've hit the free-tier limit — check your plan at the provider's dashboard, or switch AI providers in Settings.`)
-  }
-  // Auth failure
-  if (status === 401 || status === 403) {
-    return new Error(`${providerLabel} rejected the API key. Please check it in Settings.`)
-  }
-  return new Error(`${providerLabel} request failed. Please try again.`)
-}
-
-async function sendWithFallback(
-  systemPrompt: string,
-  prior: ConversationMessage[],
-  userMessage: string,
-): Promise<{ text: string; config: ResolvedProviderConfig }> {
-  const configs = await resolveProviderConfigs()
-  let lastError: unknown = null
-  let lastConfig: ResolvedProviderConfig | null = null
-
-  for (const config of configs) {
-    try {
-      const text = await sendWithProvider(config, systemPrompt, prior, userMessage)
-      return { text, config }
-    } catch (error) {
-      lastError = error
-      lastConfig = config
-      if (!isQuotaOrAuthError(error)) {
-        throw error
-      }
-    }
-  }
-
-  const label = lastConfig ? providerLabel(lastConfig.provider) : 'AI provider'
-  throw friendlyProviderError(lastError, label)
 }
 
 function googleHistoryFromMessages(messages: ConversationMessage[]): GoogleContent[] {
@@ -437,7 +289,7 @@ async function sendWithAnthropic(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   const client = new Anthropic({ apiKey: config.apiKey ?? '' })
   const response = await client.messages.create({
     model: config.model,
@@ -449,10 +301,18 @@ async function sendWithAnthropic(
     ],
   })
 
-  return response.content
-    .filter((item) => item.type === 'text')
-    .map((item) => item.text)
-    .join('')
+  return {
+    text: response.content
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text)
+      .join(''),
+    usage: {
+      inputTokens: response.usage.input_tokens ?? null,
+      outputTokens: response.usage.output_tokens ?? null,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? null,
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? null,
+    },
+  }
 }
 
 async function sendWithOpenAI(
@@ -460,7 +320,7 @@ async function sendWithOpenAI(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   const client = new OpenAI({ apiKey: config.apiKey ?? '' })
   const response = await client.responses.create({
     model: config.model,
@@ -473,7 +333,15 @@ async function sendWithOpenAI(
     store: false,
   })
 
-  return response.output_text || ''
+  return {
+    text: response.output_text || '',
+    usage: {
+      inputTokens: response.usage?.input_tokens ?? null,
+      outputTokens: response.usage?.output_tokens ?? null,
+      cacheReadTokens: response.usage?.input_tokens_details?.cached_tokens ?? null,
+      cacheWriteTokens: null,
+    },
+  }
 }
 
 async function sendWithGoogle(
@@ -481,7 +349,7 @@ async function sendWithGoogle(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   const ai = new GoogleGenAI({
     apiKey: config.apiKey ?? '',
     httpOptions: {
@@ -508,7 +376,10 @@ async function sendWithGoogle(
   if (!text) {
     throw new Error('Gemini returned an empty response. Try rephrasing your question.')
   }
-  return text
+  return {
+    text,
+    usage: null,
+  }
 }
 
 async function runCLIProvider(
@@ -608,7 +479,7 @@ async function sendWithProvider(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   switch (config.provider) {
     case 'claude-cli':
     case 'codex-cli': {
@@ -619,7 +490,10 @@ async function sendWithProvider(
         `User: ${userMessage}`,
       ].filter(Boolean).join('\n\n')
       const cliPrompt = `System context:\n${systemPrompt}\n\n${existingCLIPrompt}`
-      return runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', cliPrompt, config.model)
+      return {
+        text: await runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', cliPrompt, config.model),
+        usage: null,
+      }
     }
     case 'openai':
       return sendWithOpenAI(config, systemPrompt, prior, userMessage)
@@ -922,6 +796,117 @@ function buildSpecificTimeContext(userMessage: string): string {
   }
 }
 
+function buildStructuredEvidenceContext(): string {
+  try {
+    const now = new Date()
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const db = getDb()
+    const pack = buildAssistantEvidencePack(db, dateStr)
+
+    const dayCtx = resolveDayContext(dateStr, db)
+    const workSessions = dayCtx.sessions.slice(0, 12).map((s) => ({
+      id: s.work_session_id,
+      start: s.start,
+      end: s.end,
+      duration_ms: s.duration_ms,
+      active_ms: s.active_ms,
+      client: s.client,
+      project: s.project,
+      confidence: s.confidence,
+      apps: s.apps.slice(0, 5),
+      evidence: s.evidence.slice(0, 5),
+    }))
+
+    return JSON.stringify({
+      date: pack.date,
+      generatedAt: pack.generatedAt,
+      totals: pack.totals,
+      attribution_summary: {
+        captured_ms: dayCtx.day_summary.captured_ms,
+        active_ms: dayCtx.day_summary.active_ms,
+        attributed_ms: dayCtx.day_summary.attributed_ms,
+        ambiguous_ms: dayCtx.day_summary.ambiguous_ms,
+        unattributed_ms: dayCtx.day_summary.unattributed_ms,
+      },
+      work_sessions: workSessions,
+      topApps: pack.topApps.map((app) => ({
+        appName: app.appName,
+        category: app.category,
+        totalSeconds: app.totalSeconds,
+        canonicalAppId: app.canonicalAppId ?? null,
+      })),
+      topWebsites: pack.topWebsites.map((site) => ({
+        domain: site.domain,
+        totalSeconds: site.totalSeconds,
+        topTitle: site.topTitle,
+      })),
+      blocks: pack.timeline.blocks,
+      workflows: pack.workflows.map((workflow) => ({
+        label: workflow.label,
+        dominantCategory: workflow.dominantCategory,
+        occurrenceCount: workflow.occurrenceCount,
+        canonicalApps: workflow.canonicalApps,
+      })),
+      focusSessions: pack.focusSessions.map((session) => ({
+        label: session.label,
+        durationSeconds: session.durationSeconds,
+        targetMinutes: session.targetMinutes ?? null,
+        plannedApps: session.plannedApps,
+      })),
+      appSpotlights: pack.appSpotlights.map((app) => ({
+        displayName: app.displayName,
+        totalSeconds: app.totalSeconds,
+        topArtifacts: app.topArtifacts.slice(0, 4).map((artifact) => artifact.displayTitle),
+        pairedApps: app.pairedApps.slice(0, 4).map((entry) => entry.displayName),
+        workflows: app.workflowAppearances.slice(0, 4).map((workflow) => workflow.label),
+      })),
+      ambiguous_segments: dayCtx.ambiguous_segments.slice(0, 5),
+      caveats: [
+        ...pack.caveats,
+        'work_sessions are attributed via the pipeline; always separate attributed from ambiguous time.',
+        'When answering "how many hours on X", use work_sessions with client/project fields — not raw app totals.',
+      ],
+    }, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function buildAttributionDayContext(dateStr: string): string {
+  try {
+    const payload = resolveDayContext(dateStr, getDb())
+    if (payload.sessions.length === 0) return ''
+    return JSON.stringify(payload, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function buildAttributionClientContext(userMessage: string): string {
+  try {
+    const clientMatch = userMessage.match(
+      /(?:hours?\s+(?:on|for|with|at)\s+|client\s+|project\s+)['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
+    )
+    if (!clientMatch) return ''
+    const db = getDb()
+    const client = findClientByName(clientMatch[1].trim(), db)
+    if (!client) return ''
+
+    const now = new Date()
+    const weekAgo = new Date(now)
+    weekAgo.setDate(weekAgo.getDate() - 7)
+    weekAgo.setHours(0, 0, 0, 0)
+    const payload = resolveClientQuery(
+      client.id, weekAgo.getTime(), now.getTime(),
+      userMessage, db,
+    )
+    if (!payload) return ''
+    return JSON.stringify(payload, null, 2)
+  } catch {
+    return ''
+  }
+}
+
 function buildDayContext(): string {
   try {
     const db = getDb()
@@ -1036,6 +1021,7 @@ function buildDayContext(): string {
     const recentFocusContext = buildRecentFocusContext()
     const todayBlocksContext = buildTodayBlocksContext()
     const workflowsContext = buildWorkflowsContext()
+    const structuredEvidenceContext = buildStructuredEvidenceContext()
     const hourlyShapeContext = buildHourlyShapeContext(
       todaySessions.map((s) => ({
         startTime: s.startTime,
@@ -1074,6 +1060,8 @@ function buildDayContext(): string {
       ...recentDays.map((line) => `- ${line}`),
       '',
       recentFocusContext,
+      structuredEvidenceContext ? 'Structured evidence pack (JSON):' : '',
+      structuredEvidenceContext,
       '',
       'Data notes:',
       '- App totals come from tracked foreground-window sessions — reliable.',
@@ -1232,7 +1220,16 @@ export async function suggestAppCategory(bundleId: string, appName: string): Pro
   ].join(' ')
 
   try {
-    const { text } = await sendWithFallback(systemPrompt, [], appCategorySuggestionPrompt(bundleId, appName))
+    const { text } = await executeTextAIJob(
+      {
+        jobType: 'attribution_assist',
+        screen: 'background',
+        triggerSource: 'system',
+        systemPrompt,
+        userMessage: appCategorySuggestionPrompt(bundleId, appName),
+      },
+      sendWithProvider,
+    )
     const parsed = parseSuggestedCategory(text)
     if (parsed?.suggestedCategory) {
       _categorySuggestionCache.set(cacheKey, parsed)
@@ -1247,7 +1244,10 @@ export async function suggestAppCategory(bundleId: string, appName: string): Pro
   return noSuggestion
 }
 
-export async function generateWorkBlockInsight(block: WorkContextBlock): Promise<WorkContextInsight> {
+export async function generateWorkBlockInsight(
+  block: WorkContextBlock,
+  options?: { jobType?: 'block_label_preview' | 'block_label_finalize' | 'block_cleanup_relabel'; triggerSource?: 'system' | 'background' },
+): Promise<WorkContextInsight> {
   const systemPrompt = [
     'You are Daylens.',
     'You label productivity timeline blocks from local activity evidence.',
@@ -1259,7 +1259,16 @@ export async function generateWorkBlockInsight(block: WorkContextBlock): Promise
 
   try {
     const { text } = await withTimeout(
-      sendWithFallback(systemPrompt, [], workBlockPrompt(block)),
+      executeTextAIJob(
+        {
+          jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
+          screen: 'timeline_day',
+          triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
+          systemPrompt,
+          userMessage: workBlockPrompt(block),
+        },
+        sendWithProvider,
+      ),
       BLOCK_INSIGHT_TIMEOUT_MS,
       'Block insight timed out',
     )
@@ -1295,6 +1304,80 @@ export async function generateWorkBlockInsight(block: WorkContextBlock): Promise
   }
 }
 
+const queuedBlockInsightJobs = new Set<string>()
+let lastCleanupAnchorDate: string | null = null
+const BLOCK_FINALIZE_QUIET_MS = 90_000
+const CLEANUP_LOOKBACK_DAYS = 3
+const CLEANUP_BLOCK_LIMIT = 8
+
+function shiftDateString(dateStr: string, offset: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const next = new Date(year, month - 1, day)
+  next.setDate(next.getDate() + offset)
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+}
+
+async function runBlockInsightJob(
+  block: WorkContextBlock,
+  jobType: 'block_label_finalize' | 'block_cleanup_relabel',
+): Promise<void> {
+  if (queuedBlockInsightJobs.has(`${jobType}:${block.id}`)) return
+  queuedBlockInsightJobs.add(`${jobType}:${block.id}`)
+
+  try {
+    await generateWorkBlockInsight(block, { jobType, triggerSource: 'background' })
+    invalidateProjectionScope('timeline', `ai:${jobType}`)
+    invalidateProjectionScope('apps', `ai:${jobType}`)
+    invalidateProjectionScope('insights', `ai:${jobType}`)
+  } catch (error) {
+    console.warn(`[ai] ${jobType} failed for block ${block.id}:`, error)
+  } finally {
+    queuedBlockInsightJobs.delete(`${jobType}:${block.id}`)
+  }
+}
+
+async function runOvernightCleanup(anchorDate: string): Promise<void> {
+  const settings = getSettings()
+  if (!settings.aiBackgroundEnrichment) return
+
+  const db = getDb()
+  const queued: WorkContextBlock[] = []
+  for (let offset = 0; offset > -CLEANUP_LOOKBACK_DAYS; offset--) {
+    const dateStr = shiftDateString(anchorDate, offset)
+    const payload = getTimelineDayPayload(db, dateStr, null)
+    for (const block of payload.blocks) {
+      if (block.isLive) continue
+      if (block.label.override?.trim()) continue
+      if (block.aiLabel?.trim()) continue
+      queued.push(block)
+      if (queued.length >= CLEANUP_BLOCK_LIMIT) break
+    }
+    if (queued.length >= CLEANUP_BLOCK_LIMIT) break
+  }
+
+  for (const block of queued) {
+    await runBlockInsightJob(block, 'block_cleanup_relabel')
+  }
+}
+
+export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
+  const settings = getSettings()
+  if (!settings.aiBackgroundEnrichment) return
+
+  const now = Date.now()
+  for (const block of payload.blocks) {
+    if (block.isLive) continue
+    if (block.label.override?.trim()) continue
+    if (block.aiLabel?.trim()) continue
+    if (now - block.endTime < BLOCK_FINALIZE_QUIET_MS) continue
+    void runBlockInsightJob(block, 'block_label_finalize')
+  }
+
+  if (lastCleanupAnchorDate === payload.date) return
+  lastCleanupAnchorDate = payload.date
+  void runOvernightCleanup(payload.date)
+}
+
 export async function sendMessage(userMessage: string): Promise<string> {
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
@@ -1320,17 +1403,27 @@ export async function sendMessage(userMessage: string): Promise<string> {
 
   const dayContext = buildDayContext()
   const specificTimeContext = buildSpecificTimeContext(userMessage)
-  const { userName } = getSettings()
+  const now = new Date()
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const attributionDayCtx = buildAttributionDayContext(todayStr)
+  const attributionClientCtx = buildAttributionClientContext(userMessage)
+  const settings = getSettings()
+  const { userName } = settings
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
     : `You are Daylens, a personal productivity coach embedded in a local screen-time tracker.`
-  const providerConfigs = await resolveProviderConfigs()
-  const preferredConfig = providerConfigs[0]
+  const preferredProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+  const preferredConfig = {
+    provider: preferredProvider,
+    model: modelForProvider(preferredProvider, settings),
+  }
   const systemPrompt =
-    persona + ' You have access to tracked local activity data — app sessions, website visits, work blocks, and recurring workflows.\n\n' +
+    persona + ' You have access to tracked local activity data — app sessions, website visits, attributed work sessions, and recurring workflows.\n\n' +
     'Your job is to synthesize, not recite. The user can already see raw totals in the UI. They come to you to understand what the day actually looked like and what was getting done.\n\n' +
     'How to think:\n' +
-    '- Read the work-block structure first. Each block is a chunk of related activity with a label, apps, and websites. Blocks tell you WHAT the user was working on.\n' +
+    '- Work sessions are the primary data unit. Each has a client, project, confidence score, app roles, and evidence trail. Use these to answer "what was I working on" and "how much time on X".\n' +
+    '- For client/project questions, use attributed work_sessions. Report attributed hours first, then ambiguous time separately. Never silently include ambiguous time in attributed totals.\n' +
+    '- Read the work-block structure for additional context. Blocks group related activity with labels, apps, and websites.\n' +
     '- Connect apps to intent: Chrome + docs.google.com + a specific title probably means a specific document; Cursor + GitHub likely means code on a specific repo; Slack + a long block means a conversation thread.\n' +
     '- Notice patterns: recurring workflows show habitual projects or rituals. Time-of-day shape shows when the user focuses vs. communicates.\n' +
     '- Prefer the specific over the generic. "Drafted the Q2 planning doc in Google Docs around 10-11am, then switched to Slack for 30m" beats "You spent 2h in Chrome."\n' +
@@ -1348,9 +1441,21 @@ export async function sendMessage(userMessage: string): Promise<string> {
     (dayContext
       ? `Tracked local data context:\n${dayContext}`
       : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.') +
-    (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '')
+    (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '') +
+    (attributionDayCtx ? `\n\nAttribution-layer work sessions (JSON):\n${attributionDayCtx}` : '') +
+    (attributionClientCtx ? `\n\nClient/project attribution context (JSON):\n${attributionClientCtx}` : '')
 
-  const { text: assistantText } = await sendWithFallback(systemPrompt, prior, userMessage)
+  const { text: assistantText } = await executeTextAIJob(
+    {
+      jobType: 'chat_answer',
+      screen: 'ai_chat',
+      triggerSource: 'user',
+      systemPrompt,
+      userMessage,
+      prior,
+    },
+    sendWithProvider,
+  )
 
   // Don't save an empty assistant response — it would corrupt future prior
   // history and cause the AI to receive empty content blocks.

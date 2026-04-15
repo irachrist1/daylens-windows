@@ -81,9 +81,11 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
                 <Route path="/today" element={<Navigate to="/timeline" replace />} />
                 <Route path="/focus" element={<Navigate to="/timeline" replace />} />
                 <Route path="/history" element={<Navigate to="/timeline" replace />} />
+                <Route path="/clients" element={<Navigate to="/timeline" replace />} />
+                <Route path="/insights" element={<Navigate to="/ai" replace />} />
                 <Route path="/timeline" element={<ErrorBoundary name="Timeline"><Timeline /></ErrorBoundary>} />
                 <Route path="/apps" element={<ErrorBoundary name="Apps"><Apps /></ErrorBoundary>} />
-                <Route path="/insights" element={<ErrorBoundary name="Insights"><Insights /></ErrorBoundary>} />
+                <Route path="/ai" element={<ErrorBoundary name="AI"><Insights /></ErrorBoundary>} />
                 <Route path="/settings" element={<ErrorBoundary name="Settings"><Settings /></ErrorBoundary>} />
               </Routes>
             </Suspense>

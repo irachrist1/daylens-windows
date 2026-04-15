@@ -216,6 +216,25 @@ export interface BlockLabel {
   override: string | null
 }
 
+export interface AIJobUsageEvent {
+  id: string
+  jobType: AIJobType
+  screen: AISurface
+  triggerSource: AIInvocationSource
+  provider: AIProviderMode | null
+  model: string | null
+  success: boolean
+  failureReason: string | null
+  startedAt: number
+  completedAt: number | null
+  latencyMs: number | null
+  inputTokens: number | null
+  outputTokens: number | null
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
+  cacheHit: boolean
+}
+
 export interface FocusOverlapSummary {
   totalSeconds: number
   pct: number
@@ -327,6 +346,28 @@ export interface BreakRecommendation {
 
 export type AIProvider = 'anthropic' | 'openai' | 'google'
 export type AIProviderMode = AIProvider | 'claude-cli' | 'codex-cli'
+export type AIJobType =
+  | 'block_label_preview'
+  | 'block_label_finalize'
+  | 'block_cleanup_relabel'
+  | 'day_summary'
+  | 'week_review'
+  | 'app_narrative'
+  | 'chat_answer'
+  | 'report_generation'
+  | 'attribution_assist'
+
+export type AISurface =
+  | 'timeline_day'
+  | 'timeline_week'
+  | 'apps_list'
+  | 'app_detail'
+  | 'ai_chat'
+  | 'settings'
+  | 'background'
+
+export type AIInvocationSource = 'user' | 'background' | 'system'
+export type AIModelStrategy = 'balanced' | 'quality' | 'economy' | 'custom'
 
 export interface ProcessSnapshot {
   pid: number
@@ -353,6 +394,18 @@ export interface AppSettings {
   anthropicModel: string
   openaiModel: string
   googleModel: string
+  aiFallbackOrder: AIProvider[]
+  aiModelStrategy: AIModelStrategy
+  aiChatProvider?: AIProviderMode
+  aiBlockNamingProvider?: AIProviderMode
+  aiSummaryProvider?: AIProviderMode
+  aiArtifactProvider?: AIProviderMode
+  aiBackgroundEnrichment?: boolean
+  aiActiveBlockPreview?: boolean
+  aiPromptCachingEnabled?: boolean
+  aiSpendSoftLimitUsd?: number
+  aiRedactFilePaths?: boolean
+  aiRedactEmails?: boolean
   dailySummaryEnabled?: boolean
   morningNudgeEnabled?: boolean
   distractionAlertThresholdMinutes?: number
@@ -399,6 +452,94 @@ export const FOCUSED_CATEGORIES: AppCategory[] = [
   'design',
   'productivity',
 ]
+
+// ─── Attribution / Work Session types for renderer ───────────────────────────
+
+export type AttributionStatus = 'attributed' | 'ambiguous' | 'unattributed'
+
+export interface ClientSummary {
+  id: string
+  name: string
+  color: string | null
+  status: string
+  projectCount: number
+}
+
+export interface ProjectSummary {
+  id: string
+  client_id: string
+  name: string
+  color: string | null
+}
+
+export interface WorkSessionApp {
+  app_name: string
+  duration_ms: number
+  role: string // primary | supporting | ambient
+}
+
+export interface WorkSessionEvidence {
+  type: string   // domain | file_path | title | repo_remote | email_domain | sequence
+  value: string
+  weight: number
+}
+
+export interface WorkSessionPayload {
+  id: string
+  started_at: number
+  ended_at: number
+  duration_ms: number
+  active_ms: number
+  idle_ms: number
+  client_id: string | null
+  client_name: string | null
+  client_color: string | null
+  project_id: string | null
+  project_name: string | null
+  attribution_status: AttributionStatus
+  attribution_confidence: number | null
+  title: string | null
+  apps: WorkSessionApp[]
+  evidence: WorkSessionEvidence[]
+}
+
+export interface ActivitySegmentPayload {
+  id: string
+  started_at: number
+  ended_at: number
+  duration_ms: number
+  primary_app_name: string
+  class: string // focused | supporting | ambient | idle
+}
+
+export interface RollupEntry {
+  day_local: string
+  client_id: string | null
+  project_id: string | null
+  attributed_ms: number
+  ambiguous_ms: number
+  session_count: number
+}
+
+export interface ClientDetailPayload {
+  client: ClientSummary
+  projects: ProjectSummary[]
+  rollups: RollupEntry[]
+  sessions: WorkSessionPayload[]
+  ambiguous_sessions: WorkSessionPayload[]
+}
+
+export interface TimelineWorkSession extends WorkSessionPayload {
+  is_live?: boolean
+}
+
+export interface DayWorkSessionsPayload {
+  date: string
+  sessions: TimelineWorkSession[]
+  total_attributed_ms: number
+  total_ambiguous_ms: number
+  total_unattributed_ms: number
+}
 
 // IPC channel names — single source of truth
 export const IPC = {
@@ -448,6 +589,9 @@ export const IPC = {
     SET_API_KEY: 'settings:set-api-key',
     CLEAR_API_KEY: 'settings:clear-api-key',
   },
+  PROJECTIONS: {
+    INVALIDATED: 'projections:invalidated',
+  },
   TRACKING: {
     GET_LIVE: 'tracking:get-live',
     GET_PROCESS_METRICS: 'tracking:get-process-metrics',
@@ -459,7 +603,21 @@ export const IPC = {
     DISCONNECT: 'sync:disconnect',
     GET_MNEMONIC: 'sync:get-mnemonic',
   },
+  ATTRIBUTION: {
+    GET_CLIENT_QUERY: 'attribution:get-client-query',
+    GET_DAY_CONTEXT: 'attribution:get-day-context',
+    FIND_CLIENT: 'attribution:find-client',
+    LIST_CLIENTS: 'attribution:list-clients',
+    RUN_FOR_RANGE: 'attribution:run-for-range',
+    GET_CLIENT_DETAIL: 'attribution:get-client-detail',
+    GET_WORK_SESSIONS_FOR_DAY: 'attribution:get-work-sessions-for-day',
+    GET_WORK_SESSION_SEGMENTS: 'attribution:get-work-session-segments',
+    GET_ROLLUPS: 'attribution:get-rollups',
+    GET_APP_WORK_SESSIONS: 'attribution:get-app-work-sessions',
+    REASSIGN_SESSION: 'attribution:reassign-session',
+  },
   SHELL: {
     OPEN_EXTERNAL: 'shell:open-external',
+    OPEN_PATH: 'shell:open-path',
   },
 } as const

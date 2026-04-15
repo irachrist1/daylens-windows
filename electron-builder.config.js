@@ -9,6 +9,13 @@ const win = {
   artifactName: 'Daylens-${version}-Setup.${ext}',
 }
 
+const mac = {
+  target: ['zip', 'dmg'],
+  icon: 'build/icon.icns',
+  category: 'public.app-category.productivity',
+  artifactName: 'Daylens-${version}-${arch}.${ext}',
+}
+
 if (process.env.WIN_CERTIFICATE_FILE_PATH) {
   win.certificateFile = process.env.WIN_CERTIFICATE_FILE_PATH
 }
@@ -47,6 +54,7 @@ module.exports = {
       to: 'app-normalization.v1.json',
     },
   ],
+  mac,
   win,
   nsis: {
     oneClick: false,

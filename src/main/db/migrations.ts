@@ -41,6 +41,15 @@ function ensureAppSessionIdentityColumns(): void {
   if (!hasColumn('app_sessions', 'app_instance_id')) {
     db.exec(`ALTER TABLE app_sessions ADD COLUMN app_instance_id TEXT`)
   }
+  if (!hasColumn('app_sessions', 'capture_source')) {
+    db.exec(`ALTER TABLE app_sessions ADD COLUMN capture_source TEXT NOT NULL DEFAULT 'foreground_poll'`)
+  }
+  if (!hasColumn('app_sessions', 'ended_reason')) {
+    db.exec(`ALTER TABLE app_sessions ADD COLUMN ended_reason TEXT`)
+  }
+  if (!hasColumn('app_sessions', 'capture_version')) {
+    db.exec(`ALTER TABLE app_sessions ADD COLUMN capture_version INTEGER NOT NULL DEFAULT 1`)
+  }
 }
 
 function ensureWebsiteVisitIdentityColumns(): void {
@@ -58,6 +67,65 @@ function ensureWebsiteVisitIdentityColumns(): void {
   if (!hasColumn('website_visits', 'page_key')) {
     db.exec(`ALTER TABLE website_visits ADD COLUMN page_key TEXT`)
   }
+}
+
+function backfillAppSessionsIdentity(): void {
+  const db = getDb()
+  const rows = db.prepare(`
+    SELECT id, bundle_id, app_name
+    FROM app_sessions
+  `).all() as { id: number; bundle_id: string; app_name: string }[]
+
+  const update = db.prepare(`
+    UPDATE app_sessions
+    SET raw_app_name = ?,
+        canonical_app_id = ?,
+        app_instance_id = ?,
+        capture_source = COALESCE(capture_source, 'foreground_poll'),
+        capture_version = COALESCE(capture_version, 1)
+    WHERE id = ?
+  `)
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const identity = resolveCanonicalApp(row.bundle_id, row.app_name)
+      update.run(identity.rawAppName, identity.canonicalAppId, identity.appInstanceId, row.id)
+    }
+  })
+
+  tx()
+}
+
+function backfillWebsiteIdentity(): void {
+  const db = getDb()
+  const rows = db.prepare(`
+    SELECT id, browser_bundle_id, url
+    FROM website_visits
+  `).all() as { id: number; browser_bundle_id: string | null; url: string | null }[]
+
+  const update = db.prepare(`
+    UPDATE website_visits
+    SET canonical_browser_id = ?,
+        browser_profile_id = ?,
+        normalized_url = ?,
+        page_key = ?
+    WHERE id = ?
+  `)
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const browserIdentity = resolveCanonicalBrowser(row.browser_bundle_id)
+      update.run(
+        browserIdentity.canonicalBrowserId,
+        browserIdentity.browserProfileId,
+        normalizeUrlForStorage(row.url),
+        pageKeyForUrl(row.url),
+        row.id,
+      )
+    }
+  })
+
+  tx()
 }
 
 const migrations: Migration[] = [
@@ -493,7 +561,566 @@ const migrations: Migration[] = [
       db.exec('DELETE FROM workflow_signatures')
     },
   },
+  {
+    version: 13,
+    description: 'Repair identity column drift and create derived-state metadata tables',
+    up: () => {
+      const db = getDb()
+
+      ensureAppSessionIdentityColumns()
+      ensureWebsiteVisitIdentityColumns()
+      backfillAppSessionsIdentity()
+      backfillWebsiteIdentity()
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS app_identities (
+          app_instance_id TEXT PRIMARY KEY,
+          bundle_id TEXT NOT NULL,
+          raw_app_name TEXT NOT NULL,
+          canonical_app_id TEXT,
+          display_name TEXT NOT NULL,
+          default_category TEXT,
+          first_seen_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_identities_canonical
+          ON app_identities (canonical_app_id, last_seen_at);
+
+        CREATE TABLE IF NOT EXISTS clients (
+          id TEXT PRIMARY KEY,
+          slug TEXT NOT NULL UNIQUE,
+          display_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          slug TEXT NOT NULL UNIQUE,
+          display_name TEXT NOT NULL,
+          client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_client
+          ON projects (client_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+          id TEXT PRIMARY KEY,
+          workflow_id TEXT REFERENCES workflow_signatures(id) ON DELETE CASCADE,
+          block_id TEXT REFERENCES timeline_blocks(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          start_time INTEGER NOT NULL,
+          end_time INTEGER NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_date
+          ON workflow_runs (date, start_time);
+
+        CREATE TABLE IF NOT EXISTS block_attributions (
+          id TEXT PRIMARY KEY,
+          block_id TEXT NOT NULL REFERENCES timeline_blocks(id) ON DELETE CASCADE,
+          attribution_type TEXT NOT NULL,
+          subject_type TEXT NOT NULL,
+          subject_id TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_block_attributions_block
+          ON block_attributions (block_id, subject_type);
+        CREATE INDEX IF NOT EXISTS idx_block_attributions_subject
+          ON block_attributions (subject_type, subject_id);
+
+        CREATE TABLE IF NOT EXISTS artifact_links (
+          id TEXT PRIMARY KEY,
+          artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+          linked_subject_type TEXT NOT NULL,
+          linked_subject_id TEXT NOT NULL,
+          relation_type TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifact_links_artifact
+          ON artifact_links (artifact_id, relation_type);
+        CREATE INDEX IF NOT EXISTS idx_artifact_links_subject
+          ON artifact_links (linked_subject_type, linked_subject_id);
+
+        CREATE TABLE IF NOT EXISTS derived_state_versions (
+          component TEXT PRIMARY KEY,
+          version TEXT NOT NULL,
+          rebuild_required INTEGER NOT NULL DEFAULT 0,
+          notes TEXT,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS rebuild_jobs (
+          id TEXT PRIMARY KEY,
+          scope TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          started_at INTEGER NOT NULL,
+          finished_at INTEGER,
+          status TEXT NOT NULL DEFAULT 'pending',
+          metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_rebuild_jobs_scope
+          ON rebuild_jobs (scope, started_at DESC);
+      `)
+    },
+  },
+  {
+    version: 14,
+    description: 'Rewrite to attribution-first schema (work_sessions, segments, evidence, rollups)',
+    up: () => {
+      const db = getDb()
+      const now = Date.now()
+
+      // ── 1a. Drop tables that are entirely replaced or no longer used. ─────
+      // workflow_runs / block_attributions / artifact_links / app_profile_cache
+      // were the old app-centric attribution model. daily_summaries is replaced
+      // by daily_entity_rollups.
+      db.exec(`
+        DROP TABLE IF EXISTS workflow_runs;
+        DROP TABLE IF EXISTS block_attributions;
+        DROP TABLE IF EXISTS artifact_links;
+        DROP TABLE IF EXISTS app_profile_cache;
+        DROP TABLE IF EXISTS daily_summaries;
+      `)
+
+      // ── 1b. Migrate the existing clients/projects tables to the new shape.
+      // Old shape: (id, slug, display_name, status, metadata_json, ...)
+      // New shape per CLAUDE.md: (id, name UNIQUE, color, status, created_at,
+      // updated_at) and projects gain code/color and lose metadata.
+      const existingClients = (() => {
+        try {
+          return db.prepare(`
+            SELECT id, display_name, status, created_at, updated_at FROM clients
+          `).all() as { id: string; display_name: string; status: string; created_at: number; updated_at: number }[]
+        } catch {
+          return [] as { id: string; display_name: string; status: string; created_at: number; updated_at: number }[]
+        }
+      })()
+      const existingProjects = (() => {
+        try {
+          return db.prepare(`
+            SELECT id, client_id, display_name, status, created_at, updated_at FROM projects
+          `).all() as { id: string; client_id: string | null; display_name: string; status: string; created_at: number; updated_at: number }[]
+        } catch {
+          return [] as { id: string; client_id: string | null; display_name: string; status: string; created_at: number; updated_at: number }[]
+        }
+      })()
+
+      db.exec(`
+        DROP TABLE IF EXISTS projects;
+        DROP TABLE IF EXISTS clients;
+
+        CREATE TABLE IF NOT EXISTS clients (
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL UNIQUE,
+          color       TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS client_aliases (
+          id               TEXT PRIMARY KEY,
+          client_id        TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+          alias            TEXT NOT NULL,
+          alias_normalized TEXT NOT NULL,
+          source           TEXT NOT NULL,
+          created_at       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_client_aliases_norm ON client_aliases (alias_normalized);
+        CREATE INDEX IF NOT EXISTS idx_client_aliases_client ON client_aliases (client_id);
+
+        CREATE TABLE IF NOT EXISTS projects (
+          id          TEXT PRIMARY KEY,
+          client_id   TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+          name        TEXT NOT NULL,
+          code        TEXT,
+          color       TEXT,
+          status      TEXT NOT NULL DEFAULT 'active',
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_client ON projects (client_id, status);
+
+        CREATE TABLE IF NOT EXISTS project_aliases (
+          id               TEXT PRIMARY KEY,
+          project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          alias            TEXT NOT NULL,
+          alias_normalized TEXT NOT NULL,
+          source           TEXT NOT NULL,
+          created_at       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_aliases_norm ON project_aliases (alias_normalized);
+        CREATE INDEX IF NOT EXISTS idx_project_aliases_project ON project_aliases (project_id);
+      `)
+
+      const insertClient = db.prepare(`
+        INSERT OR IGNORE INTO clients (id, name, color, status, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, ?, ?)
+      `)
+      for (const row of existingClients) {
+        insertClient.run(row.id, row.display_name, row.status || 'active', row.created_at, row.updated_at)
+      }
+      const insertProject = db.prepare(`
+        INSERT OR IGNORE INTO projects (id, client_id, name, code, color, status, created_at, updated_at)
+        VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)
+      `)
+      for (const row of existingProjects) {
+        if (!row.client_id) continue
+        insertProject.run(row.id, row.client_id, row.display_name, row.status || 'active', row.created_at, row.updated_at)
+      }
+
+      // ── 1c. Build all new tables defined in CLAUDE.md schema. ─────────────
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS devices (
+          id          TEXT PRIMARY KEY,
+          hostname    TEXT NOT NULL,
+          platform    TEXT NOT NULL,
+          created_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS apps (
+          bundle_id        TEXT PRIMARY KEY,
+          app_name         TEXT NOT NULL,
+          category         TEXT NOT NULL,
+          attention_class  TEXT NOT NULL,
+          default_weight   REAL NOT NULL DEFAULT 1.0,
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS raw_window_sessions (
+          id                TEXT PRIMARY KEY,
+          device_id         TEXT NOT NULL,
+          bundle_id         TEXT NOT NULL,
+          process_id        INTEGER,
+          window_title      TEXT,
+          started_at        INTEGER NOT NULL,
+          ended_at          INTEGER NOT NULL,
+          duration_ms       INTEGER NOT NULL,
+          is_frontmost      INTEGER NOT NULL,
+          input_events      INTEGER NOT NULL,
+          keystrokes        INTEGER NOT NULL,
+          mouse_events      INTEGER NOT NULL,
+          scroll_events     INTEGER NOT NULL,
+          idle_ms           INTEGER NOT NULL,
+          privacy_redacted  INTEGER NOT NULL,
+          created_at        INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_raw_window_sessions_time ON raw_window_sessions (started_at);
+
+        CREATE TABLE IF NOT EXISTS browser_context_events (
+          id                       TEXT PRIMARY KEY,
+          raw_window_session_id    TEXT NOT NULL,
+          bundle_id                TEXT NOT NULL,
+          tab_url                  TEXT,
+          domain                   TEXT,
+          registrable_domain       TEXT,
+          tab_title                TEXT,
+          page_path                TEXT,
+          started_at               INTEGER NOT NULL,
+          ended_at                 INTEGER NOT NULL,
+          duration_ms              INTEGER NOT NULL,
+          is_active_tab            INTEGER NOT NULL,
+          created_at               INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_browser_context_events_time ON browser_context_events (started_at);
+        CREATE INDEX IF NOT EXISTS idx_browser_context_events_domain ON browser_context_events (registrable_domain, started_at);
+
+        CREATE TABLE IF NOT EXISTS file_activity_events (
+          id                     TEXT PRIMARY KEY,
+          raw_window_session_id  TEXT,
+          bundle_id              TEXT NOT NULL,
+          file_path              TEXT NOT NULL,
+          file_name              TEXT NOT NULL,
+          file_ext               TEXT,
+          project_root           TEXT,
+          repo_remote_url        TEXT,
+          operation              TEXT NOT NULL,
+          started_at             INTEGER NOT NULL,
+          ended_at               INTEGER,
+          duration_ms            INTEGER,
+          created_at             INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_activity_time ON file_activity_events (started_at);
+
+        CREATE TABLE IF NOT EXISTS idle_periods (
+          id          TEXT PRIMARY KEY,
+          device_id   TEXT NOT NULL,
+          started_at  INTEGER NOT NULL,
+          ended_at    INTEGER NOT NULL,
+          duration_ms INTEGER NOT NULL,
+          reason      TEXT NOT NULL,
+          created_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_idle_periods_time ON idle_periods (started_at);
+
+        CREATE TABLE IF NOT EXISTS attribution_rules (
+          id              TEXT PRIMARY KEY,
+          client_id       TEXT,
+          project_id      TEXT,
+          signal_type     TEXT NOT NULL,
+          operator        TEXT NOT NULL,
+          pattern         TEXT NOT NULL,
+          scope_bundle_id TEXT,
+          weight          REAL NOT NULL,
+          source          TEXT NOT NULL,
+          status          TEXT NOT NULL,
+          created_at      INTEGER NOT NULL,
+          updated_at      INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_attribution_rules_status ON attribution_rules (status, signal_type);
+
+        CREATE TABLE IF NOT EXISTS entity_suggestions (
+          id               TEXT PRIMARY KEY,
+          client_id        TEXT,
+          project_id       TEXT,
+          suggestion_type  TEXT NOT NULL,
+          label            TEXT,
+          top_signals_json TEXT NOT NULL,
+          sample_count     INTEGER NOT NULL,
+          status           TEXT NOT NULL,
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_suggestions_status ON entity_suggestions (status, suggestion_type);
+
+        CREATE TABLE IF NOT EXISTS activity_segments (
+          id                    TEXT PRIMARY KEY,
+          device_id             TEXT NOT NULL,
+          started_at            INTEGER NOT NULL,
+          ended_at              INTEGER NOT NULL,
+          duration_ms           INTEGER NOT NULL,
+          primary_bundle_id     TEXT NOT NULL,
+          window_title          TEXT,
+          domain                TEXT,
+          file_path             TEXT,
+          input_score           REAL NOT NULL,
+          attention_score       REAL NOT NULL,
+          idle_ratio            REAL NOT NULL,
+          class                 TEXT NOT NULL,
+          raw_session_ids_json  TEXT NOT NULL,
+          created_at            INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_segments_time ON activity_segments (started_at);
+        CREATE INDEX IF NOT EXISTS idx_activity_segments_device_time ON activity_segments (device_id, started_at);
+
+        CREATE TABLE IF NOT EXISTS segment_attributions (
+          id                    TEXT PRIMARY KEY,
+          segment_id            TEXT NOT NULL REFERENCES activity_segments(id) ON DELETE CASCADE,
+          client_id             TEXT,
+          project_id            TEXT,
+          score                 REAL NOT NULL,
+          confidence            REAL NOT NULL,
+          rank                  INTEGER NOT NULL,
+          decision_source       TEXT NOT NULL,
+          matched_signals_json  TEXT NOT NULL,
+          created_at            INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_segment_attributions_segment ON segment_attributions (segment_id, rank);
+        CREATE INDEX IF NOT EXISTS idx_segment_attributions_client ON segment_attributions (client_id);
+
+        CREATE TABLE IF NOT EXISTS work_sessions (
+          id                       TEXT PRIMARY KEY,
+          device_id                TEXT NOT NULL,
+          started_at               INTEGER NOT NULL,
+          ended_at                 INTEGER NOT NULL,
+          duration_ms              INTEGER NOT NULL,
+          active_ms                INTEGER NOT NULL,
+          idle_ms                  INTEGER NOT NULL,
+          client_id                TEXT,
+          project_id               TEXT,
+          attribution_status       TEXT NOT NULL,
+          attribution_confidence   REAL,
+          title                    TEXT,
+          primary_bundle_id        TEXT,
+          app_bundle_ids_json      TEXT NOT NULL,
+          created_at               INTEGER NOT NULL,
+          updated_at               INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_sessions_time ON work_sessions (started_at);
+        CREATE INDEX IF NOT EXISTS idx_work_sessions_client ON work_sessions (client_id, started_at);
+        CREATE INDEX IF NOT EXISTS idx_work_sessions_project ON work_sessions (project_id, started_at);
+
+        CREATE TABLE IF NOT EXISTS work_session_segments (
+          work_session_id  TEXT NOT NULL REFERENCES work_sessions(id) ON DELETE CASCADE,
+          segment_id       TEXT NOT NULL,
+          role             TEXT NOT NULL,
+          contribution_ms  INTEGER NOT NULL,
+          PRIMARY KEY (work_session_id, segment_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS work_session_evidence (
+          id                 TEXT PRIMARY KEY,
+          work_session_id    TEXT NOT NULL REFERENCES work_sessions(id) ON DELETE CASCADE,
+          evidence_type      TEXT NOT NULL,
+          evidence_value     TEXT NOT NULL,
+          weight             REAL NOT NULL,
+          source_segment_id  TEXT,
+          created_at         INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_session_evidence_session
+          ON work_session_evidence (work_session_id, weight);
+
+        CREATE TABLE IF NOT EXISTS daily_entity_rollups (
+          day_local       TEXT NOT NULL,
+          timezone        TEXT NOT NULL,
+          client_id       TEXT,
+          project_id      TEXT,
+          attributed_ms   INTEGER NOT NULL,
+          ambiguous_ms    INTEGER NOT NULL,
+          session_count   INTEGER NOT NULL,
+          updated_at      INTEGER NOT NULL,
+          PRIMARY KEY (day_local, timezone, client_id, project_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_entity_rollups_client
+          ON daily_entity_rollups (client_id, day_local);
+        CREATE INDEX IF NOT EXISTS idx_daily_entity_rollups_project
+          ON daily_entity_rollups (project_id, day_local);
+      `)
+
+      // ── 1d. Seed apps from existing app_identities + category_overrides. ───
+      // attention_class is derived from category (focus/supporting/ambient).
+      try {
+        const overrides = db.prepare(`SELECT bundle_id, category FROM category_overrides`).all() as {
+          bundle_id: string; category: string
+        }[]
+        const overrideMap = new Map(overrides.map((row) => [row.bundle_id, row.category]))
+
+        // app_identities is keyed by app_instance_id but we want one row per
+        // bundle_id. Pick the most-recently-seen identity per bundle.
+        const identityRows = db.prepare(`
+          SELECT bundle_id, display_name, default_category, last_seen_at
+          FROM app_identities
+          ORDER BY last_seen_at DESC
+        `).all() as { bundle_id: string; display_name: string; default_category: string | null; last_seen_at: number }[]
+
+        const seen = new Set<string>()
+        const insertApp = db.prepare(`
+          INSERT OR IGNORE INTO apps (bundle_id, app_name, category, attention_class, default_weight, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        for (const row of identityRows) {
+          if (seen.has(row.bundle_id)) continue
+          seen.add(row.bundle_id)
+          const category = overrideMap.get(row.bundle_id)
+            ?? row.default_category
+            ?? 'uncategorized'
+          const attention = attentionClassForCategory(category)
+          insertApp.run(row.bundle_id, row.display_name, category, attention, 1.0, now, now)
+        }
+
+        // Backstop: any bundle we've seen in app_sessions but not yet in apps.
+        const sessionBundles = db.prepare(`
+          SELECT bundle_id, MAX(app_name) AS app_name
+          FROM app_sessions
+          GROUP BY bundle_id
+        `).all() as { bundle_id: string; app_name: string }[]
+        for (const row of sessionBundles) {
+          if (seen.has(row.bundle_id)) continue
+          seen.add(row.bundle_id)
+          const category = overrideMap.get(row.bundle_id) ?? 'uncategorized'
+          const attention = attentionClassForCategory(category)
+          insertApp.run(row.bundle_id, row.app_name, category, attention, 1.0, now, now)
+        }
+      } catch (error) {
+        console.warn('[migrations] v14 apps seed skipped:', error)
+      }
+    },
+  },
+  {
+    version: 15,
+    description: 'Add AI usage telemetry table for per-job provider/model accounting',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_usage_events (
+          id TEXT PRIMARY KEY,
+          job_type TEXT NOT NULL,
+          screen TEXT NOT NULL,
+          trigger_source TEXT NOT NULL,
+          provider TEXT,
+          model TEXT,
+          success INTEGER NOT NULL DEFAULT 0,
+          failure_reason TEXT,
+          started_at INTEGER NOT NULL,
+          completed_at INTEGER,
+          latency_ms INTEGER,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          cache_read_tokens INTEGER,
+          cache_write_tokens INTEGER,
+          cache_hit INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_usage_events_started_at
+          ON ai_usage_events (started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ai_usage_events_job_type
+          ON ai_usage_events (job_type, started_at DESC);
+      `)
+    },
+  },
+  {
+    version: 16,
+    description: 'Persist live app session snapshots for crash recovery',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS live_app_session_snapshot (
+          singleton        INTEGER PRIMARY KEY CHECK(singleton = 1),
+          bundle_id        TEXT    NOT NULL,
+          app_name         TEXT    NOT NULL,
+          window_title     TEXT,
+          raw_app_name     TEXT,
+          canonical_app_id TEXT,
+          app_instance_id  TEXT,
+          capture_source   TEXT    NOT NULL DEFAULT 'foreground_poll',
+          category         TEXT    NOT NULL DEFAULT 'uncategorized',
+          start_time       INTEGER NOT NULL,
+          last_seen_at     INTEGER NOT NULL
+        );
+      `)
+    },
+  },
 ]
+
+function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {
+  switch (category) {
+    case 'development':
+    case 'design':
+    case 'writing':
+    case 'research':
+    case 'productivity':
+    case 'aiTools':
+    case 'spreadsheet':
+    case 'editor':
+      return 'focus'
+    case 'communication':
+    case 'email':
+    case 'mail':
+    case 'chat':
+    case 'meetings':
+    case 'meeting':
+      return 'supporting'
+    case 'entertainment':
+    case 'social':
+    case 'media':
+    case 'system':
+    case 'browsing':
+    default:
+      return 'ambient'
+  }
+}
 
 export function runMigrations(): void {
   const db = getDb()

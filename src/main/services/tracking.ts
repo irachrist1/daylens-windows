@@ -3,11 +3,20 @@
 import { app, powerMonitor } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { insertAppSession, recordActivityStateEvent } from '../db/queries'
+import {
+  clearLiveAppSessionSnapshot,
+  getLiveAppSessionSnapshot,
+  insertAppSession,
+  recordActivityStateEvent,
+  upsertLiveAppSessionSnapshot,
+} from '../db/queries'
+import { upsertAppIdentityObservation } from '../core/inference/appIdentityRegistry'
+import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from './database'
 import type { AppCategory, LiveSession } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
 import { resolveCanonicalApp } from '../lib/appIdentity'
+import { localDateString } from '../lib/localDate'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +47,7 @@ interface InFlightSession {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS  = 5_000
+const SNAPSHOT_PERSIST_MS = 15_000
 const MIN_SESSION_SEC   = 10    // discard sub-10s noise (5s/10s micro-fragments)
 const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → hold the session open provisionally
 const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
@@ -218,10 +228,104 @@ function isOsNoise(bundleId: string, appName: string, winPath?: string): boolean
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let currentSession: InFlightSession | null = null
+let lastSnapshotPersistAt = 0
 type IdleState = 'active' | 'provisional_idle' | 'away'
 let idleState: IdleState = 'active'
 let provisionalIdleStart: number | null = null
 let powerMonitorListenersRegistered = false
+
+function persistLiveSnapshot(force = false): void {
+  if (!currentSession) return
+
+  const now = Date.now()
+  if (!force && now - lastSnapshotPersistAt < SNAPSHOT_PERSIST_MS) return
+
+  try {
+    upsertLiveAppSessionSnapshot(getDb(), {
+      bundleId: currentSession.bundleId,
+      appName: currentSession.appName,
+      windowTitle: currentSession.windowTitle,
+      rawAppName: currentSession.rawAppName,
+      canonicalAppId: currentSession.canonicalAppId,
+      appInstanceId: currentSession.appInstanceId,
+      captureSource: currentSession.captureSource,
+      category: currentSession.category,
+      startTime: currentSession.startTime,
+      lastSeenAt: now,
+    })
+    lastSnapshotPersistAt = now
+  } catch (err) {
+    console.warn('[tracking] failed to persist live snapshot:', err)
+  }
+}
+
+function clearPersistedLiveSnapshot(): void {
+  try {
+    clearLiveAppSessionSnapshot(getDb())
+  } catch (err) {
+    console.warn('[tracking] failed to clear live snapshot:', err)
+  }
+  lastSnapshotPersistAt = 0
+}
+
+function recoverPersistedLiveSnapshot(): void {
+  try {
+    const db = getDb()
+    const snapshot = getLiveAppSessionSnapshot(db)
+    if (!snapshot) return
+
+    const endTime = Math.min(Date.now(), Math.max(snapshot.lastSeenAt, snapshot.startTime))
+    const durationSeconds = Math.max(0, Math.round((endTime - snapshot.startTime) / 1_000))
+    const duplicate = db.prepare(`
+      SELECT 1
+      FROM app_sessions
+      WHERE bundle_id = ? AND start_time = ?
+      LIMIT 1
+    `).get(snapshot.bundleId, snapshot.startTime)
+
+    if (!duplicate && durationSeconds >= MIN_SESSION_SEC) {
+      const { isFocused, category } = classifyResult(snapshot.bundleId, snapshot.appName)
+      insertAppSession(db, {
+        bundleId: snapshot.bundleId,
+        appName: snapshot.appName,
+        windowTitle: snapshot.windowTitle,
+        rawAppName: snapshot.rawAppName,
+        canonicalAppId: snapshot.canonicalAppId,
+        appInstanceId: snapshot.appInstanceId,
+        captureSource: snapshot.captureSource,
+        endedReason: 'recovered_after_restart',
+        captureVersion: 2,
+        startTime: snapshot.startTime,
+        endTime,
+        durationSeconds,
+        category,
+        isFocused,
+      })
+      upsertAppIdentityObservation(db, {
+        bundleId: snapshot.bundleId,
+        rawAppName: snapshot.rawAppName,
+        appInstanceId: snapshot.appInstanceId,
+        observedCategory: category,
+        firstSeenAt: snapshot.startTime,
+        lastSeenAt: endTime,
+      })
+      invalidateProjectionScope('timeline', 'activity_recorded', {
+        date: localDateString(new Date(endTime)),
+      })
+      invalidateProjectionScope('apps', 'activity_recorded', {
+        canonicalAppId: snapshot.canonicalAppId,
+      })
+      invalidateProjectionScope('insights', 'activity_recorded', {
+        date: localDateString(new Date(endTime)),
+      })
+      console.log('[tracking] recovered live session snapshot after restart')
+    }
+
+    clearPersistedLiveSnapshot()
+  } catch (err) {
+    console.warn('[tracking] failed to recover live snapshot:', err)
+  }
+}
 
 function handleLockScreen(): void {
   if (currentSession) {
@@ -271,6 +375,7 @@ function recordActivityEvent(
 
 export function startTracking(): void {
   if (pollTimer) return
+  recoverPersistedLiveSnapshot()
   if (!powerMonitorListenersRegistered) {
     powerMonitor.on('lock-screen', handleLockScreen)
     powerMonitor.on('unlock-screen', handleUnlockScreen)
@@ -393,8 +498,10 @@ async function poll(): Promise<void> {
         startTime: Date.now(),
         category: identity.defaultCategory ?? classifyApp(bundleId, appName),
       }
+      persistLiveSnapshot(true)
     } else {
       currentSession.windowTitle = win.title?.trim() || null
+      persistLiveSnapshot()
     }
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform
@@ -412,6 +519,7 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
 
   // Guard: never write a session with non-positive duration
   if (endTime <= currentSession.startTime) {
+    clearPersistedLiveSnapshot()
     currentSession = null
     return
   }
@@ -420,8 +528,9 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
 
   if (durationSeconds >= MIN_SESSION_SEC) {
     try {
+      const db = getDb()
       const { isFocused, category } = classifyResult(currentSession.bundleId, currentSession.appName)
-      insertAppSession(getDb(), {
+      insertAppSession(db, {
         bundleId:        currentSession.bundleId,
         appName:         currentSession.appName,
         windowTitle:     currentSession.windowTitle,
@@ -437,11 +546,29 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
         category,
         isFocused,
       })
+      upsertAppIdentityObservation(db, {
+        bundleId: currentSession.bundleId,
+        rawAppName: currentSession.rawAppName,
+        appInstanceId: currentSession.appInstanceId,
+        observedCategory: category,
+        firstSeenAt: currentSession.startTime,
+        lastSeenAt: endTime,
+      })
+      invalidateProjectionScope('timeline', 'activity_recorded', {
+        date: localDateString(new Date(endTime)),
+      })
+      invalidateProjectionScope('apps', 'activity_recorded', {
+        canonicalAppId: currentSession.canonicalAppId,
+      })
+      invalidateProjectionScope('insights', 'activity_recorded', {
+        date: localDateString(new Date(endTime)),
+      })
     } catch (err) {
       console.error('[tracking] flush error:', err)
     }
   }
 
+  clearPersistedLiveSnapshot()
   currentSession = null
 }
 

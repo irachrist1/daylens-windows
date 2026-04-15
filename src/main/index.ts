@@ -325,6 +325,11 @@ ipcMain.on('shell:open-external', (_e, url: string) => {
   }
 })
 
+ipcMain.handle('shell:open-path', async (_e, targetPath: string) => {
+  if (!targetPath || typeof targetPath !== 'string') return
+  await shell.openPath(targetPath)
+})
+
 // Window controls IPC — used by the custom TitleBar component in the renderer
 ipcMain.on('window:minimize', () => mainWindow?.minimize())
 ipcMain.on('window:maximize', () => {

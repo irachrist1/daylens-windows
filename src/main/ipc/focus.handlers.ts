@@ -12,6 +12,7 @@ import {
   stopFocusSession,
 } from '../db/queries'
 import { getDb } from '../services/database'
+import { invalidateProjectionScope } from '../core/projections/invalidation'
 
 export function registerFocusHandlers(): void {
   ipcMain.handle(IPC.FOCUS.START, (_e, payload?: FocusStartPayload | string | null) => {
@@ -19,11 +20,16 @@ export function registerFocusHandlers(): void {
       typeof payload === 'string' || payload === null || payload === undefined
         ? { label: payload ?? null }
         : payload
-    return startFocusSession(getDb(), normalized)
+    const sessionId = startFocusSession(getDb(), normalized)
+    invalidateProjectionScope('timeline', 'focus_session_started')
+    invalidateProjectionScope('insights', 'focus_session_started')
+    return sessionId
   })
 
   ipcMain.handle(IPC.FOCUS.STOP, (_e, id: number) => {
     stopFocusSession(getDb(), id)
+    invalidateProjectionScope('timeline', 'focus_session_stopped')
+    invalidateProjectionScope('insights', 'focus_session_stopped')
   })
 
   ipcMain.handle(IPC.FOCUS.GET_ACTIVE, () => {
@@ -40,6 +46,7 @@ export function registerFocusHandlers(): void {
 
   ipcMain.handle(IPC.FOCUS.SAVE_REFLECTION, (_e, payload: { sessionId: number; note: string }) => {
     saveFocusReflection(getDb(), payload.sessionId, payload.note)
+    invalidateProjectionScope('insights', 'focus_reflection_saved')
   })
 
   ipcMain.handle(IPC.FOCUS.GET_DISTRACTION_COUNT, (_e, payload: { sessionId: number }) => {

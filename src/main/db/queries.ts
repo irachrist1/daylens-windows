@@ -64,6 +64,19 @@ interface AppSessionRow {
   capture_version?: number
 }
 
+export interface LiveAppSessionSnapshot {
+  bundleId: string
+  appName: string
+  windowTitle: string | null
+  rawAppName: string
+  canonicalAppId: string | null
+  appInstanceId: string | null
+  captureSource: string
+  category: AppCategory
+  startTime: number
+  lastSeenAt: number
+}
+
 function sessionEndTime(row: Pick<AppSessionRow, 'start_time' | 'end_time' | 'duration_sec'>): number {
   return row.end_time ?? (row.start_time + row.duration_sec * 1_000)
 }
@@ -245,6 +258,107 @@ export function insertAppSession(
     captureVersion: session.captureVersion ?? 1,
   })
   return result.lastInsertRowid as number
+}
+
+export function upsertLiveAppSessionSnapshot(
+  db: Database.Database,
+  snapshot: LiveAppSessionSnapshot,
+): void {
+  db.prepare(`
+    INSERT INTO live_app_session_snapshot (
+      singleton,
+      bundle_id,
+      app_name,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      app_instance_id,
+      capture_source,
+      category,
+      start_time,
+      last_seen_at
+    )
+    VALUES (
+      1,
+      @bundleId,
+      @appName,
+      @windowTitle,
+      @rawAppName,
+      @canonicalAppId,
+      @appInstanceId,
+      @captureSource,
+      @category,
+      @startTime,
+      @lastSeenAt
+    )
+    ON CONFLICT(singleton) DO UPDATE SET
+      bundle_id = excluded.bundle_id,
+      app_name = excluded.app_name,
+      window_title = excluded.window_title,
+      raw_app_name = excluded.raw_app_name,
+      canonical_app_id = excluded.canonical_app_id,
+      app_instance_id = excluded.app_instance_id,
+      capture_source = excluded.capture_source,
+      category = excluded.category,
+      start_time = excluded.start_time,
+      last_seen_at = excluded.last_seen_at
+  `).run({
+    ...snapshot,
+    windowTitle: snapshot.windowTitle ?? null,
+    canonicalAppId: snapshot.canonicalAppId ?? null,
+    appInstanceId: snapshot.appInstanceId ?? null,
+  })
+}
+
+export function getLiveAppSessionSnapshot(
+  db: Database.Database,
+): LiveAppSessionSnapshot | null {
+  const row = db.prepare(`
+    SELECT
+      bundle_id,
+      app_name,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      app_instance_id,
+      capture_source,
+      category,
+      start_time,
+      last_seen_at
+    FROM live_app_session_snapshot
+    WHERE singleton = 1
+    LIMIT 1
+  `).get() as {
+    bundle_id: string
+    app_name: string
+    window_title: string | null
+    raw_app_name: string | null
+    canonical_app_id: string | null
+    app_instance_id: string | null
+    capture_source: string
+    category: AppCategory
+    start_time: number
+    last_seen_at: number
+  } | undefined
+
+  if (!row) return null
+
+  return {
+    bundleId: row.bundle_id,
+    appName: row.app_name,
+    windowTitle: row.window_title ?? null,
+    rawAppName: row.raw_app_name ?? row.app_name,
+    canonicalAppId: row.canonical_app_id ?? null,
+    appInstanceId: row.app_instance_id ?? null,
+    captureSource: row.capture_source,
+    category: row.category,
+    startTime: row.start_time,
+    lastSeenAt: row.last_seen_at,
+  }
+}
+
+export function clearLiveAppSessionSnapshot(db: Database.Database): void {
+  db.prepare('DELETE FROM live_app_session_snapshot WHERE singleton = 1').run()
 }
 
 export function getAppSummariesForRange(
@@ -448,19 +562,18 @@ export function getWeeklySummary(
   const [fromMs] = localDayBounds(startDateStr)
   const [, toMs] = localDayBounds(endDateStr)
 
-  const rows = db
-    .prepare<[string, string]>(`
-      SELECT date, total_active_sec, focus_sec, focus_score
-      FROM daily_summaries
-      WHERE date >= ? AND date <= ?
-      ORDER BY date ASC
-    `)
-    .all(startDateStr, endDateStr) as {
+  // Migration v14 dropped daily_summaries in favour of daily_entity_rollups.
+  // Until step 4 rewires WeeklySummary onto the new rollups table, return an
+  // empty per-day list — getWeeklySummary callers fall back to live aggregates.
+  void db
+  void fromMs
+  void toMs
+  const rows: {
     date: string
     total_active_sec: number
     focus_sec: number
     focus_score: number
-  }[]
+  }[] = []
 
   const totalTrackedSeconds = rows.reduce((sum, row) => sum + row.total_active_sec, 0)
   const totalFocusSeconds = rows.reduce((sum, row) => sum + row.focus_sec, 0)
@@ -756,6 +869,88 @@ export function clearConversation(db: Database.Database, conversationId: number)
   db.prepare(`DELETE FROM ai_messages WHERE conversation_id = ?`).run(conversationId)
 }
 
+export function startAIUsageEvent(
+  db: Database.Database,
+  payload: {
+    id: string
+    jobType: string
+    screen: string
+    triggerSource: string
+    provider?: string | null
+    model?: string | null
+    startedAt: number
+  },
+): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO ai_usage_events (
+      id,
+      job_type,
+      screen,
+      trigger_source,
+      provider,
+      model,
+      success,
+      started_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  `).run(
+    payload.id,
+    payload.jobType,
+    payload.screen,
+    payload.triggerSource,
+    payload.provider ?? null,
+    payload.model ?? null,
+    payload.startedAt,
+  )
+}
+
+export function finishAIUsageEvent(
+  db: Database.Database,
+  payload: {
+    id: string
+    provider?: string | null
+    model?: string | null
+    success: boolean
+    failureReason?: string | null
+    completedAt: number
+    latencyMs?: number | null
+    inputTokens?: number | null
+    outputTokens?: number | null
+    cacheReadTokens?: number | null
+    cacheWriteTokens?: number | null
+    cacheHit?: boolean
+  },
+): void {
+  db.prepare(`
+    UPDATE ai_usage_events
+    SET provider = COALESCE(?, provider),
+        model = COALESCE(?, model),
+        success = ?,
+        failure_reason = ?,
+        completed_at = ?,
+        latency_ms = ?,
+        input_tokens = ?,
+        output_tokens = ?,
+        cache_read_tokens = ?,
+        cache_write_tokens = ?,
+        cache_hit = ?
+    WHERE id = ?
+  `).run(
+    payload.provider ?? null,
+    payload.model ?? null,
+    payload.success ? 1 : 0,
+    payload.failureReason ?? null,
+    payload.completedAt,
+    payload.latencyMs ?? null,
+    payload.inputTokens ?? null,
+    payload.outputTokens ?? null,
+    payload.cacheReadTokens ?? null,
+    payload.cacheWriteTokens ?? null,
+    payload.cacheHit ? 1 : 0,
+    payload.id,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Recent focus sessions
 // ---------------------------------------------------------------------------
@@ -834,8 +1029,8 @@ export interface WebsiteVisitInsert {
 export function insertWebsiteVisit(
   db: Database.Database,
   visit: WebsiteVisitInsert,
-): void {
-  db.prepare(`
+): boolean {
+  const result = db.prepare(`
     INSERT OR IGNORE INTO website_visits
       (
         domain,
@@ -866,6 +1061,7 @@ export function insertWebsiteVisit(
     visit.pageKey,
     visit.source,
   )
+  return result.changes > 0
 }
 
 export function getWebsiteSummariesForRange(

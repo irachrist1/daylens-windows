@@ -21,6 +21,12 @@ extraResources:
   - from: "shared/app-normalization.v1.json"
     to: "app-normalization.v1.json"
 
+mac:
+  target: ["zip", "dmg"]
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  artifactName: "Daylens-${version}-${arch}.${ext}"
+
 win:
   target:
     - target: nsis

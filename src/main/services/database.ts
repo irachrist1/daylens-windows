@@ -3,6 +3,8 @@ import { app } from 'electron'
 import path from 'node:path'
 import { SCHEMA_SQL } from '../db/schema'
 import { runMigrations } from '../db/migrations'
+import { repairStoredAppIdentityObservations } from '../core/inference/appIdentityRegistry'
+import { repairStoredIdentityColumns, syncDerivedStateMetadata } from '../core/projections/metadata'
 
 let _db: Database.Database | null = null
 
@@ -24,6 +26,12 @@ export function initDb(): void {
 
   // Run versioned migrations (adds daily_summaries, etc.)
   runMigrations()
+
+  // Synchronize versioned derived-state metadata and repair older local DBs
+  // whose schema drifted before the formal metadata layer existed.
+  syncDerivedStateMetadata(_db)
+  repairStoredIdentityColumns(_db)
+  repairStoredAppIdentityObservations(_db)
 
   console.log('[db] initialised at', dbPath)
 }

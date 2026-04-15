@@ -19,6 +19,8 @@ import Database from 'better-sqlite3'
 import { getDb } from './database'
 import { insertWebsiteVisit } from '../db/queries'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
+import { invalidateProjectionScope } from '../core/projections/invalidation'
+import { localDateString } from '../lib/localDate'
 
 // ─── Chrome timestamp arithmetic ─────────────────────────────────────────────
 // Chrome stores timestamps as microseconds since 1601-01-01 00:00:00 UTC.
@@ -387,7 +389,7 @@ function pollChromium(
 
       for (const processed of processChromiumRows(rowsToProcess)) {
         const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
-        insertWebsiteVisit(db, {
+        const didInsert = insertWebsiteVisit(db, {
           domain:          processed.domain,
           pageTitle:       processed.pageTitle,
           url:             processed.url,
@@ -401,7 +403,7 @@ function pollChromium(
           browserProfileId: browserIdentity.browserProfileId,
           source:          'chrome_history',
         })
-        inserted++
+        if (didInsert) inserted++
       }
 
       const lastRowUs = rows[rows.length - 1].visit_time
@@ -490,7 +492,7 @@ function pollFirefox(
 
       for (const processed of processFirefoxRows(rowsToProcess)) {
         const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
-        insertWebsiteVisit(db, {
+        const didInsert = insertWebsiteVisit(db, {
           domain:          processed.domain,
           pageTitle:       processed.pageTitle,
           url:             processed.url,
@@ -504,7 +506,7 @@ function pollFirefox(
           browserProfileId: browserIdentity.browserProfileId,
           source:          'firefox_history',
         })
-        inserted++
+        if (didInsert) inserted++
       }
 
       const lastRowUs = rows[rows.length - 1].visit_date
@@ -570,5 +572,12 @@ async function pollAll(): Promise<void> {
 
   if (totalInserted > 0) {
     console.log(`[browser] inserted ${totalInserted} visits from ${pollable} browser(s)`)
+    invalidateProjectionScope('timeline', 'browser_history_updated', {
+      date: localDateString(new Date(pollNow)),
+    })
+    invalidateProjectionScope('apps', 'browser_history_updated')
+    invalidateProjectionScope('insights', 'browser_history_updated', {
+      date: localDateString(new Date(pollNow)),
+    })
   }
 }

@@ -1,13 +1,13 @@
-name: Release Windows
+name: Release macOS
 
 on:
   push:
     tags:
-      - "v*-win"
+      - "v*-mac"
   workflow_dispatch:
     inputs:
       version:
-        description: Windows version number to release
+        description: macOS version number to release
         required: true
       tag_name:
         description: Git tag to publish against
@@ -17,12 +17,8 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    env:
-      WIN_CERTIFICATE_FILE: ${{ secrets.WIN_CERTIFICATE_FILE }}
-      WIN_CERTIFICATE_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
-      WIN_CERT_SUBJECT_NAME: ${{ secrets.WIN_CERT_SUBJECT_NAME }}
+  build-macos:
+    runs-on: macos-latest
 
     steps:
       - name: Derive version from tag
@@ -34,7 +30,7 @@ jobs:
             TAG_NAME="${{ inputs.tag_name }}"
           else
             VERSION="${GITHUB_REF_NAME#v}"
-            VERSION="${VERSION%-win}"
+            VERSION="${VERSION%-mac}"
             TAG_NAME="${GITHUB_REF_NAME}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -71,31 +67,10 @@ jobs:
         run: npm run typecheck
 
       - name: Build Vite bundles
-        shell: bash
-        run: |
-          export STANDALONE_BUILD=1
-          npx vite build --config vite.main.config.ts
-          npx vite build --config vite.preload.config.ts
-          npx vite build --config vite.renderer.config.ts
-
-      # ── Code signing ──────────────────────────────────────────────────────
-      # Requires GitHub Actions secrets:
-      #   WIN_CERTIFICATE_FILE      — base64-encoded PFX (OV or EV certificate)
-      #   WIN_CERTIFICATE_PASSWORD  — PFX password
-      #   WIN_CERT_SUBJECT_NAME     — e.g. "Daylens Inc."
-      # Obtain an OV or EV code-signing certificate from a trusted CA
-      # (e.g. DigiCert, Sectigo) and store the PFX as a base64 secret.
-      - name: Decode code-signing certificate
-        if: ${{ env.WIN_CERTIFICATE_FILE != '' }}
-        shell: bash
-        run: |
-          echo "$WIN_CERTIFICATE_FILE" | base64 --decode > /tmp/cert.pfx
-          echo "WIN_CERTIFICATE_FILE_PATH=/tmp/cert.pfx" >> "$GITHUB_ENV"
-          echo "WIN_CERTIFICATE_PASSWORD=$WIN_CERTIFICATE_PASSWORD" >> "$GITHUB_ENV"
-          echo "WIN_CERT_SUBJECT_NAME=$WIN_CERT_SUBJECT_NAME" >> "$GITHUB_ENV"
+        run: npm run build:all
 
       - name: Package with electron-builder
-        run: npx electron-builder --win --publish always --config electron-builder.config.js
+        run: npx electron-builder --mac zip dmg --publish always --config electron-builder.config.js
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -118,7 +93,7 @@ jobs:
             CHANGELOG_SECTION="- Preview release build for v$VERSION"
           fi
 
-          PREV_TAG="$(git tag --list 'v*-win' --sort=-version:refname | grep -vx "$TAG_NAME" | head -n 1 || true)"
+          PREV_TAG="$(git tag --list 'v*-mac' --sort=-version:refname | grep -vx "$TAG_NAME" | head -n 1 || true)"
           if [ -n "$PREV_TAG" ]; then
             COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..HEAD" | head -n 12)"
             COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG_NAME}"
@@ -128,12 +103,12 @@ jobs:
           fi
 
           if [ -z "$COMMIT_LINES" ]; then
-            COMMIT_LINES="- Initial Windows release build"
+            COMMIT_LINES="- Initial macOS release build"
           fi
 
           {
             echo 'body<<EOF'
-            echo "## Daylens $VERSION for Windows"
+            echo "## Daylens $VERSION for macOS"
             echo
             echo "### Highlights"
             echo "$CHANGELOG_SECTION"
@@ -146,25 +121,21 @@ jobs:
             fi
             echo
             echo "### Install"
-            echo "1. Download \`Daylens-$VERSION-Setup.exe\` below"
-            echo "2. Run the installer"
-            echo "3. Launch Daylens from the Desktop shortcut or Start menu"
-            echo
-            echo "### Update"
-            echo "Existing installs can pick this up through the in-app updater. Daylens will download the release in the background, show progress and highlights in-app, and then restart into the installer to finish."
+            echo "1. Download the macOS archive or disk image below"
+            echo "2. Open the app bundle and move Daylens into Applications"
+            echo "3. Launch Daylens"
             echo
             echo "### Also available"
-            echo "- **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)"
+            echo "- **Windows**: [Windows releases](https://github.com/irachrist1/daylens-windows/releases)"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Daylens ${{ steps.meta.outputs.version }} (Windows)
+          name: Daylens ${{ steps.meta.outputs.version }} (macOS)
           tag_name: ${{ steps.meta.outputs.tag_name }}
           body: ${{ steps.notes.outputs.body }}
           files: |
-            dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe
-            dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe.blockmap
-            dist-release/latest.yml
+            dist-release/*.dmg
+            dist-release/*.zip

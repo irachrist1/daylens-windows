@@ -23,6 +23,7 @@ import type {
   HistoryDayPayload,
   LiveSession,
   PageRef,
+  TimelineEvidenceSummary,
   TimelineSegment,
   WorkflowPattern,
   WorkflowRef,
@@ -120,6 +121,20 @@ interface PersistedWorkflow {
   artifactKeys: string[]
 }
 
+interface AppDetailBlockSlice {
+  id: string
+  startTime: number
+  endTime: number
+  dominantCategory: AppCategory
+  label: {
+    current: string
+  }
+  topApps: WorkContextAppSummary[]
+  topArtifacts: ArtifactRef[]
+  pageRefs: PageRef[]
+  workflowRefs: WorkflowRef[]
+}
+
 const BROWSER_KEYWORDS = [
   'chrome',
   'edge',
@@ -170,6 +185,11 @@ function formatDuration(seconds: number): string {
   if (hours > 0) return `${hours}h`
   if (minutes > 0) return `${minutes}m`
   return `${seconds}s`
+}
+
+function localDateKeyForTimestamp(timestamp: number): string {
+  const date = new Date(timestamp)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
 function appCategoryIsFocused(category: AppCategory): boolean {
@@ -615,6 +635,123 @@ function shortDomainLabel(domain: string): string {
   const stripped = domain.startsWith('www.') ? domain.slice(4) : domain
   const base = stripped.split('.')[0] ?? stripped
   return base ? `${base[0].toUpperCase()}${base.slice(1)}` : domain
+}
+
+function workflowRefsByBlockId(
+  db: Database.Database,
+  blockIds: string[],
+): Map<string, WorkflowRef[]> {
+  const grouped = new Map<string, WorkflowRef[]>()
+  if (blockIds.length === 0) return grouped
+
+  const placeholders = blockIds.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT
+      workflow_occurrences.block_id,
+      workflow_occurrences.confidence,
+      workflow_signatures.id,
+      workflow_signatures.signature_key,
+      workflow_signatures.label,
+      workflow_signatures.dominant_category,
+      workflow_signatures.canonical_apps_json,
+      workflow_signatures.artifact_keys_json
+    FROM workflow_occurrences
+    JOIN workflow_signatures
+      ON workflow_signatures.id = workflow_occurrences.workflow_id
+    WHERE workflow_occurrences.block_id IN (${placeholders})
+  `).all(...blockIds) as Array<{
+    block_id: string
+    confidence: number
+    id: string
+    signature_key: string
+    label: string
+    dominant_category: AppCategory
+    canonical_apps_json: string
+    artifact_keys_json: string
+  }>
+
+  for (const row of rows) {
+    const current = grouped.get(row.block_id) ?? []
+    current.push({
+      id: row.id,
+      signatureKey: row.signature_key,
+      label: row.label,
+      confidence: row.confidence,
+      dominantCategory: row.dominant_category,
+      canonicalApps: JSON.parse(row.canonical_apps_json) as string[],
+      artifactKeys: JSON.parse(row.artifact_keys_json) as string[],
+    })
+    grouped.set(row.block_id, current)
+  }
+
+  return grouped
+}
+
+function loadPersistedAppDetailBlocksForDates(
+  db: Database.Database,
+  dates: string[],
+): Map<string, AppDetailBlockSlice[]> {
+  const grouped = new Map<string, AppDetailBlockSlice[]>()
+  if (dates.length === 0) return grouped
+
+  const placeholders = dates.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT
+      id,
+      date,
+      start_time,
+      end_time,
+      dominant_category,
+      label_current,
+      evidence_summary_json
+    FROM timeline_blocks
+    WHERE invalidated_at IS NULL
+      AND date IN (${placeholders})
+    ORDER BY start_time ASC
+  `).all(...dates) as Array<{
+    id: string
+    date: string
+    start_time: number
+    end_time: number
+    dominant_category: AppCategory
+    label_current: string
+    evidence_summary_json: string
+  }>
+
+  const workflowsByBlock = workflowRefsByBlockId(db, rows.map((row) => row.id))
+
+  for (const row of rows) {
+    let evidence: Partial<TimelineEvidenceSummary> = {}
+    try {
+      evidence = JSON.parse(row.evidence_summary_json || '{}') as Partial<TimelineEvidenceSummary>
+    } catch {
+      evidence = {}
+    }
+
+    const pageRefs = Array.isArray(evidence.pages) ? evidence.pages as PageRef[] : []
+    const documentRefs = Array.isArray(evidence.documents) ? evidence.documents as DocumentRef[] : []
+    const topArtifacts = [...pageRefs, ...documentRefs]
+      .sort((left, right) => right.totalSeconds - left.totalSeconds)
+      .slice(0, 8)
+
+    const current = grouped.get(row.date) ?? []
+    current.push({
+      id: row.id,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      dominantCategory: row.dominant_category,
+      label: {
+        current: row.label_current,
+      },
+      topApps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+      topArtifacts,
+      pageRefs,
+      workflowRefs: workflowsByBlock.get(row.id) ?? [],
+    })
+    grouped.set(row.date, current)
+  }
+
+  return grouped
 }
 
 function confidenceForCandidate(candidate: CandidateBlock, coherence: number): BlockConfidence {
@@ -1154,23 +1291,23 @@ function finalizedLabelForBlock(
   const aiLabel = usefulDerivedLabel(block.aiLabel)
 
   const chosen = override?.label?.trim()
+    || aiLabel
     || artifactLabel
     || workflowLabel
     || ruleLabel
-    || aiLabel
     || userVisibleLabelForBlock(block)
 
   const source = override?.label?.trim()
     ? 'user'
+    : aiLabel && chosen === aiLabel
+      ? 'ai'
     : artifactLabel && chosen === artifactLabel
       ? 'artifact'
       : workflowLabel && chosen === workflowLabel
         ? 'workflow'
         : ruleLabel && chosen === ruleLabel
           ? 'rule'
-          : aiLabel && chosen === aiLabel
-            ? 'ai'
-            : 'rule'
+          : 'rule'
 
   return {
     ...block,
@@ -1455,221 +1592,14 @@ function persistTimelineDay(
   persist()
 }
 
-interface PersistedTimelineBlockRow {
-  id: string
-  start_time: number
-  end_time: number
-  dominant_category: AppCategory
-  category_distribution_json: string
-  switch_count: number
-  label_current: string
-  label_source: string
-  label_confidence: number
-  narrative_current: string | null
-  evidence_summary_json: string
-  heuristic_version: string
-  computed_at: number
-}
-
-function confidenceBucketFor(value: number): BlockConfidence {
-  if (value >= 0.85) return 'high'
-  if (value >= 0.6) return 'medium'
-  return 'low'
-}
-
-function getPersistedTimelineRows(
-  db: Database.Database,
-  dateStr: string,
-): PersistedTimelineBlockRow[] {
-  return db.prepare(`
-    SELECT
-      id,
-      start_time,
-      end_time,
-      dominant_category,
-      category_distribution_json,
-      switch_count,
-      label_current,
-      label_source,
-      label_confidence,
-      narrative_current,
-      evidence_summary_json,
-      heuristic_version,
-      computed_at
-    FROM timeline_blocks
-    WHERE date = ?
-      AND invalidated_at IS NULL
-      AND heuristic_version = ?
-    ORDER BY start_time ASC
-  `).all(dateStr, TIMELINE_HEURISTIC_VERSION) as PersistedTimelineBlockRow[]
-}
-
-function persistedWorkflowRefsForBlock(
-  db: Database.Database,
-  blockId: string,
-): WorkflowRef[] {
-  const rows = db.prepare(`
-    SELECT
-      workflow_signatures.id,
-      workflow_signatures.signature_key,
-      workflow_signatures.label,
-      workflow_signatures.dominant_category,
-      workflow_signatures.canonical_apps_json,
-      workflow_signatures.artifact_keys_json,
-      workflow_occurrences.confidence
-    FROM workflow_occurrences
-    JOIN workflow_signatures
-      ON workflow_signatures.id = workflow_occurrences.workflow_id
-    WHERE workflow_occurrences.block_id = ?
-    ORDER BY workflow_occurrences.confidence DESC, workflow_signatures.label ASC
-  `).all(blockId) as Array<{
-    id: string
-    signature_key: string
-    label: string
-    dominant_category: AppCategory
-    canonical_apps_json: string
-    artifact_keys_json: string
-    confidence: number
-  }>
-
-  return rows.map((row) => ({
-    id: row.id,
-    signatureKey: row.signature_key,
-    label: row.label,
-    confidence: row.confidence,
-    dominantCategory: row.dominant_category,
-    canonicalApps: JSON.parse(row.canonical_apps_json) as string[],
-    artifactKeys: JSON.parse(row.artifact_keys_json) as string[],
-  }))
-}
-
-function loadPersistedBlocksForDate(
-  db: Database.Database,
-  dateStr: string,
-  sessions: AppSession[],
-): WorkContextBlock[] {
-  const rows = getPersistedTimelineRows(db, dateStr)
-  if (rows.length === 0) return []
-
-  const blockIds = rows.map((row) => row.id)
-  const memberRows = db.prepare(`
-    SELECT block_id, member_type, member_id
-    FROM timeline_block_members
-    WHERE block_id IN (${blockIds.map(() => '?').join(', ')})
-  `).all(...blockIds) as Array<{
-    block_id: string
-    member_type: string
-    member_id: string
-  }>
-
-  const sessionIdsByBlock = new Map<string, Set<number>>()
-  for (const row of memberRows) {
-    if (row.member_type !== 'app_session') continue
-    const bucket = sessionIdsByBlock.get(row.block_id) ?? new Set<number>()
-    bucket.add(Number(row.member_id))
-    sessionIdsByBlock.set(row.block_id, bucket)
-  }
-
-  return rows.map((row) => {
-    const memberSessionIds = sessionIdsByBlock.get(row.id)
-    const blockSessions = sessions.filter((session) => {
-      if (memberSessionIds?.has(session.id)) return true
-      return session.startTime < row.end_time && sessionEndMs(session) > row.start_time
-    })
-
-    const topApps = topAppsFromSessions(blockSessions)
-    const websites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
-    const keyPagesByDomain = getTopPagesForDomains(db, row.start_time, row.end_time, websites.map((site) => site.domain), 2)
-    const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
-      .map((page) => page.title?.trim())
-      .filter((title): title is string => Boolean(title))
-      .filter((title, index, titles) => titles.indexOf(title) === index)
-      .slice(0, 4)
-    const pageCandidates = buildPageCandidates(db, row.start_time, row.end_time)
-    const windowCandidates = buildWindowArtifactCandidates(blockSessions)
-    const pageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
-    const documentRefs = windowCandidates.flatMap((candidate) => candidate.documentRef ? [candidate.documentRef] : [])
-    const topArtifacts = [...pageRefs, ...documentRefs]
-      .sort((left, right) => right.totalSeconds - left.totalSeconds)
-      .slice(0, 6)
-    const workflowRefs = persistedWorkflowRefsForBlock(db, row.id)
-    const baseBlock: WorkContextBlock = {
-      id: row.id,
-      startTime: row.start_time,
-      endTime: row.end_time,
-      dominantCategory: row.dominant_category,
-      categoryDistribution: JSON.parse(row.category_distribution_json || '{}') as Partial<Record<AppCategory, number>>,
-      ruleBasedLabel: prettyCategory(row.dominant_category),
-      aiLabel: row.label_source === 'ai' ? row.label_current : null,
-      sessions: blockSessions,
-      topApps,
-      websites,
-      keyPages,
-      pageRefs,
-      documentRefs,
-      topArtifacts,
-      workflowRefs,
-      label: {
-        current: row.label_current,
-        source: row.label_source as WorkContextBlock['label']['source'],
-        confidence: row.label_confidence,
-        narrative: row.narrative_current,
-        ruleBased: prettyCategory(row.dominant_category),
-        aiSuggested: row.label_source === 'ai' ? row.label_current : null,
-        override: row.label_source === 'user' ? row.label_current : null,
-      },
-      focusOverlap: focusOverlapForRange(db, row.start_time, row.end_time),
-      evidenceSummary: {
-        apps: topApps,
-        pages: pageRefs,
-        documents: documentRefs,
-        domains: websites.map((site) => site.domain),
-      },
-      heuristicVersion: row.heuristic_version,
-      computedAt: row.computed_at,
-      switchCount: row.switch_count,
-      confidence: confidenceBucketFor(row.label_confidence),
-      isLive: false,
-    }
-    const provisionalRuleLabel = websiteAwareLabel(baseBlock)
-
-    const hydrated: WorkContextBlock = {
-      ...baseBlock,
-      ruleBasedLabel: provisionalRuleLabel,
-      label: {
-        current: row.label_current,
-        source: row.label_source as WorkContextBlock['label']['source'],
-        confidence: row.label_confidence,
-        narrative: row.narrative_current,
-        ruleBased: provisionalRuleLabel,
-        aiSuggested: row.label_source === 'ai' ? row.label_current : null,
-        override: row.label_source === 'user' ? row.label_current : null,
-      },
-    }
-
-    return finalizedLabelForBlock(db, hydrated)
-  })
-}
-
 function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
   sessions: AppSession[],
-  liveSession?: LiveSession | null,
 ): WorkContextBlock[] {
-  const hasLiveSession = !!liveSession
-  if (!hasLiveSession) {
-    const persisted = loadPersistedBlocksForDate(db, dateStr, sessions)
-    if (persisted.length > 0 || sessions.length === 0) {
-      return persisted
-    }
-  }
-
   const computed = buildBlocksForSessions(db, sessions).map((block) => finalizedLabelForBlock(db, block))
   persistTimelineDay(db, dateStr, computed)
-  return hasLiveSession
-    ? [...loadPersistedBlocksForDate(db, dateStr, sessions), ...computed.filter((block) => block.isLive)]
-    : computed
+  return computed
 }
 
 function mergeAdjacentSegments(segments: TimelineSegment[]): TimelineSegment[] {
@@ -1906,7 +1836,7 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = localDayBounds(dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, liveSession)
+  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
@@ -1946,6 +1876,90 @@ function localDateStringForOffset(offsetDays: number): string {
   const month = String(target.getMonth() + 1).padStart(2, '0')
   const day = String(target.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+const APP_DETAIL_FALLBACK_MERGE_GAP_MS = 5 * 60_000
+
+function dominantCategoryForSessions(sessions: AppSession[]): AppCategory {
+  const distribution: Partial<Record<AppCategory, number>> = {}
+  for (const session of sessions) {
+    distribution[session.category] = (distribution[session.category] ?? 0) + session.durationSeconds
+  }
+  return dominantCategoryFromDistribution(distribution)
+}
+
+function labelForSessionCluster(sessions: AppSession[]): string {
+  if (sessions.length === 0) return 'Work block'
+
+  const lead = sessions.reduce((best, current) => (
+    current.durationSeconds > best.durationSeconds ? current : best
+  ))
+  const titled = usefulWindowTitle(lead)
+  if (titled) return compactWindowTitle(titled)
+
+  const identity = resolveCanonicalApp(lead.bundleId, lead.appName)
+  return sanitizeBlockLabel(identity.displayName)
+    ?? sanitizeBlockLabel(lead.appName)
+    ?? prettyCategory(lead.category)
+}
+
+function buildSessionDerivedAppDetailBlocksByDate(
+  sessions: AppSession[],
+  canonicalAppId: string,
+): Map<string, AppDetailBlockSlice[]> {
+  const sessionsByDate = new Map<string, AppSession[]>()
+
+  for (const session of sessions) {
+    const dateKey = localDateKeyForTimestamp(session.startTime)
+    const current = sessionsByDate.get(dateKey) ?? []
+    current.push(session)
+    sessionsByDate.set(dateKey, current)
+  }
+
+  const blocksByDate = new Map<string, AppDetailBlockSlice[]>()
+  for (const [dateKey, appSessions] of sessionsByDate.entries()) {
+    const ordered = [...appSessions].sort((left, right) => left.startTime - right.startTime)
+    const clusters: AppSession[][] = []
+
+    for (const session of ordered) {
+      const currentCluster = clusters[clusters.length - 1]
+      if (!currentCluster || currentCluster.length === 0) {
+        clusters.push([session])
+        continue
+      }
+
+      const previous = currentCluster[currentCluster.length - 1]
+      const gapMs = session.startTime - sessionEndMs(previous)
+      if (gapMs <= APP_DETAIL_FALLBACK_MERGE_GAP_MS) {
+        currentCluster.push(session)
+      } else {
+        clusters.push([session])
+      }
+    }
+
+    const slices = clusters.map((cluster) => {
+      const startTime = cluster[0].startTime
+      const endTime = cluster.reduce((latest, session) => Math.max(latest, sessionEndMs(session)), startTime)
+      const signature = `${canonicalAppId}:${startTime}:${endTime}:${cluster.map((session) => session.id).join(',')}`
+      return {
+        id: `appd_${sha1(signature).slice(0, 16)}`,
+        startTime,
+        endTime,
+        dominantCategory: dominantCategoryForSessions(cluster),
+        label: {
+          current: labelForSessionCluster(cluster),
+        },
+        topApps: topAppsFromSessions(cluster),
+        topArtifacts: [],
+        pageRefs: [],
+        workflowRefs: [],
+      }
+    })
+
+    blocksByDate.set(dateKey, slices)
+  }
+
+  return blocksByDate
 }
 
 export function getBlockDetailPayload(
@@ -2082,30 +2096,78 @@ export function getAppDetailPayload(
     return (session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId) === canonicalAppId
   })
 
-  const payloads: DayTimelinePayload[] = []
-  for (let offset = 0; offset > -days; offset--) {
-    payloads.push(getTimelineDayPayload(db, localDateStringForOffset(offset), liveSession))
+  const relevantDates = Array.from(new Set(sessions.map((session) => localDateKeyForTimestamp(session.startTime))))
+  const historicalDates = relevantDates.filter((date) => !(date === today && liveSession))
+  const persistedBlocksByDate = loadPersistedAppDetailBlocksForDates(db, historicalDates)
+  const blocksByDate = new Map<string, AppDetailBlockSlice[]>(persistedBlocksByDate)
+  const sessionDerivedBlocksByDate = buildSessionDerivedAppDetailBlocksByDate(sessions, canonicalAppId)
+
+  for (const date of relevantDates) {
+    const fallbackBlocks = sessionDerivedBlocksByDate.get(date) ?? []
+    const persistedBlocks = blocksByDate.get(date) ?? []
+
+    // Keep app detail responsive even when timeline blocks have not yet been
+    // persisted for this date by deriving coarse slices from app sessions.
+    if (persistedBlocks.length === 0 && fallbackBlocks.length > 0) {
+      blocksByDate.set(date, fallbackBlocks)
+      continue
+    }
+
+    // For today with a live session, prefer the session-derived slices so the
+    // currently running block is reflected immediately in the app panel.
+    if (date === today && liveSession && fallbackBlocks.length > 0) {
+      blocksByDate.set(date, fallbackBlocks)
+    }
   }
 
-  const relatedBlocks = payloads.flatMap((payload) => payload.blocks)
+  const relatedBlocks = Array.from(blocksByDate.values()).flat()
     .filter((block) => block.topApps.some((app) => {
       const identity = resolveCanonicalApp(app.bundleId, app.appName)
       return (identity.canonicalAppId ?? app.bundleId) === canonicalAppId
     }))
 
-  const topArtifacts = relatedBlocks
-    .flatMap((block) => block.topArtifacts)
-    .reduce<ArtifactRef[]>((acc, artifact) => {
-      if (acc.some((entry) => entry.id === artifact.id)) return acc
-      acc.push(artifact)
-      return acc
-    }, [])
+  const artifactTotals = new Map<string, ArtifactRef>()
+  for (const block of relatedBlocks) {
+    const blockContainsOnlySelectedApp = block.topApps.every((app) => {
+      const identity = resolveCanonicalApp(app.bundleId, app.appName)
+      return (identity.canonicalAppId ?? app.bundleId) === canonicalAppId
+    })
+
+    for (const artifact of block.topArtifacts) {
+      const belongsToSelectedApp = artifact.canonicalAppId === canonicalAppId
+        || (!artifact.canonicalAppId && blockContainsOnlySelectedApp)
+
+      if (!belongsToSelectedApp) continue
+
+      const existing = artifactTotals.get(artifact.id)
+      if (existing) {
+        existing.totalSeconds += artifact.totalSeconds
+      } else {
+        artifactTotals.set(artifact.id, { ...artifact })
+      }
+    }
+  }
+
+  const topArtifacts = Array.from(artifactTotals.values())
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 8)
 
-  const topPages = relatedBlocks
-    .flatMap((block) => block.pageRefs)
-    .filter((page, index, pages) => pages.findIndex((entry) => entry.id === page.id) === index)
+  const pageTotals = new Map<string, PageRef>()
+  for (const block of relatedBlocks) {
+    for (const page of block.pageRefs) {
+      if (page.canonicalAppId !== canonicalAppId) continue
+
+      const existing = pageTotals.get(page.id)
+      if (existing) {
+        existing.totalSeconds += page.totalSeconds
+      } else {
+        pageTotals.set(page.id, { ...page })
+      }
+    }
+  }
+
+  const topPages = Array.from(pageTotals.values())
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 8)
 
   const pairedAppsMap = new Map<string, { canonicalAppId: string; displayName: string; totalSeconds: number }>()
@@ -2154,33 +2216,6 @@ export function getAppDetailPayload(
     topBlockIds: relatedBlocks.slice(0, 8).map((block) => block.id),
     computedAt: Date.now(),
   }
-
-  db.prepare(`
-    INSERT INTO app_profile_cache (
-      canonical_app_id,
-      range_key,
-      character_json,
-      top_artifacts_json,
-      paired_apps_json,
-      top_block_ids_json,
-      computed_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(canonical_app_id, range_key) DO UPDATE SET
-      character_json = excluded.character_json,
-      top_artifacts_json = excluded.top_artifacts_json,
-      paired_apps_json = excluded.paired_apps_json,
-      top_block_ids_json = excluded.top_block_ids_json,
-      computed_at = excluded.computed_at
-  `).run(
-    canonicalAppId,
-    rangeKey,
-    JSON.stringify(appCharacter ?? null),
-    JSON.stringify(topArtifacts),
-    JSON.stringify(pairedApps),
-    JSON.stringify(profile.topBlockIds),
-    profile.computedAt,
-  )
 
   return {
     canonicalAppId,
