@@ -38,6 +38,10 @@ interface AIJobDefinition {
   providerPreferenceKey: 'aiChatProvider' | 'aiBlockNamingProvider' | 'aiSummaryProvider' | 'aiArtifactProvider'
   cachePolicy: 'off' | 'stable_prefix' | 'repeated_payload'
   modelStrategy: Extract<AIModelStrategy, 'balanced' | 'quality' | 'economy'>
+  // Hard-pin a specific model for this job regardless of tier defaults.
+  // Use sparingly — only for jobs that genuinely need a specific capability
+  // (e.g., report_generation needs Opus for structured agentic output).
+  providerModelOverride?: Partial<Record<AIProviderMode, string>>
 }
 
 const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
@@ -112,6 +116,13 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     providerPreferenceKey: 'aiArtifactProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'quality',
+    // Report generation is the one job that genuinely warrants Opus — it produces
+    // long-form structured output (tables, charts, formatted exports) in an agentic
+    // multi-step pattern where the extra capability pays for itself.
+    providerModelOverride: {
+      anthropic: 'claude-opus-4-6',
+      'claude-cli': 'claude-opus-4-6',
+    },
   },
   attribution_assist: {
     jobType: 'attribution_assist',
@@ -132,17 +143,70 @@ function orderedUnique<T>(values: readonly T[]): T[] {
   return values.filter((value, index) => values.indexOf(value) === index)
 }
 
-export function modelForProvider(provider: AIProviderMode, settings = getSettings()): string {
+// Model tier table — what runs at each cost level per provider.
+//
+// Tier intent:
+//   economy  — background, high-volume, latency-tolerant jobs (block labeling, previews)
+//   balanced — foreground summaries that need coherent prose but not frontier reasoning
+//   quality  — interactive chat and complex queries where reasoning depth matters
+//
+// Opus is NOT in this table. It is only reached via providerModelOverride on specific
+// jobs (currently: report_generation) where structured agentic output justifies the cost.
+const ANTHROPIC_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
+  economy: 'claude-haiku-4-5-20251001',   // Fast and cheap — block labels, previews
+  balanced: 'claude-haiku-4-5-20251001',  // Summaries are fine with Haiku
+  quality: 'claude-sonnet-4-6',           // Chat answers, attribution reasoning
+}
+const OPENAI_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
+  economy: 'gpt-5.4-mini',
+  balanced: 'gpt-5.4-mini',
+  quality: 'gpt-5.4',
+}
+const GOOGLE_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
+  economy: 'gemini-2.0-flash-lite',
+  balanced: 'gemini-3.1-flash',
+  quality: 'gemini-3.1-flash',
+}
+
+export function modelForProvider(
+  provider: AIProviderMode,
+  strategyOrSettings: AIModelStrategy | AppSettings = getSettings(),
+  settings = getSettings(),
+): string {
+  // Accept either (provider, settings) — legacy callers — or (provider, strategy, settings).
+  let strategy: Extract<AIModelStrategy, 'economy' | 'balanced' | 'quality'>
+  let resolvedSettings: AppSettings
+
+  if (typeof strategyOrSettings === 'string') {
+    // Treat 'custom' and any unknown values as quality so they fall through to the
+    // user's configured model rather than silently picking a wrong tier.
+    strategy = (strategyOrSettings === 'economy' || strategyOrSettings === 'balanced')
+      ? strategyOrSettings
+      : 'quality'
+    resolvedSettings = settings
+  } else {
+    strategy = 'quality'
+    resolvedSettings = strategyOrSettings
+  }
+
   switch (provider) {
     case 'openai':
     case 'codex-cli':
-      return settings.openaiModel || 'gpt-5.4'
+      return resolvedSettings.openaiModel && strategy === 'quality'
+        ? resolvedSettings.openaiModel
+        : OPENAI_TIER_MODELS[strategy]
     case 'google':
-      return settings.googleModel || 'gemini-3.1-flash-lite-preview'
+      return resolvedSettings.googleModel && strategy === 'quality'
+        ? resolvedSettings.googleModel
+        : GOOGLE_TIER_MODELS[strategy]
     case 'claude-cli':
     case 'anthropic':
     default:
-      return settings.anthropicModel || 'claude-opus-4-6'
+      // For quality tier, respect the user's explicit model setting if they've overridden it.
+      // The default is Sonnet — Opus is reached only via providerModelOverride on specific jobs.
+      return resolvedSettings.anthropicModel && strategy === 'quality'
+        ? resolvedSettings.anthropicModel
+        : ANTHROPIC_TIER_MODELS[strategy]
   }
 }
 
@@ -240,6 +304,7 @@ function redactAIText(input: string, settings: AppSettings): string {
 
 async function resolveProviderConfigsForJob(jobType: AIJobType, settings: AppSettings): Promise<ResolvedProviderConfig[]> {
   const orderedProviders = applyStrategyProviderFallback(preferredProviderForJob(jobType, settings), settings)
+  const definition = JOB_DEFINITIONS[jobType]
   const configs: ResolvedProviderConfig[] = []
 
   for (const provider of orderedProviders) {
@@ -249,7 +314,8 @@ async function resolveProviderConfigsForJob(jobType: AIJobType, settings: AppSet
     configs.push({
       provider,
       apiKey,
-      model: modelForProvider(provider, settings),
+      model: definition.providerModelOverride?.[provider]
+        ?? modelForProvider(provider, definition.modelStrategy, settings),
     })
   }
 
