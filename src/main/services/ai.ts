@@ -1452,7 +1452,6 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
   const chatModel = modelForProvider(chatProvider, 'quality', settings)
   console.log(`[ai:chat] LLM call → provider=${chatProvider} model=${chatModel}`)
-
   const { text: assistantText } = await executeTextAIJob(
     {
       jobType: 'chat_answer',

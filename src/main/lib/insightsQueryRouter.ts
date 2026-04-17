@@ -661,7 +661,6 @@ export async function routeInsightsQuestion(
   const resolvedContext = resolveTemporalContext(trimmed, defaultDate, previousContext)
 
   console.log(`[router] q="${trimmed.slice(0, 80)}" allTime=${isAllTimeQuestion(normalized)} weekly=${isWeeklyQuestion(normalized)}`)
-
   // ─── Client/project attribution routing ──────────────────────────────────
   const clientAnswer = tryRouteClientQuestion(normalized, trimmed, resolvedContext, db)
   if (clientAnswer) return { answer: clientAnswer, resolvedContext }
@@ -729,7 +728,6 @@ export async function routeInsightsQuestion(
       resolvedContext: allTimeContext,
     }
   }
-
   if (isWeeklyQuestion(normalized)) {
     const end = new Date(resolvedContext.date)
     end.setHours(23, 59, 59, 999)
