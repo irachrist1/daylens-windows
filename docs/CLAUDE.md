@@ -15,6 +15,7 @@ Notes:
 - `ISSUES.md` owns current implementation status, near-term backlog, platform validation snapshots, and what's open vs. fixed. Update that file instead of scattering status notes across the other docs.
 - Keep the docs honest about attribution scope: clients and projects now have first-class routed coverage, while broader workstream attribution still belongs in `ISSUES.md` until users validate it.
 - Record truthfulness caveats in `ISSUES.md` when behavior is narrower than the intended contract, such as prompt-caching scope or backlog-cleanup revisit scope.
+- For launch-readiness passes, distinguish clearly between dev-run validation, packaged-app validation, and real cross-platform validation. Keep close-window survival, workspace creation/linking, and explicit streaming-proof claims in `ISSUES.md` until a human validates them end to end.
 - Update the canonical docs during the same task whenever behavior or status changed enough that the docs would drift.
 - Unless the user explicitly confirms something is done, describe it as `upon review`, `ready for review`, `implemented pending verification`, or similar.
 - Before marking work as fixed or done in the docs, ask the user whether they tested it and whether it worked.

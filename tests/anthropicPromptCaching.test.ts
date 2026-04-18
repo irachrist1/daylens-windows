@@ -10,6 +10,30 @@ const prior = [
 test('stable_prefix caching marks the reusable system prompt', () => {
   const payload = buildAnthropicPromptInput(
     'System instructions',
+    [],
+    'Newest user turn',
+    {
+      cachePolicy: 'stable_prefix',
+      promptCachingEnabled: true,
+    },
+  )
+
+  assert.equal(payload.cache_control, undefined)
+  assert.deepEqual(payload.system, [
+    {
+      type: 'text',
+      text: 'System instructions',
+      cache_control: { type: 'ephemeral' },
+    },
+  ])
+  assert.deepEqual(payload.messages, [
+    { role: 'user', content: 'Newest user turn' },
+  ])
+})
+
+test('stable_prefix caching keeps the system prefix explicit for multi-turn requests', () => {
+  const payload = buildAnthropicPromptInput(
+    'System instructions',
     prior,
     'Newest user turn',
     {
@@ -18,6 +42,7 @@ test('stable_prefix caching marks the reusable system prompt', () => {
     },
   )
 
+  assert.deepEqual(payload.cache_control, { type: 'ephemeral' })
   assert.deepEqual(payload.system, [
     {
       type: 'text',
@@ -43,6 +68,7 @@ test('repeated_payload caching marks the final user payload', () => {
     },
   )
 
+  assert.equal(payload.cache_control, undefined)
   assert.equal(payload.system, 'System instructions')
   assert.deepEqual(payload.messages, [
     {
@@ -69,6 +95,7 @@ test('prompt caching toggle leaves Anthropic payload unmarked when disabled', ()
     },
   )
 
+  assert.equal(payload.cache_control, undefined)
   assert.equal(payload.system, 'System instructions')
   assert.deepEqual(payload.messages, [
     { role: 'user', content: 'Earlier question' },

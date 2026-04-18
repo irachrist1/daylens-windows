@@ -94,7 +94,7 @@ Current formation rules to preserve unless there is a measured reason to change 
 - standalone meetings should split into their own blocks instead of being buried inside adjacent work
 - developer testing or high-context-switch flows can remain one heuristic block when splitting would create noise
 - closed blocks may get AI relabeling, but the visible label should prefer meaningful overrides first, then useful AI/rule-based labels, then safe fallbacks
-- overnight cleanup should sweep backlog history in background batches and relabel weak unlabeled blocks; existing AI-labeled history is not automatically revisited yet, and already-good deterministic labels should stay stable and be marked reviewed instead of churned
+- overnight cleanup should sweep backlog history in background batches and relabel weak unlabeled blocks; obviously weak legacy AI labels such as generic fallback labels may be revisited, but already-good AI labels are not automatically reopened yet, and already-good deterministic labels should stay stable and be marked reviewed instead of churned
 - unattributed or low-confidence blocks should still remain visible rather than collapsing into blankness
 
 When changing these heuristics:

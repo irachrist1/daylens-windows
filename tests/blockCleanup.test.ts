@@ -113,7 +113,7 @@ function insertTimelineBlock(
   `).run(payload.id, payload.date, payload.startTime, payload.endTime, payload.startTime)
 }
 
-test('background relabel only queues weak fallback blocks', () => {
+test('background relabel only reopens weak fallback or legacy generic AI labels', () => {
   const strongRuleBlock = makeBlock({
     ruleBasedLabel: 'GitHub',
     label: {
@@ -143,8 +143,23 @@ test('background relabel only queues weak fallback blocks', () => {
   })
   assert.equal(backgroundRelabelDispositionForBlock(weakFallbackBlock), 'relabel')
 
-  const aiBlock = makeBlock({
+  const weakAiBlock = makeBlock({
     id: 'block-3',
+    aiLabel: 'Research',
+    label: {
+      current: 'Research',
+      source: 'ai',
+      confidence: 0.65,
+      narrative: null,
+      ruleBased: '',
+      aiSuggested: 'Research',
+      override: null,
+    },
+  })
+  assert.equal(backgroundRelabelDispositionForBlock(weakAiBlock), 'relabel')
+
+  const aiBlock = makeBlock({
+    id: 'block-4',
     aiLabel: 'Fixing sync uploader retries',
     label: {
       current: 'Fixing sync uploader retries',
@@ -159,7 +174,7 @@ test('background relabel only queues weak fallback blocks', () => {
   assert.equal(backgroundRelabelDispositionForBlock(aiBlock), 'skip')
 
   const overrideBlock = makeBlock({
-    id: 'block-4',
+    id: 'block-5',
     label: {
       current: 'Client billing follow-up',
       source: 'user',
@@ -203,7 +218,7 @@ test('pending cleanup dates include only unresolved history days', () => {
 
   insertAppSession(db, { year: 2026, month: 4, day: 12, hour: 12 })
   insertTimelineBlock(db, {
-    id: 'block-with-ai',
+    id: 'block-with-weak-ai',
     date: '2026-04-12',
     startTime: localMs(2026, 4, 12, 12),
     endTime: localMs(2026, 4, 12, 13),
@@ -212,10 +227,10 @@ test('pending cleanup dates include only unresolved history days', () => {
     startMs: localMs(2026, 4, 12, 12),
     endMs: localMs(2026, 4, 12, 13),
     insight: {
-      label: 'Fix onboarding copy',
+      label: 'Research',
       narrative: null,
     },
-    sourceBlockIds: ['block-with-ai'],
+    sourceBlockIds: ['block-with-weak-ai'],
   })
 
   insertAppSession(db, { year: 2026, month: 4, day: 13, hour: 13 })
@@ -231,7 +246,7 @@ test('pending cleanup dates include only unresolved history days', () => {
   `).run(Date.now())
 
   const pending = listPendingWorkContextCleanupDates(db, '2026-04-13')
-  assert.deepEqual(pending, ['2026-04-09', '2026-04-10'])
+  assert.deepEqual(pending, ['2026-04-09', '2026-04-10', '2026-04-12'])
 
   db.close()
 })

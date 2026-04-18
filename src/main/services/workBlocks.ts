@@ -1307,9 +1307,18 @@ export function hasStableDeterministicBlockLabel(block: WorkContextBlock): boole
   )
 }
 
+function hasLegacyWeakAiLabel(block: WorkContextBlock): boolean {
+  const aiLabel = block.aiLabel?.trim()
+  return Boolean(aiLabel) && !usefulDerivedLabel(aiLabel)
+}
+
 export function backgroundRelabelDispositionForBlock(block: WorkContextBlock): BackgroundRelabelDisposition {
   if (block.isLive) return 'skip'
   if (block.label.override?.trim()) return 'skip'
+  // Persisted AI labels do not yet carry a reliable quality score, so cleanup
+  // only auto-reopens obvious legacy placeholder labels instead of churning
+  // already-specific AI labels.
+  if (hasLegacyWeakAiLabel(block)) return 'relabel'
   if (block.aiLabel?.trim()) return 'skip'
   return hasStableDeterministicBlockLabel(block) ? 'review' : 'relabel'
 }

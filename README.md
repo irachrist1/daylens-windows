@@ -30,7 +30,7 @@ Current implementation gaps and near-term product backlog live in [docs/ISSUES.m
 - Cross-platform foreground-window tracking, including Linux compositor-aware fallbacks and desktop-entry cleanup upon review
 - Browser history ingestion for Chromium browsers on both platforms, plus Firefox on Windows
 - Cross-platform icon resolution for apps, sites, files, and artifacts
-- Grounded AI over tracked history, including streamed chat responses, AI-surface focus-session start / stop / review flows, AI-generated report/export artifacts, and week/app summaries upon review
+- Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, AI-generated report/export artifacts, and week/app summaries upon review
 - Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, and sparse app category overrides upon review
 - Packaged macOS, Windows, and Linux build pipelines upon review
 
@@ -41,8 +41,11 @@ Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md]
 - `npm start` runs the Electron app in development mode
 - `npm run typecheck` checks TypeScript without emitting output
 - `npm run build:all` builds the main, preload, and renderer bundles
+- `npm run test:ai-chat` runs the AI chat, onboarding, cleanup, and prompt-caching tests
+- `npm run test:entity-prompts` runs the entity-routing prompt benchmark tests
 - `npm run dist:win` builds the Windows installer and update metadata into `dist-release/`
 - `npm run dist:mac` builds the macOS archive and DMG into `dist-release/`
+- `npm run dist:linux` builds the Linux release artifacts into `dist-release/`
 
 ## Canonical docs
 

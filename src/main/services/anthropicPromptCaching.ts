@@ -21,6 +21,7 @@ export type AnthropicPromptInput = {
     role: 'user' | 'assistant'
     content: string | AnthropicTextBlock[]
   }>
+  cache_control?: AnthropicCacheControl
 }
 
 function cacheControlForOptions(options?: AITextJobExecutionOptions): AnthropicCacheControl | null {
@@ -29,9 +30,31 @@ function cacheControlForOptions(options?: AITextJobExecutionOptions): AnthropicC
   return { type: 'ephemeral' }
 }
 
-// Anthropic caches the prompt prefix through the block carrying cache_control.
-// Daylens uses two shapes:
-// - stable_prefix: cache the reusable system prompt, not the newest user turn
+function shouldUseAutomaticCacheBreakpoint(
+  prior: AnthropicConversationMessage[],
+  options?: AITextJobExecutionOptions,
+): boolean {
+  return Boolean(
+    options?.promptCachingEnabled
+    && options.cachePolicy === 'stable_prefix'
+    && prior.length > 0,
+  )
+}
+
+function systemPromptForOptions(
+  systemPrompt: string,
+  cacheControl: AnthropicCacheControl | null,
+  options?: AITextJobExecutionOptions,
+): string | AnthropicTextBlock[] {
+  if (!cacheControl || options?.cachePolicy !== 'stable_prefix') return systemPrompt
+  return [{ type: 'text', text: systemPrompt, cache_control: cacheControl }]
+}
+
+// Daylens uses two Anthropic prompt-caching shapes:
+// - stable_prefix:
+//   - all jobs keep the reusable system prompt on an explicit breakpoint
+//   - multi-turn jobs also use Anthropic's top-level automatic breakpoint so
+//     the reusable conversation prefix can advance between turns
 // - repeated_payload: cache the full request by marking the final user payload
 export function buildAnthropicPromptInput(
   systemPrompt: string,
@@ -40,6 +63,7 @@ export function buildAnthropicPromptInput(
   options?: AITextJobExecutionOptions,
 ): AnthropicPromptInput {
   const cacheControl = cacheControlForOptions(options)
+  const useAutomaticCacheBreakpoint = shouldUseAutomaticCacheBreakpoint(prior, options)
   const messages: AnthropicPromptInput['messages'] = prior.map((message) => ({
     role: message.role,
     content: message.content,
@@ -55,9 +79,8 @@ export function buildAnthropicPromptInput(
   }
 
   return {
-    system: cacheControl && options?.cachePolicy === 'stable_prefix'
-      ? [{ type: 'text', text: systemPrompt, cache_control: cacheControl }]
-      : systemPrompt,
+    cache_control: useAutomaticCacheBreakpoint ? cacheControl ?? undefined : undefined,
+    system: systemPromptForOptions(systemPrompt, cacheControl, options),
     messages,
   }
 }

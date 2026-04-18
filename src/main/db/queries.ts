@@ -45,6 +45,25 @@ const UX_NOISE_SUBSTRINGS = [
 // Sessions shorter than this are noise from brief app transitions.
 const MIN_DISPLAY_SEC = 15
 const SAME_APP_MERGE_GAP_MS = 15_000
+const LEGACY_WEAK_AI_LABELS = [
+  'AI Tools',
+  'Browsing',
+  'Communication',
+  'Design',
+  'Development',
+  'Email',
+  'Insufficient Data',
+  'Insufficient Data For Label',
+  'Meetings',
+  'Mixed Work',
+  'Productivity',
+  'Research',
+  'Research & AI Chat',
+  'System',
+  'Uncategorized',
+  'Web Session',
+  'Writing',
+]
 
 function isUxNoise(appName: string): boolean {
   const lower = appName.toLowerCase()
@@ -1680,7 +1699,8 @@ export function listPendingWorkContextCleanupDates(
   anchorDate: string,
 ): string[] {
   const [, anchorDayEndMs] = localDayBounds(anchorDate)
-  const rows = db.prepare<[string, number]>(`
+  const weakAiPlaceholders = LEGACY_WEAK_AI_LABELS.map(() => '?').join(', ')
+  const rows = db.prepare(`
     WITH pending_persisted_dates AS (
       SELECT DISTINCT timeline_blocks.date AS date
       FROM timeline_blocks
@@ -1694,6 +1714,21 @@ export function listPendingWorkContextCleanupDates(
         AND timeline_blocks.date <= ?
         AND block_label_overrides.block_id IS NULL
         AND work_context_observations.id IS NULL
+    ),
+    pending_legacy_ai_dates AS (
+      SELECT DISTINCT timeline_blocks.date AS date
+      FROM timeline_blocks
+      LEFT JOIN block_label_overrides
+        ON block_label_overrides.block_id = timeline_blocks.id
+      JOIN work_context_observations
+        ON work_context_observations.start_ts = timeline_blocks.start_time
+        AND work_context_observations.end_ts = timeline_blocks.end_time
+      WHERE timeline_blocks.invalidated_at IS NULL
+        AND timeline_blocks.is_live = 0
+        AND timeline_blocks.date <= ?
+        AND block_label_overrides.block_id IS NULL
+        AND json_extract(work_context_observations.observation, '$.kind') = 'blockInsight'
+        AND trim(COALESCE(json_extract(work_context_observations.observation, '$.label'), '')) IN (${weakAiPlaceholders})
     ),
     pending_unpersisted_dates AS (
       SELECT DISTINCT strftime('%Y-%m-%d', app_sessions.start_time / 1000, 'unixepoch', 'localtime') AS date
@@ -1710,9 +1745,12 @@ export function listPendingWorkContextCleanupDates(
     FROM pending_persisted_dates
     UNION
     SELECT date
+    FROM pending_legacy_ai_dates
+    UNION
+    SELECT date
     FROM pending_unpersisted_dates
     ORDER BY date ASC
-  `).all(anchorDate, anchorDayEndMs) as Array<{ date: string }>
+  `).all(anchorDate, anchorDate, ...LEGACY_WEAK_AI_LABELS, anchorDayEndMs) as Array<{ date: string }>
 
   return rows.map((row) => row.date)
 }
