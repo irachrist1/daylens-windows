@@ -6,7 +6,7 @@ Daylens is a cross-platform activity tracker for your laptop. It quietly logs wh
 
 ## Product Description
 
-Daylens captures local evidence from the tools you use - apps, windows, browser activity, files, and reconstructed work sessions - then turns that into a timeline you can inspect directly or query through AI. The same AI surface can also start or review focus sessions and turn grounded local evidence into summaries, reports, tables, charts, and export artifacts without sending you to a separate reports tab.
+Daylens captures local evidence from the tools you use - apps, windows, browser activity, files, and reconstructed work sessions - then turns that into a local-first timeline you can inspect directly or query through AI. The same AI surface can also start or review focus sessions and turn grounded local evidence into summaries, reports, tables, charts, and export artifacts without sending you to a separate reports tab or a separate focus app.
 
 It is built for questions like:
 
@@ -22,4 +22,4 @@ Cross-platform activity tracker that turns your laptop history into a searchable
 
 ## Website Blurb
 
-Daylens helps you understand what you worked on, how long it took, what changed, and what context surrounded it - across apps, tabs, files, work sessions, and grounded AI reports.
+Daylens helps you understand what you worked on, how long it took, what changed, and what context surrounded it - across apps, tabs, files, work sessions, optional linked browser access, and grounded AI reports.

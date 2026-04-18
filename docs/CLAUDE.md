@@ -17,6 +17,7 @@ Notes:
 - Record truthfulness caveats in `ISSUES.md` when behavior is narrower than the intended contract, such as prompt-caching scope or backlog-cleanup revisit scope.
 - Treat Anthropic prompt-caching payload tests as request-shape validation only; do not call prompt caching fully validated until live provider usage confirms cache reads or writes.
 - For launch-readiness passes, distinguish clearly between dev-run validation, packaged-app validation, and real cross-platform validation. Keep close-window survival, workspace creation/linking, and explicit streaming-proof claims in `ISSUES.md` until a human validates them end to end.
+- Do not claim AI starter prompts, freeform provider-backed answers, focus-session AI flows, report/export generation, week-review AI, or end-to-end rename/reset interactions were validated in a pass unless they were actually exercised in that pass.
 - Update the canonical docs during the same task whenever behavior or status changed enough that the docs would drift.
 - Unless the user explicitly confirms something is done, describe it as `upon review`, `ready for review`, `implemented pending verification`, or similar.
 - Before marking work as fixed or done in the docs, ask the user whether they tested it and whether it worked.

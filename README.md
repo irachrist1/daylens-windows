@@ -30,8 +30,8 @@ Current implementation gaps and near-term product backlog live in [docs/ISSUES.m
 - Cross-platform foreground-window tracking, including Linux compositor-aware fallbacks and desktop-entry cleanup upon review
 - Browser history ingestion for Chromium browsers on both platforms, plus Firefox on Windows
 - Cross-platform icon resolution for apps, sites, files, and artifacts
-- Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, AI-generated report/export artifacts, and week/app summaries upon review
-- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, and sparse app category overrides upon review
+- Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, AI-generated report/export artifacts, and week/app summaries implemented pending verification
+- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, and sparse app category overrides implemented pending verification
 - Packaged macOS, Windows, and Linux build pipelines upon review
 
 Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md](docs/ISSUES.md), including what was manually validated on macOS versus what still remains implemented pending verification on Windows and Linux.
