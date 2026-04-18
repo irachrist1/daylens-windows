@@ -115,6 +115,7 @@ import {
   type WeeklyBriefContext,
   type WeeklyBriefEvidencePack,
 } from '../lib/weeklyBrief'
+import { buildCLIProcessPayload, buildCLIProcessSpec } from './cliLaunch'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
@@ -730,12 +731,22 @@ async function findCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null>
 
 async function runCLIHelpCommand(executablePath: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn(executablePath, args, {
+    const spec = buildCLIProcessSpec(executablePath, args)
+    const child = spawn(spec.command, spec.args, {
       env: buildCLIEnv(executablePath),
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: spec.shell,
+      stdio: spec.usesJsonStdin ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
+    if (spec.usesJsonStdin) {
+      child.stdin?.end(buildCLIProcessPayload(executablePath, args))
+    }
+    const stdoutStream = child.stdout
+    const stderrStream = child.stderr
+    if (!stdoutStream || !stderrStream) {
+      resolve('')
+      return
+    }
 
     let stdout = ''
     let stderr = ''
@@ -747,10 +758,10 @@ async function runCLIHelpCommand(executablePath: string, args: string[]): Promis
       resolve(`${stdout}\n${stderr}`.trim())
     }, 10_000)
 
-    child.stdout.on('data', (chunk) => {
+    stdoutStream.on('data', (chunk) => {
       stdout += chunk.toString()
     })
-    child.stderr.on('data', (chunk) => {
+    stderrStream.on('data', (chunk) => {
       stderr += chunk.toString()
     })
     child.on('error', () => {
@@ -1014,12 +1025,22 @@ async function runCLIProvider(
 
   try {
     const output = await new Promise<string>((resolve, reject) => {
-      const child = spawn(executablePath, args, {
+      const spec = buildCLIProcessSpec(executablePath, args)
+      const child = spawn(spec.command, spec.args, {
         env: buildCLIEnv(executablePath),
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: spec.shell,
+        stdio: spec.usesJsonStdin ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       })
+      if (spec.usesJsonStdin) {
+        child.stdin?.end(buildCLIProcessPayload(executablePath, args))
+      }
+      const stdoutStream = child.stdout
+      const stderrStream = child.stderr
+      if (!stdoutStream || !stderrStream) {
+        reject(new CLIProviderError('launch_failed', `${tool} CLI did not expose stdout/stderr pipes`))
+        return
+      }
 
       let stdout = ''
       let stderr = ''
@@ -1031,10 +1052,10 @@ async function runCLIProvider(
         reject(new CLIProviderError('timeout', `${tool} CLI timed out after ${CLI_TIMEOUT_MS / 1000}s`))
       }, CLI_TIMEOUT_MS)
 
-      child.stdout.on('data', (chunk) => {
+      stdoutStream.on('data', (chunk) => {
         stdout += chunk.toString()
       })
-      child.stderr.on('data', (chunk) => {
+      stderrStream.on('data', (chunk) => {
         stderr += chunk.toString()
       })
       child.on('error', (error) => {

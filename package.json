@@ -10,7 +10,7 @@
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
     "test:weekly-brief": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/weeklyBrief.test.ts",
-    "test:ai-chat": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/weeklyBrief.test.ts ./tests/followUpChat.test.ts ./tests/appIdentityBranding.test.ts ./tests/onboardingFirstRun.test.ts ./tests/blockCleanup.test.ts ./tests/anthropicPromptCaching.test.ts ./tests/aiThreadSchema.test.ts ./tests/databaseBootstrap.test.ts",
+    "test:ai-chat": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/weeklyBrief.test.ts ./tests/followUpChat.test.ts ./tests/appIdentityBranding.test.ts ./tests/onboardingFirstRun.test.ts ./tests/blockCleanup.test.ts ./tests/anthropicPromptCaching.test.ts ./tests/aiThreadSchema.test.ts ./tests/databaseBootstrap.test.ts ./tests/cliLaunch.test.ts",
     "test:entity-prompts": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/routerHardPromptBenchmark.ts",
     "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
     "build:preload": "cross-env STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
@@ -22,7 +22,7 @@
     "postinstall": "electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.80.0",
+    "@anthropic-ai/sdk": "^0.81.0",
     "@google/genai": "^1.47.0",
     "@paymoapp/active-window": "^2.1.4",
     "@sentry/electron": "^7.11.0",
@@ -54,5 +54,9 @@
     "tailwindcss": "^4.2.2",
     "typescript": "^5.8.0",
     "vite": "^6.0.0"
+  },
+  "overrides": {
+    "lodash": "4.18.1",
+    "protobufjs": "7.5.5"
   }
 }
