@@ -1,0 +1,198 @@
+name: Release Linux
+
+on:
+  push:
+    tags:
+      - "v*-linux"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Linux version number to release
+        required: true
+      tag_name:
+        description: Git tag to publish against
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Derive version from tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG_NAME="${{ inputs.tag_name }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${VERSION%-linux}"
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11
+          docker --version
+
+      - name: Stamp version into package.json
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ steps.meta.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package with electron-builder
+        run: npx electron-builder --linux --publish always --config electron-builder.config.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sanity-check Linux release artifacts
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          ls -lah dist-release
+          test -f "dist-release/Daylens-${VERSION}.AppImage"
+          test -f "dist-release/Daylens-${VERSION}.deb"
+          test -f "dist-release/Daylens-${VERSION}.rpm"
+          test -f "dist-release/Daylens-${VERSION}.tar.gz"
+          test -f "dist-release/latest-linux.yml"
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.AppImage")" -gt 1000000
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.deb")" -gt 1000000
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.rpm")" -gt 1000000
+
+          dpkg-deb --info "dist-release/Daylens-${VERSION}.deb" | tee /tmp/daylens-deb-info.txt
+          grep -Eq '^ Package:' /tmp/daylens-deb-info.txt
+          grep -Eq "^ Version:[[:space:]]*${VERSION}$" /tmp/daylens-deb-info.txt
+
+          rpm -qip "dist-release/Daylens-${VERSION}.rpm" | tee /tmp/daylens-rpm-info.txt
+          grep -Eq '^Name[[:space:]]*:' /tmp/daylens-rpm-info.txt
+          grep -Eq "^Version[[:space:]]*:[[:space:]]*${VERSION}$" /tmp/daylens-rpm-info.txt
+
+          node <<'NODE'
+          const fs = require('fs');
+          const yaml = require('js-yaml');
+          const metadata = yaml.load(fs.readFileSync('dist-release/latest-linux.yml', 'utf8'));
+          const advertisedFiles = [
+            metadata.path,
+            ...(Array.isArray(metadata.files) ? metadata.files.map((file) => String(file.url ?? file.path ?? file.name ?? '')) : []),
+          ].filter(Boolean);
+
+          const hasAdvertisedExtension = (ext) => advertisedFiles.some((file) => file.endsWith(ext));
+          if (!String(metadata.path ?? '').endsWith('.AppImage')) {
+            throw new Error(`latest-linux.yml primary path should be an AppImage, got: ${metadata.path}`);
+          }
+          for (const ext of ['.AppImage', '.deb', '.rpm']) {
+            if (!hasAdvertisedExtension(ext)) {
+              throw new Error(`latest-linux.yml is missing an advertised ${ext} artifact`);
+            }
+          }
+          NODE
+
+      - name: Smoke-test AppImage runtime
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          chmod +x "dist-release/Daylens-${VERSION}.AppImage"
+          xvfb-run -a env \
+            DAYLENS_SMOKE_TEST=1 \
+            DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            "./dist-release/Daylens-${VERSION}.AppImage" \
+            --no-sandbox \
+            --disable-setuid-sandbox
+          node scripts/verify-linux-smoke.js \
+            --report "$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            --expect-package-type appimage \
+            --expect-package-source appimage-env \
+            --expect-updater-supported true
+
+      - name: Smoke-test DEB install
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          PACKAGE_FILE="dist-release/Daylens-${VERSION}.deb"
+          PACKAGE_NAME="$(dpkg-deb -f "$PACKAGE_FILE" Package)"
+          sudo dpkg -i "$PACKAGE_FILE" || sudo apt-get install -f -y
+          APP_PATH="$(dpkg -L "$PACKAGE_NAME" | grep '/daylens$' | head -n 1)"
+          test -n "$APP_PATH"
+          xvfb-run -a env \
+            DAYLENS_SMOKE_TEST=1 \
+            DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-deb-smoke.json" \
+            "$APP_PATH" \
+            --no-sandbox \
+            --disable-setuid-sandbox
+          node scripts/verify-linux-smoke.js \
+            --report "$RUNNER_TEMP/daylens-deb-smoke.json" \
+            --expect-package-type deb \
+            --expect-package-source dpkg-query \
+            --expect-updater-supported true \
+            --require-package-owner
+          sudo apt-get remove -y "$PACKAGE_NAME" || true
+
+      - name: Smoke-test RPM install
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$RUNNER_TEMP:/smoke" \
+            -w /workspace \
+            fedora:40 \
+            bash -lc '
+              set -euo pipefail
+              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool xprop dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
+              PACKAGE_FILE="dist-release/Daylens-'"${VERSION}"'.rpm"
+              dnf install --nogpgcheck -y "$PACKAGE_FILE"
+              PACKAGE_NAME="$(rpm -qp --queryformat "%{NAME}" "$PACKAGE_FILE")"
+              APP_PATH="$(rpm -ql "$PACKAGE_NAME" | grep "/daylens$" | head -n 1)"
+              test -n "$APP_PATH"
+              Xvfb :99 -screen 0 1280x720x24 >/tmp/daylens-xvfb.log 2>&1 &
+              XVFB_PID=$!
+              trap "kill $XVFB_PID" EXIT
+              export DISPLAY=:99
+              export DAYLENS_SMOKE_TEST=1
+              export DAYLENS_SMOKE_REPORT_PATH=/smoke/daylens-rpm-smoke.json
+              "$APP_PATH" \
+                --no-sandbox \
+                --disable-setuid-sandbox
+              node scripts/verify-linux-smoke.js \
+                --report /smoke/daylens-rpm-smoke.json \
+                --expect-package-type rpm \
+                --expect-package-source rpm-query \
+                --expect-updater-supported true \
+                --require-package-owner
+            '

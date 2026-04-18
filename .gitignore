@@ -3,6 +3,7 @@ node_modules/
 out/
 dist/
 dist-release/
+.tmp-benchmark/
 *.log
 .DS_Store
 private/

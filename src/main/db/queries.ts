@@ -2,6 +2,10 @@
 import type Database from 'better-sqlite3'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import type {
+  AIConversationState,
+  AISurfaceSummary,
+  AIThreadMessage,
+  AIThreadMessageMetadata,
   AppCharacter,
   AppSession,
   AppUsageSummary,
@@ -41,6 +45,25 @@ const UX_NOISE_SUBSTRINGS = [
 // Sessions shorter than this are noise from brief app transitions.
 const MIN_DISPLAY_SEC = 15
 const SAME_APP_MERGE_GAP_MS = 15_000
+const LEGACY_WEAK_AI_LABELS = [
+  'AI Tools',
+  'Browsing',
+  'Communication',
+  'Design',
+  'Development',
+  'Email',
+  'Insufficient Data',
+  'Insufficient Data For Label',
+  'Meetings',
+  'Mixed Work',
+  'Productivity',
+  'Research',
+  'Research & AI Chat',
+  'System',
+  'Uncategorized',
+  'Web Session',
+  'Writing',
+]
 
 function isUxNoise(appName: string): boolean {
   const lower = appName.toLowerCase()
@@ -202,6 +225,43 @@ function mapFocusSessionRow(row: FocusSessionRow): FocusSession {
     targetMinutes: row.target_minutes,
     plannedApps,
     reflectionNote: row.reflection_note,
+  }
+}
+
+function parseJsonObject<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) return fallback
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
+}
+
+function mapAIThreadMessage(
+  row: {
+    id: number
+    role: 'user' | 'assistant'
+    content: string
+    createdAt: number
+    metadataJson: string | null
+  },
+): AIThreadMessage {
+  const metadata = parseJsonObject<AIThreadMessageMetadata>(row.metadataJson, {})
+  return {
+    id: row.id,
+    role: row.role,
+    content: row.content,
+    createdAt: row.createdAt,
+    answerKind: metadata.answerKind ?? null,
+    suggestedFollowUps: metadata.suggestedFollowUps ?? [],
+    retryable: metadata.retryable ?? false,
+    retrySourceUserMessageId: metadata.retrySourceUserMessageId ?? null,
+    contextSnapshot: metadata.contextSnapshot ?? null,
+    providerError: metadata.providerError ?? false,
+    actions: metadata.actions ?? [],
+    artifacts: metadata.artifacts ?? [],
+    rating: metadata.rating ?? null,
+    ratingUpdatedAt: metadata.ratingUpdatedAt ?? null,
   }
 }
 
@@ -849,25 +909,251 @@ export function appendConversationMessage(
   conversationId: number,
   role: 'user' | 'assistant',
   content: string,
-): void {
-  db.prepare(
-    `INSERT INTO ai_messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)`
-  ).run(conversationId, role, content, Date.now())
+  options?: {
+    metadata?: AIThreadMessageMetadata | null
+    createdAt?: number
+  },
+): AIThreadMessage {
+  const createdAt = options?.createdAt ?? Date.now()
+  const metadata = options?.metadata ?? null
+  const result = db.prepare(
+    `INSERT INTO ai_messages (conversation_id, role, content, created_at, metadata_json) VALUES (?, ?, ?, ?, ?)`
+  ).run(
+    conversationId,
+    role,
+    content,
+    createdAt,
+    JSON.stringify(metadata ?? {}),
+  )
+
+  return {
+    id: result.lastInsertRowid as number,
+    role,
+    content,
+    createdAt,
+    answerKind: metadata?.answerKind ?? null,
+    suggestedFollowUps: metadata?.suggestedFollowUps ?? [],
+    retryable: metadata?.retryable ?? false,
+    retrySourceUserMessageId: metadata?.retrySourceUserMessageId ?? null,
+    contextSnapshot: metadata?.contextSnapshot ?? null,
+    providerError: metadata?.providerError ?? false,
+    actions: metadata?.actions ?? [],
+    artifacts: metadata?.artifacts ?? [],
+    rating: metadata?.rating ?? null,
+    ratingUpdatedAt: metadata?.ratingUpdatedAt ?? null,
+  }
 }
 
 export function getConversationMessages(
   db: Database.Database,
   conversationId: number,
-): { role: 'user' | 'assistant'; content: string }[] {
+): AIThreadMessage[] {
   return db
     .prepare(
-      `SELECT role, content FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC`
+      `SELECT id, role, content, created_at AS createdAt, metadata_json AS metadataJson
+       FROM ai_messages
+       WHERE conversation_id = ?
+       ORDER BY created_at ASC, id ASC`
     )
-    .all(conversationId) as { role: 'user' | 'assistant'; content: string }[]
+    .all(conversationId)
+    .map((row) => mapAIThreadMessage(row as {
+      id: number
+      role: 'user' | 'assistant'
+      content: string
+      createdAt: number
+      metadataJson: string | null
+    })) as AIThreadMessage[]
+}
+
+export function updateAIMessageFeedback(
+  db: Database.Database,
+  messageId: number,
+  rating: AIThreadMessageMetadata['rating'],
+): AIThreadMessage | null {
+  const row = db.prepare(`
+    SELECT id, role, content, created_at AS createdAt, metadata_json AS metadataJson
+    FROM ai_messages
+    WHERE id = ?
+    LIMIT 1
+  `).get(messageId) as {
+    id: number
+    role: 'user' | 'assistant'
+    content: string
+    createdAt: number
+    metadataJson: string | null
+  } | undefined
+
+  if (!row) return null
+
+  const metadata = parseJsonObject<AIThreadMessageMetadata>(row.metadataJson, {})
+  const nextMetadata: AIThreadMessageMetadata = {
+    ...metadata,
+    rating: rating ?? null,
+    ratingUpdatedAt: rating ? Date.now() : null,
+  }
+
+  db.prepare(`
+    UPDATE ai_messages
+    SET metadata_json = ?
+    WHERE id = ?
+  `).run(JSON.stringify(nextMetadata), messageId)
+
+  return mapAIThreadMessage({
+    ...row,
+    metadataJson: JSON.stringify(nextMetadata),
+  })
+}
+
+export function getConversationState(
+  db: Database.Database,
+  conversationId: number,
+): AIConversationState | null {
+  const row = db.prepare(
+    `SELECT state_json AS stateJson
+     FROM ai_conversation_state
+     WHERE conversation_id = ?`
+  ).get(conversationId) as { stateJson: string } | undefined
+  if (!row) return null
+  return parseJsonObject<AIConversationState | null>(row.stateJson, null)
+}
+
+export function upsertConversationState(
+  db: Database.Database,
+  conversationId: number,
+  state: AIConversationState | null,
+): void {
+  if (!state) {
+    db.prepare(`DELETE FROM ai_conversation_state WHERE conversation_id = ?`).run(conversationId)
+    return
+  }
+  db.prepare(`
+    INSERT INTO ai_conversation_state (conversation_id, state_json, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(conversation_id) DO UPDATE SET
+      state_json = excluded.state_json,
+      updated_at = excluded.updated_at
+  `).run(conversationId, JSON.stringify(state), Date.now())
 }
 
 export function clearConversation(db: Database.Database, conversationId: number): void {
   db.prepare(`DELETE FROM ai_messages WHERE conversation_id = ?`).run(conversationId)
+  db.prepare(`DELETE FROM ai_conversation_state WHERE conversation_id = ?`).run(conversationId)
+}
+
+function mapAISurfaceSummary(
+  row: {
+    scope_type: string
+    scope_key: string
+    job_type: string
+    title: string | null
+    summary_text: string
+    updated_at: number
+  },
+  stale = false,
+): AISurfaceSummary {
+  return {
+    scope: row.scope_type as AISurfaceSummary['scope'],
+    scopeKey: row.scope_key,
+    jobType: row.job_type as AISurfaceSummary['jobType'],
+    title: row.title,
+    summary: row.summary_text,
+    updatedAt: row.updated_at,
+    stale,
+  }
+}
+
+export function getAISurfaceSummary(
+  db: Database.Database,
+  scopeType: AISurfaceSummary['scope'],
+  scopeKey: string,
+  options?: { stale?: boolean },
+): AISurfaceSummary | null {
+  const row = db.prepare(`
+    SELECT scope_type, scope_key, job_type, title, summary_text, updated_at
+    FROM ai_surface_summaries
+    WHERE scope_type = ? AND scope_key = ?
+    LIMIT 1
+  `).get(scopeType, scopeKey) as {
+    scope_type: string
+    scope_key: string
+    job_type: string
+    title: string | null
+    summary_text: string
+    updated_at: number
+  } | undefined
+
+  return row ? mapAISurfaceSummary(row, options?.stale ?? false) : null
+}
+
+export function upsertAISurfaceSummary(
+  db: Database.Database,
+  payload: {
+    scopeType: AISurfaceSummary['scope']
+    scopeKey: string
+    jobType: AISurfaceSummary['jobType']
+    inputSignature: string
+    title?: string | null
+    summary: string
+    metadata?: Record<string, unknown> | null
+  },
+): AISurfaceSummary {
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO ai_surface_summaries (
+      scope_type,
+      scope_key,
+      job_type,
+      title,
+      summary_text,
+      input_signature,
+      metadata_json,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scope_type, scope_key) DO UPDATE SET
+      job_type = excluded.job_type,
+      title = excluded.title,
+      summary_text = excluded.summary_text,
+      input_signature = excluded.input_signature,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(
+    payload.scopeType,
+    payload.scopeKey,
+    payload.jobType,
+    payload.title ?? null,
+    payload.summary,
+    payload.inputSignature,
+    JSON.stringify(payload.metadata ?? {}),
+    now,
+    now,
+  )
+
+  return {
+    scope: payload.scopeType,
+    scopeKey: payload.scopeKey,
+    jobType: payload.jobType,
+    title: payload.title ?? null,
+    summary: payload.summary,
+    updatedAt: now,
+    stale: false,
+  }
+}
+
+export function getAISurfaceSummarySignature(
+  db: Database.Database,
+  scopeType: AISurfaceSummary['scope'],
+  scopeKey: string,
+): string | null {
+  const row = db.prepare(`
+    SELECT input_signature
+    FROM ai_surface_summaries
+    WHERE scope_type = ? AND scope_key = ?
+    LIMIT 1
+  `).get(scopeType, scopeKey) as { input_signature: string } | undefined
+
+  return row?.input_signature ?? null
 }
 
 export function startAIUsageEvent(
@@ -1256,6 +1542,13 @@ export function setBlockLabelOverride(
   `).run(blockId, label, narrative, Date.now())
 }
 
+export function clearBlockLabelOverride(
+  db: Database.Database,
+  blockId: string,
+): void {
+  db.prepare(`DELETE FROM block_label_overrides WHERE block_id = ?`).run(blockId)
+}
+
 export function getBlockLabelOverride(
   db: Database.Database,
   blockId: string,
@@ -1369,4 +1662,95 @@ export function upsertWorkContextInsight(
     observation,
     JSON.stringify(payload.sourceBlockIds ?? []),
   )
+}
+
+export function upsertWorkContextCleanupReview(
+  db: Database.Database,
+  payload: {
+    startMs: number
+    endMs: number
+    stableLabel?: string | null
+    sourceBlockIds?: string[]
+  },
+): void {
+  const stableLabel = payload.stableLabel?.trim() || null
+  const observation = JSON.stringify({
+    kind: 'blockCleanupReview',
+    stableLabel,
+    reviewedAt: Date.now(),
+  })
+
+  db.prepare(`
+    INSERT INTO work_context_observations (start_ts, end_ts, observation, source_block_ids)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(start_ts, end_ts) DO UPDATE SET
+      observation = excluded.observation,
+      source_block_ids = excluded.source_block_ids
+  `).run(
+    payload.startMs,
+    payload.endMs,
+    observation,
+    JSON.stringify(payload.sourceBlockIds ?? []),
+  )
+}
+
+export function listPendingWorkContextCleanupDates(
+  db: Database.Database,
+  anchorDate: string,
+): string[] {
+  const [, anchorDayEndMs] = localDayBounds(anchorDate)
+  const weakAiPlaceholders = LEGACY_WEAK_AI_LABELS.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    WITH pending_persisted_dates AS (
+      SELECT DISTINCT timeline_blocks.date AS date
+      FROM timeline_blocks
+      LEFT JOIN block_label_overrides
+        ON block_label_overrides.block_id = timeline_blocks.id
+      LEFT JOIN work_context_observations
+        ON work_context_observations.start_ts = timeline_blocks.start_time
+        AND work_context_observations.end_ts = timeline_blocks.end_time
+      WHERE timeline_blocks.invalidated_at IS NULL
+        AND timeline_blocks.is_live = 0
+        AND timeline_blocks.date <= ?
+        AND block_label_overrides.block_id IS NULL
+        AND work_context_observations.id IS NULL
+    ),
+    pending_legacy_ai_dates AS (
+      SELECT DISTINCT timeline_blocks.date AS date
+      FROM timeline_blocks
+      LEFT JOIN block_label_overrides
+        ON block_label_overrides.block_id = timeline_blocks.id
+      JOIN work_context_observations
+        ON work_context_observations.start_ts = timeline_blocks.start_time
+        AND work_context_observations.end_ts = timeline_blocks.end_time
+      WHERE timeline_blocks.invalidated_at IS NULL
+        AND timeline_blocks.is_live = 0
+        AND timeline_blocks.date <= ?
+        AND block_label_overrides.block_id IS NULL
+        AND json_extract(work_context_observations.observation, '$.kind') = 'blockInsight'
+        AND trim(COALESCE(json_extract(work_context_observations.observation, '$.label'), '')) IN (${weakAiPlaceholders})
+    ),
+    pending_unpersisted_dates AS (
+      SELECT DISTINCT strftime('%Y-%m-%d', app_sessions.start_time / 1000, 'unixepoch', 'localtime') AS date
+      FROM app_sessions
+      WHERE app_sessions.start_time < ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM timeline_blocks
+          WHERE timeline_blocks.date = strftime('%Y-%m-%d', app_sessions.start_time / 1000, 'unixepoch', 'localtime')
+            AND timeline_blocks.invalidated_at IS NULL
+        )
+    )
+    SELECT date
+    FROM pending_persisted_dates
+    UNION
+    SELECT date
+    FROM pending_legacy_ai_dates
+    UNION
+    SELECT date
+    FROM pending_unpersisted_dates
+    ORDER BY date ASC
+  `).all(anchorDate, anchorDate, ...LEGACY_WEAK_AI_LABELS, anchorDayEndMs) as Array<{ date: string }>
+
+  return rows.map((row) => row.date)
 }

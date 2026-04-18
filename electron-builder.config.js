@@ -16,6 +16,41 @@ const mac = {
   artifactName: 'Daylens-${version}-${arch}.${ext}',
 }
 
+const linux = {
+  target: [
+    {
+      target: 'AppImage',
+      arch: ['x64'],
+    },
+    {
+      target: 'deb',
+      arch: ['x64'],
+    },
+    {
+      target: 'rpm',
+      arch: ['x64'],
+    },
+    {
+      target: 'tar.gz',
+      arch: ['x64'],
+    },
+  ],
+  icon: 'build/icon.png',
+  executableName: 'daylens',
+  category: 'Productivity',
+  maintainer: 'Christian Tonny <irachrist1@users.noreply.github.com>',
+  artifactName: 'Daylens-${version}.${ext}',
+  synopsis: 'Cross-platform activity tracking and grounded AI work history',
+  description: 'Cross-platform activity tracker that turns laptop history into a searchable, AI-ready work timeline.',
+  desktop: {
+    entry: {
+      StartupWMClass: 'daylens',
+      StartupNotify: 'true',
+      'X-GNOME-UsesNotifications': 'true',
+    },
+  },
+}
+
 if (process.env.WIN_CERTIFICATE_FILE_PATH) {
   win.certificateFile = process.env.WIN_CERTIFICATE_FILE_PATH
 }
@@ -29,8 +64,8 @@ if (process.env.WIN_CERT_SUBJECT_NAME) {
 }
 
 module.exports = {
-  appId: 'com.daylens.windows',
-  productName: 'DaylensWindows',
+  appId: 'com.daylens.desktop',
+  productName: 'Daylens',
   copyright: 'Copyright © 2026 Daylens',
   directories: {
     output: 'dist-release',
@@ -44,6 +79,7 @@ module.exports = {
   extraMetadata: {
     main: 'dist/main/main.js',
   },
+  electronUpdaterCompatibility: '>=2.16',
   extraResources: [
     {
       from: 'build/',
@@ -56,18 +92,38 @@ module.exports = {
   ],
   mac,
   win,
+  linux,
+  deb: {
+    depends: ['libgtk-3-0', 'libnotify4', 'libnss3', 'libxss1', 'libxtst6', 'xdg-utils', 'libatspi2.0-0', 'libuuid1', 'libsecret-1-0'],
+  },
+  rpm: {
+    depends: ['gtk3', 'libnotify', 'nss', 'libXScrnSaver', '(libXtst or libXtst6)', 'xdg-utils', 'at-spi2-core', '(libuuid or libuuid1)', 'libsecret'],
+  },
   nsis: {
-    oneClick: false,
+    oneClick: true,
     perMachine: false,
-    allowToChangeInstallationDirectory: true,
+    allowToChangeInstallationDirectory: false,
     deleteAppDataOnUninstall: false,
     installerIcon: 'build/icon.ico',
     uninstallerIcon: 'build/icon.ico',
     installerHeaderIcon: 'build/icon.ico',
-    createDesktopShortcut: true,
+    createDesktopShortcut: false,
     createStartMenuShortcut: true,
     shortcutName: 'Daylens',
     runAfterFinish: true,
+  },
+  dmg: {
+    background: 'build/dmg-background.png',
+    icon: 'build/icon.icns',
+    iconSize: 128,
+    window: {
+      width: 660,
+      height: 420,
+    },
+    contents: [
+      { x: 180, y: 225, type: 'file' },
+      { x: 480, y: 225, type: 'link', path: '/Applications' },
+    ],
   },
   asar: true,
   asarUnpack: [

@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { ANALYTICS_EVENT } from '@shared/analytics'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
@@ -49,7 +50,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   // Track route changes
   useEffect(() => {
     const view = location.pathname.replace('/', '') || 'timeline'
-    track('view_opened', { view })
+    track(ANALYTICS_EVENT.VIEW_OPENED, { view })
   }, [location.pathname])
 
   // Day-7 automatic feedback prompt
@@ -97,7 +98,6 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
 }
 
 export default function App() {
-  const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -107,12 +107,10 @@ export default function App() {
     ipc.settings.get().then((s) => {
       if (!active) return
       applyTheme(s.theme)
-      setOnboardingComplete(s.onboardingComplete)
       setSettings(s)
     }).catch((err) => {
       if (!active) return
       setLoadError(err instanceof Error ? err.message : String(err))
-      setOnboardingComplete(false)
     })
 
     const onThemeChange = (event: Event) => {
@@ -142,10 +140,20 @@ export default function App() {
   }
 
   // Loading — wait for settings before rendering anything
-  if (onboardingComplete === null) return null
+  if (!settings) return null
 
-  if (!onboardingComplete) {
-    return <Onboarding onComplete={() => setOnboardingComplete(true)} />
+  if (!settings.onboardingComplete || settings.onboardingState.stage !== 'complete') {
+    return (
+      <Onboarding
+        initialSettings={settings}
+        onComplete={() => {
+          void ipc.settings.get().then((next) => {
+            applyTheme(next.theme)
+            setSettings(next)
+          })
+        }}
+      />
+    )
   }
 
   return (

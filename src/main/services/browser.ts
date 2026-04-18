@@ -9,18 +9,20 @@
 //   - All failures are silent — never crashes the main app startup
 //
 // Platform support:
-//   macOS: Chrome, Brave, Arc, Microsoft Edge
-//   Windows: Chrome, Edge, Brave (all profiles), Firefox
+//   macOS: Chrome, Brave, Arc, Dia, Comet, Microsoft Edge
+//   Windows: Chrome, Edge, Brave, Arc, Dia, Comet (all Chromium profiles), Firefox
 
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getDb } from './database'
 import { insertWebsiteVisit } from '../db/queries'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
+import { capture, captureRateLimited } from './analytics'
 
 // ─── Chrome timestamp arithmetic ─────────────────────────────────────────────
 // Chrome stores timestamps as microseconds since 1601-01-01 00:00:00 UTC.
@@ -39,9 +41,9 @@ function chromeUsToMs(us: bigint): number {
 
 // ─── Browser path registry ────────────────────────────────────────────────────
 
-interface BrowserEntry {
+export interface BrowserEntry {
   name: string
-  bundleId: string      // macOS bundle ID or Windows exe name
+  bundleId: string      // macOS bundle ID or Windows executable/browser identifier
   historyPath: string
   type: 'chromium' | 'firefox'
 }
@@ -72,30 +74,36 @@ interface ProcessedHistoryRow {
 function macBrowsers(): BrowserEntry[] {
   const home = os.homedir()
   return [
-    {
-      name:        'Google Chrome',
-      bundleId:    'com.google.Chrome',
-      historyPath: path.join(home, 'Library/Application Support/Google/Chrome/Default/History'),
-      type:        'chromium',
-    },
-    {
-      name:        'Brave',
-      bundleId:    'com.brave.Browser',
-      historyPath: path.join(home, 'Library/Application Support/BraveSoftware/Brave-Browser/Default/History'),
-      type:        'chromium',
-    },
-    {
-      name:        'Arc',
-      bundleId:    'company.thebrowser.Browser',
-      historyPath: path.join(home, 'Library/Application Support/Arc/User Data/Default/History'),
-      type:        'chromium',
-    },
-    {
-      name:        'Microsoft Edge',
-      bundleId:    'com.microsoft.edgemac',
-      historyPath: path.join(home, 'Library/Application Support/Microsoft Edge/Default/History'),
-      type:        'chromium',
-    },
+    ...enumerateChromiumProfiles(
+      path.join(home, 'Library/Application Support/Google/Chrome'),
+      'Google Chrome',
+      'com.google.Chrome',
+    ),
+    ...enumerateChromiumProfiles(
+      path.join(home, 'Library/Application Support/BraveSoftware/Brave-Browser'),
+      'Brave',
+      'com.brave.Browser',
+    ),
+    ...enumerateChromiumProfiles(
+      path.join(home, 'Library/Application Support/Arc/User Data'),
+      'Arc',
+      'company.thebrowser.Browser',
+    ),
+    ...enumerateChromiumProfiles(
+      path.join(home, 'Library/Application Support/Dia/User Data'),
+      'Dia',
+      'company.thebrowser.dia',
+    ),
+    ...enumerateChromiumProfiles(
+      path.join(home, 'Library/Application Support/Comet'),
+      'Comet',
+      'ai.perplexity.comet',
+    ),
+    ...enumerateChromiumProfiles(
+      path.join(home, 'Library/Application Support/Microsoft Edge'),
+      'Microsoft Edge',
+      'com.microsoft.edgemac',
+    ),
   ]
 }
 
@@ -124,6 +132,22 @@ function enumerateChromiumProfiles(userDataDir: string, name: string, bundleId: 
       }
     }
   } catch { /* directory not readable */ }
+
+  return entries
+}
+
+function enumerateChromiumProfileRoots(userDataDirs: string[], name: string, bundleId: string): BrowserEntry[] {
+  const entries: BrowserEntry[] = []
+  const seenHistoryPaths = new Set<string>()
+
+  for (const userDataDir of userDataDirs) {
+    for (const entry of enumerateChromiumProfiles(userDataDir, name, bundleId)) {
+      const key = path.resolve(entry.historyPath).toLowerCase()
+      if (seenHistoryPaths.has(key)) continue
+      seenHistoryPaths.add(key)
+      entries.push(entry)
+    }
+  }
 
   return entries
 }
@@ -195,6 +219,37 @@ function windowsBrowsers(): BrowserEntry[] {
     ),
   )
 
+  // Arc / Dia / Comet are Chromium-based, but vendor packaging can vary between
+  // a direct user-data root and a product root that contains `User Data`.
+  entries.push(
+    ...enumerateChromiumProfileRoots([
+      path.join(local, 'Arc'),
+      path.join(local, 'Arc/User Data'),
+      path.join(local, 'TheBrowserCompany/Arc'),
+      path.join(local, 'TheBrowserCompany/Arc/User Data'),
+      path.join(local, 'The Browser Company/Arc'),
+      path.join(local, 'The Browser Company/Arc/User Data'),
+    ], 'Arc', 'arc.exe'),
+  )
+  entries.push(
+    ...enumerateChromiumProfileRoots([
+      path.join(local, 'Dia'),
+      path.join(local, 'Dia/User Data'),
+      path.join(local, 'TheBrowserCompany/Dia'),
+      path.join(local, 'TheBrowserCompany/Dia/User Data'),
+      path.join(local, 'The Browser Company/Dia'),
+      path.join(local, 'The Browser Company/Dia/User Data'),
+    ], 'Dia', 'dia.exe'),
+  )
+  entries.push(
+    ...enumerateChromiumProfileRoots([
+      path.join(local, 'Comet'),
+      path.join(local, 'Comet/User Data'),
+      path.join(local, 'Perplexity/Comet'),
+      path.join(local, 'Perplexity/Comet/User Data'),
+    ], 'Comet', 'comet.exe'),
+  )
+
   // Firefox — discover profiles from profiles.ini
   const firefoxIni = path.join(roaming, 'Mozilla/Firefox/profiles.ini')
   const ffProfiles = parseFirefoxProfilesIni(firefoxIni)
@@ -213,7 +268,7 @@ function windowsBrowsers(): BrowserEntry[] {
   return entries
 }
 
-function getBrowserEntries(): BrowserEntry[] {
+export function getBrowserEntries(): BrowserEntry[] {
   if (process.platform === 'darwin') return macBrowsers()
   if (process.platform === 'win32') return windowsBrowsers()
   return []
@@ -323,6 +378,10 @@ export function startBrowserTracking(): void {
   // (caller defers the call by 5 s after window show — see index.ts)
   void pollAll()
   pollTimer = setInterval(() => void pollAll(), 60_000)
+  capture(ANALYTICS_EVENT.BROWSER_TRACKING_HEALTH, {
+    status: 'started',
+    surface: 'browser',
+  })
   console.log('[browser] tracking started')
 }
 
@@ -433,6 +492,12 @@ function pollChromium(
   } catch (err) {
     error = String(err)
     console.warn(`[browser] failed to poll ${browser.name}:`, err)
+    captureRateLimited(ANALYTICS_EVENT.BROWSER_TRACKING_HEALTH, `browser:${browser.bundleId}`, {
+      failure_kind: classifyFailureKind(err),
+      reason: 'poll',
+      status: 'error',
+      surface: 'browser',
+    })
   } finally {
     for (const f of [tmpDb, tmpWal, tmpShm]) {
       try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch {}
@@ -526,6 +591,12 @@ function pollFirefox(
   } catch (err) {
     error = String(err)
     console.warn(`[browser] failed to poll ${browser.name}:`, err)
+    captureRateLimited(ANALYTICS_EVENT.BROWSER_TRACKING_HEALTH, `browser:${browser.bundleId}`, {
+      failure_kind: classifyFailureKind(err),
+      reason: 'poll',
+      status: 'error',
+      surface: 'browser',
+    })
   } finally {
     for (const f of [tmpDb, tmpWal, tmpShm]) {
       try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch {}
@@ -569,6 +640,12 @@ async function pollAll(): Promise<void> {
   browserStatus.visitsToday      = countRow?.c ?? 0
   browserStatus.error            = lastError
   browserStatus.browsersPollable = pollable
+
+  captureRateLimited(ANALYTICS_EVENT.BROWSER_TRACKING_HEALTH, 'browser:status', {
+    result: totalInserted > 0 ? 'updated' : 'idle',
+    status: lastError ? 'error' : 'ok',
+    surface: 'browser',
+  }, 6 * 60 * 60 * 1_000)
 
   if (totalInserted > 0) {
     console.log(`[browser] inserted ${totalInserted} visits from ${pollable} browser(s)`)

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, Notification, app } from 'electron'
-import { getActiveFocusSession, getRecentFocusSessions } from '../db/queries'
+import { getSessionsForRange } from '../db/queries'
 import { localDateString, localDayBounds } from '../lib/localDate'
 import { getDb } from './database'
 import { getSettings } from './settings'
@@ -43,12 +43,9 @@ function notifyWithNavigation(title: string, body: string, route: string): void 
   notification.show()
 }
 
-function hasStartedFocusSessionToday(today: string): boolean {
+function hasTrackedActivityToday(today: string): boolean {
   const [fromMs, toMs] = localDayBounds(today)
-  const recentSession = getRecentFocusSessions(getDb(), 200)
-    .some((session) => session.startTime >= fromMs && session.startTime < toMs)
-  const activeSession = getActiveFocusSession(getDb())
-  return recentSession || Boolean(activeSession && activeSession.startTime >= fromMs && activeSession.startTime < toMs)
+  return getSessionsForRange(getDb(), fromMs, toMs).length > 0
 }
 
 function checkDailySummary(): void {
@@ -61,7 +58,7 @@ function checkDailySummary(): void {
   if (state.lastDailySummaryDate === today) return
   if (now.getHours() !== 18 || now.getMinutes() !== 0) return
 
-  notifyWithNavigation('Daylens', 'See where your day went.', '/today')
+  notifyWithNavigation('Daylens', 'See where your day went.', '/timeline')
   writeState({ ...state, lastDailySummaryDate: today })
 }
 
@@ -74,9 +71,9 @@ function checkMorningNudge(): void {
   const state = readState()
   if (state.lastMorningNudgeDate === today) return
   if (now.getHours() !== 9 || now.getMinutes() !== 0) return
-  if (hasStartedFocusSessionToday(today)) return
+  if (hasTrackedActivityToday(today)) return
 
-  notifyWithNavigation('Daylens', "What's your focus for today?", '/focus')
+  notifyWithNavigation('Daylens', 'Open your timeline and start the main thread for today.', '/timeline')
   writeState({ ...state, lastMorningNudgeDate: today })
 }
 

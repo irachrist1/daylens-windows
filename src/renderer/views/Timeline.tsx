@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import type { AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
+import type { AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
 import { useProjectionResource } from '../hooks/useProjectionResource'
+import { track } from '../lib/analytics'
 import { ipc } from '../lib/ipc'
 import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, formatFullDate, todayString } from '../lib/format'
@@ -548,14 +550,22 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
 }
 
 function BlockInspector({ block, payload }: { block: WorkContextBlock | null; payload: DayTimelinePayload }) {
+  const [overrideDraft, setOverrideDraft] = useState('')
+  const [overrideSaving, setOverrideSaving] = useState(false)
+
+  useEffect(() => {
+    setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
+  }, [block?.id, block?.label.current, block?.label.override])
+
   if (!block) {
     return <DaySummaryInspector payload={payload} />
   }
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
+  const hasOverride = Boolean(block.label.override?.trim())
 
   return (
-    <div style={{
+    <div data-timeline-inspector="true" style={{
       position: 'sticky',
       top: 24,
       borderRadius: 18,
@@ -564,8 +574,23 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
       padding: 22,
     }}>
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 18, fontWeight: 750, color: 'var(--color-text-primary)', marginBottom: 6 }}>
-          <InlineRevealText text={block.label.current} />
+        <div
+          title={block.label.current}
+          style={{
+            fontSize: 18,
+            fontWeight: 750,
+            color: 'var(--color-text-primary)',
+            marginBottom: 6,
+            lineHeight: 1.3,
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 3,
+            overflow: 'hidden',
+            overflowWrap: 'break-word',
+            wordBreak: 'break-word',
+          }}
+        >
+          {block.label.current}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockDurationSeconds(block))}
@@ -577,6 +602,87 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
           {blockNarrative(block)}
         </p>
       )}
+
+      <div style={{ marginBottom: 20, padding: '14px 16px', borderRadius: 14, background: 'var(--color-surface-low)', border: '1px solid var(--color-border-ghost)' }}>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+          Label Override
+        </div>
+        <div style={{ display: 'grid', gap: 10 }}>
+          <input
+            type="text"
+            value={overrideDraft}
+            onChange={(event) => setOverrideDraft(event.target.value)}
+            placeholder={block.label.current}
+            style={{
+              width: '100%',
+              height: 36,
+              borderRadius: 10,
+              border: '1px solid var(--color-border-ghost)',
+              background: 'var(--color-surface-high)',
+              color: 'var(--color-text-primary)',
+              padding: '0 12px',
+              fontSize: 13,
+              outline: 'none',
+            }}
+          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              type="button"
+              disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+              onClick={() => {
+                const label = overrideDraft.trim()
+                if (!label) return
+                setOverrideSaving(true)
+                void ipc.db.setBlockLabelOverride({
+                  blockId: block.id,
+                  label,
+                  narrative: block.label.narrative,
+                }).finally(() => setOverrideSaving(false))
+              }}
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: 'none',
+                background: 'var(--gradient-primary)',
+                color: 'var(--color-primary-contrast)',
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: overrideSaving ? 'default' : 'pointer',
+                opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1,
+              }}
+            >
+              {overrideSaving ? 'Saving…' : 'Save label'}
+            </button>
+            {hasOverride && (
+              <button
+                type="button"
+                disabled={overrideSaving}
+                onClick={() => {
+                  setOverrideSaving(true)
+                  void ipc.db.clearBlockLabelOverride(block.id)
+                    .finally(() => setOverrideSaving(false))
+                }}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-high)',
+                  color: 'var(--color-text-secondary)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: overrideSaving ? 'default' : 'pointer',
+                  opacity: overrideSaving ? 0.6 : 1,
+                }}
+              >
+                Use auto label
+              </button>
+            )}
+          </div>
+          <div style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)' }}>
+            Rename the block when the suggested label misses the actual workstream. This stays local and feeds back into the timeline proof surface.
+          </div>
+        </div>
+      </div>
 
       <div style={{ display: 'grid', gap: 18 }}>
         <section>
@@ -630,20 +736,38 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
                   <div style={{ display: 'flex', gap: 10, minWidth: 0 }}>
                     <EntityIcon
                       artifactType={artifact.artifactType}
+                      canonicalAppId={artifact.canonicalAppId}
+                      ownerBundleId={artifact.ownerBundleId}
+                      ownerAppName={artifact.ownerAppName}
+                      ownerAppInstanceId={artifact.ownerAppInstanceId}
                       title={artifact.displayTitle}
                       path={artifact.path}
                       domain={artifact.host}
+                      url={artifact.url}
                       size={28}
                     />
-                    <div style={{ minWidth: 0 }}>
-                      <InlineRevealText
-                        text={artifact.displayTitle}
-                        style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
-                      />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div
+                        title={artifact.displayTitle}
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: 'var(--color-text-primary)',
+                          lineHeight: 1.35,
+                          display: '-webkit-box',
+                          WebkitBoxOrient: 'vertical',
+                          WebkitLineClamp: 2,
+                          overflow: 'hidden',
+                          overflowWrap: 'break-word',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {artifact.displayTitle}
+                      </div>
                       {(artifact.subtitle || artifact.host || artifact.path) && (
                         <InlineRevealText
                           text={artifact.subtitle || artifact.host || artifact.path || ''}
-                          style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
+                          style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}
                         />
                       )}
                     </div>
@@ -667,6 +791,9 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
                 <span
                   key={`${block.id}:${site.domain}`}
                   style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
                     borderRadius: 999,
                     padding: '6px 10px',
                     background: 'var(--color-surface-low)',
@@ -674,6 +801,7 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
                     fontSize: 12,
                   }}
                 >
+                  <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={18} />
                   {shortDomainLabel(site.domain)} • {formatDuration(site.totalSeconds)}
                 </span>
               ))}
@@ -752,8 +880,14 @@ function WeekView({
       })
     },
   })
+  const weekReviewResource = useProjectionResource<AISurfaceSummary | null>({
+    scope: 'timeline',
+    dependencies: [weekStart],
+    load: () => ipc.ai.getWeekReview(weekStart).catch(() => null),
+  })
 
   const data = weekResource.data ?? []
+  const weekReview = weekReviewResource.data ?? null
   const maxSeconds = data.length > 0 ? Math.max(...data.map((day) => day.totalSeconds), 1) : 1
   const activeDays = data.filter((day) => day.totalSeconds > 0)
   const totalWeekSeconds = activeDays.reduce((sum, day) => sum + day.totalSeconds, 0)
@@ -912,6 +1046,47 @@ function WeekView({
           </div>
         </div>
 
+        {(weekReviewResource.loading || weekReview) && (
+          <div style={{
+            borderTop: '1px solid var(--color-border-ghost)',
+            paddingTop: 14,
+            display: 'grid',
+            gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                Week Review
+              </div>
+              <button
+                type="button"
+                onClick={() => void weekReviewResource.refresh()}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-low)',
+                  color: 'var(--color-text-secondary)',
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Refresh
+              </button>
+            </div>
+            <div style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
+              {weekReviewResource.loading && !weekReview
+                ? 'Generating a grounded review for this week…'
+                : weekReview?.summary}
+            </div>
+            {weekReview?.stale && (
+              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                Showing the last saved review while newer activity catches up.
+              </div>
+            )}
+          </div>
+        )}
+
         {activeDay && (
           <div style={{
             borderTop: '1px solid var(--color-border-ghost)',
@@ -1009,6 +1184,8 @@ export default function Timeline() {
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const lastTimelineOpenKeyRef = useRef<string | null>(null)
+  const lastBlockOpenKeyRef = useRef<string | null>(null)
 
   const searchSignature = searchParams.toString()
   const view = navState.view
@@ -1066,11 +1243,44 @@ export default function Timeline() {
     node.scrollTop = 0
   }, [view, date])
 
+  useEffect(() => {
+    const openKey = view === 'week'
+      ? `week:${date}`
+      : payload
+        ? `day:${payload.date}:${payload.blocks.length}:${payload.totalSeconds}`
+        : null
+    if (!openKey || lastTimelineOpenKeyRef.current === openKey) return
+    lastTimelineOpenKeyRef.current = openKey
+    track(ANALYTICS_EVENT.TIMELINE_OPENED, {
+      block_count_bucket: blockCountBucket(payload?.blocks.length ?? 0),
+      surface: 'timeline',
+      tracked_time_bucket: trackedTimeBucket(payload?.totalSeconds ?? 0),
+      trigger: 'navigation',
+      view,
+    })
+  }, [date, payload, view])
+
   const selectedBlock = selectedBlockId ? blockMap.get(selectedBlockId) ?? null : null
   const displaySegments = useMemo(
     () => compressTimelineSegments(payload?.segments ?? []),
     [payload],
   )
+
+  useEffect(() => {
+    if (!selectedBlock) {
+      lastBlockOpenKeyRef.current = null
+      return
+    }
+    if (lastBlockOpenKeyRef.current === selectedBlock.id) return
+    lastBlockOpenKeyRef.current = selectedBlock.id
+    track(ANALYTICS_EVENT.TIMELINE_BLOCK_OPENED, {
+      block_count_bucket: blockCountBucket(payload?.blocks.length ?? 0),
+      surface: 'timeline',
+      tracked_time_bucket: trackedTimeBucket(payload?.totalSeconds ?? 0),
+      trigger: 'click',
+      view,
+    })
+  }, [payload, selectedBlock, view])
 
   function updateNavState(nextState: TimelineNavState) {
     setNavState((current) => (
@@ -1283,11 +1493,14 @@ export default function Timeline() {
                   <div style={{
                     display: 'grid',
                     gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) 360px',
-                    gap: 24,
-                    alignItems: 'start',
-                  }}
+                  gap: 24,
+                  alignItems: 'start',
+                }}
                   onClickCapture={(event) => {
                     const target = event.target as HTMLElement | null
+                    if (target?.closest('[data-timeline-inspector="true"]')) {
+                      return
+                    }
                     const blockButton = target?.closest<HTMLElement>('[data-timeline-block-id]')
                     const nextSelectedId = blockButton?.dataset.timelineBlockId ?? null
                     if (nextSelectedId !== selectedBlockId) {

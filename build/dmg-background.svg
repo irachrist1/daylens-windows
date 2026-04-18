@@ -1,0 +1,41 @@
+<svg width="1320" height="840" viewBox="0 0 1320 840" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="80" x2="1180" y2="780" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111A27"/>
+      <stop offset="1" stop-color="#091017"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(280 180) rotate(39.8) scale(420 310)">
+      <stop stop-color="#4FDCC8" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#4FDCC8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1020 660) rotate(139.4) scale(420 320)">
+      <stop stop-color="#7DBFFF" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#7DBFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="line" x1="410" y1="420" x2="910" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7DBFFF" stop-opacity="0.12"/>
+      <stop offset="0.5" stop-color="#D6E5FF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#4FDCC8" stop-opacity="0.12"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1320" height="840" rx="44" fill="url(#bg)"/>
+  <rect width="1320" height="840" rx="44" fill="url(#glowA)"/>
+  <rect width="1320" height="840" rx="44" fill="url(#glowB)"/>
+
+  <g opacity="0.9">
+    <text x="140" y="170" fill="#EAF3FF" font-family="SF Pro Display, Inter, sans-serif" font-size="74" font-weight="700" letter-spacing="-2.2">
+      Daylens
+    </text>
+    <text x="140" y="236" fill="#9EB6CC" font-family="SF Pro Display, Inter, sans-serif" font-size="28" font-weight="450">
+      Drag Daylens into Applications to install
+    </text>
+    <text x="140" y="292" fill="#70859A" font-family="SF Pro Text, Inter, sans-serif" font-size="22" font-weight="400">
+      Local-first work intelligence for your desktop
+    </text>
+  </g>
+
+  <rect x="120" y="330" width="1080" height="360" rx="34" fill="rgba(255,255,255,0.015)" stroke="rgba(173,198,255,0.10)"/>
+  <path d="M435 510H885" stroke="url(#line)" stroke-width="8" stroke-linecap="round"/>
+  <path d="M830 468L898 510L830 552" stroke="#D6E5FF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+</svg>

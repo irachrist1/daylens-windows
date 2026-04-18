@@ -2,7 +2,7 @@ import { getDb } from '../services/database'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
 
 /**
- * Versioned migration system for DaylensWindows.
+ * Versioned migration system for Daylens.
  *
  * Each migration is a function that runs SQL statements.
  * Migrations are additive-only — never delete columns or tables.
@@ -696,7 +696,7 @@ const migrations: Migration[] = [
 
       // ── 1b. Migrate the existing clients/projects tables to the new shape.
       // Old shape: (id, slug, display_name, status, metadata_json, ...)
-      // New shape per CLAUDE.md: (id, name UNIQUE, color, status, created_at,
+      // New shape: (id, name UNIQUE, color, status, created_at,
       // updated_at) and projects gain code/color and lose metadata.
       const existingClients = (() => {
         try {
@@ -781,7 +781,7 @@ const migrations: Migration[] = [
         insertProject.run(row.id, row.client_id, row.display_name, row.status || 'active', row.created_at, row.updated_at)
       }
 
-      // ── 1c. Build all new tables defined in CLAUDE.md schema. ─────────────
+      // ── 1c. Build all new tables in the current layered schema. ───────────
       db.exec(`
         CREATE TABLE IF NOT EXISTS devices (
           id          TEXT PRIMARY KEY,
@@ -1089,6 +1089,46 @@ const migrations: Migration[] = [
           start_time       INTEGER NOT NULL,
           last_seen_at     INTEGER NOT NULL
         );
+      `)
+    },
+  },
+  {
+    version: 17,
+    description: 'Persist AI thread metadata and conversation state',
+    up: () => {
+      const db = getDb()
+      if (!hasColumn('ai_messages', 'metadata_json')) {
+        db.exec(`ALTER TABLE ai_messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`)
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_conversation_state (
+          conversation_id INTEGER PRIMARY KEY REFERENCES ai_conversations(id) ON DELETE CASCADE,
+          state_json      TEXT    NOT NULL DEFAULT '{}',
+          updated_at      INTEGER NOT NULL
+        );
+      `)
+    },
+  },
+  {
+    version: 18,
+    description: 'Persist AI surface summaries for week review and app narratives',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_surface_summaries (
+          scope_type      TEXT NOT NULL,
+          scope_key       TEXT NOT NULL,
+          job_type        TEXT NOT NULL,
+          title           TEXT,
+          summary_text    TEXT NOT NULL,
+          input_signature TEXT NOT NULL,
+          metadata_json   TEXT NOT NULL DEFAULT '{}',
+          created_at      INTEGER NOT NULL,
+          updated_at      INTEGER NOT NULL,
+          PRIMARY KEY (scope_type, scope_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_surface_summaries_job
+          ON ai_surface_summaries (job_type, updated_at DESC);
       `)
     },
   },

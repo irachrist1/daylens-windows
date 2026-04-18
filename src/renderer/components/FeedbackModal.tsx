@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ANALYTICS_EVENT } from '@shared/analytics'
 import { track } from '../lib/analytics'
 
 interface Props {
@@ -11,9 +12,10 @@ export default function FeedbackModal({ onClose }: Props) {
 
   function handleSubmit() {
     if (score === null) return
-    track('feedback_submitted', {
+    track(ANALYTICS_EVENT.FEEDBACK_SUBMITTED, {
+      has_comment: comment.trim().length > 0,
       score,
-      ...(comment.trim() ? { comment: comment.trim() } : {}),
+      surface: 'feedback',
     })
     onClose()
   }

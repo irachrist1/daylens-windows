@@ -1,38 +1,41 @@
 import { useEffect, useState } from 'react'
-import { ipc } from '../lib/ipc'
 import { appInitials } from '../lib/apps'
-
-const iconCache = new Map<string, string | null>()
+import { useResolvedIcon } from '../hooks/useResolvedIcon'
 
 export default function AppIcon({
+  appInstanceId,
   bundleId,
+  canonicalAppId,
   appName,
   color = 'var(--color-primary)',
   size = 28,
   fontSize = 10,
   cornerRadius,
 }: {
+  appInstanceId?: string | null
   bundleId?: string | null
+  canonicalAppId?: string | null
   appName: string
   color?: string
   size?: number
   fontSize?: number
   cornerRadius?: number
 }) {
-  const cacheKey = bundleId ?? ''
-  const [iconUrl, setIconUrl] = useState<string | null | undefined>(
-    bundleId && iconCache.has(cacheKey) ? iconCache.get(cacheKey) : undefined,
-  )
+  const [didError, setDidError] = useState(false)
+  const resolved = useResolvedIcon({
+    kind: 'app',
+    appInstanceId,
+    bundleId,
+    canonicalAppId,
+    appName,
+  })
 
   useEffect(() => {
-    if (!bundleId || iconCache.has(cacheKey)) return
-    void ipc.db.getAppIcon(bundleId).then((url) => {
-      iconCache.set(cacheKey, url)
-      setIconUrl(url)
-    })
-  }, [bundleId, cacheKey])
+    setDidError(false)
+  }, [appInstanceId, appName, bundleId, canonicalAppId])
 
   const rounded = cornerRadius ?? Math.round(size * 0.26)
+  const iconUrl = didError ? null : resolved?.dataUrl ?? null
 
   if (iconUrl) {
     return (
@@ -49,7 +52,17 @@ export default function AppIcon({
           objectFit: 'contain',
           flexShrink: 0,
         }}
-        onError={() => setIconUrl(null)}
+        onError={() => {
+          console.warn('[icons] app icon failed to render', {
+            appName,
+            appInstanceId: appInstanceId ?? null,
+            bundleId: bundleId ?? null,
+            canonicalAppId: canonicalAppId ?? null,
+            source: resolved?.source ?? 'miss',
+            cacheKey: resolved?.cacheKey ?? null,
+          })
+          setDidError(true)
+        }}
       />
     )
   }

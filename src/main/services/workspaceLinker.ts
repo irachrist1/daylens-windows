@@ -26,6 +26,12 @@ declare const __DAYLENS_CONVEX_SITE_URL__: string
 
 const CONVEX_SITE_URL = __DAYLENS_CONVEX_SITE_URL__
 
+function currentSyncPlatform(): 'windows' | 'macos' | 'linux' {
+  if (process.platform === 'win32') return 'windows'
+  if (process.platform === 'darwin') return 'macos'
+  return 'linux'
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface WorkspaceResult {
@@ -68,7 +74,7 @@ export async function createWorkspace(): Promise<WorkspaceResult> {
     recoveryKeyHash,
     deviceId,
     displayName: os.hostname() || 'This PC',
-    platform: 'windows',
+    platform: currentSyncPlatform(),
   }
 
   const result = await callConvex('createWorkspace', body)
@@ -123,7 +129,7 @@ export async function recoverWorkspace(mnemonic: string): Promise<string> {
     recoveryKeyHash,
     deviceId,
     displayName: os.hostname() || 'This PC',
-    platform: 'windows',
+    platform: currentSyncPlatform(),
   }
 
   const result = await callConvex('recoverWorkspace', body)

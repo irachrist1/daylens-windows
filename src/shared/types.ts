@@ -138,6 +138,11 @@ export interface FocusStartPayload {
   plannedApps?: string[]
 }
 
+export interface FocusReflectionSavePayload {
+  sessionId: number
+  note: string
+}
+
 export interface AIConversation {
   id: number
   messages: AIMessage[]
@@ -148,6 +153,208 @@ export interface AIMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
+}
+
+export interface AIDaySummaryResult {
+  summary: string
+  questionSuggestions: string[]
+}
+
+export type AIAnswerKind =
+  | 'weekly_brief'
+  | 'weekly_literal_list'
+  | 'deterministic_stats'
+  | 'day_summary_style'
+  | 'generated_report'
+  | 'freeform_chat'
+  | 'error'
+
+export type AIConversationSourceKind = 'weekly_brief' | 'deterministic' | 'freeform'
+
+export type FollowUpAffordance =
+  | 'deepen'
+  | 'literalize'
+  | 'narrow'
+  | 'expand'
+  | 'compare'
+  | 'switch_topic'
+  | 'switch_timeframe'
+  | 'repair'
+
+export type FollowUpResolutionKind =
+  | 'fresh_query'
+  | 'followup_reuse_context'
+  | 'followup_with_override'
+  | 'followup_repair'
+
+export type FollowUpClass =
+  | 'deepen'
+  | 'literalize'
+  | 'narrow'
+  | 'expand'
+  | 'compare'
+  | 'topic_pivot'
+  | 'time_override'
+  | 'repair'
+
+export interface AIConversationDateRange {
+  fromMs: number
+  toMs: number
+  label: string
+}
+
+export interface AIWeeklyBriefStateSnapshot {
+  intent: string
+  responseMode: string
+  topic: string | null
+  dateRange: AIConversationDateRange
+  evidenceKey: string | null
+}
+
+export interface AIEntityStateSnapshot {
+  entityId: string
+  entityName: string
+  entityType: 'client' | 'project'
+  rangeStartMs: number
+  rangeEndMs: number
+  rangeLabel: string
+  intent: string
+}
+
+export interface AIRoutingContextSnapshot {
+  dateMs: number
+  timeWindowStartMs: number | null
+  timeWindowEndMs: number | null
+  weeklyBrief: AIWeeklyBriefStateSnapshot | null
+  entity: AIEntityStateSnapshot | null
+}
+
+export interface AIConversationState {
+  dateRange: AIConversationDateRange | null
+  topic: string | null
+  responseMode: string | null
+  lastIntent: string | null
+  evidenceKey: string | null
+  answerKind: AIAnswerKind | null
+  sourceKind: AIConversationSourceKind | null
+  followUpAffordances: FollowUpAffordance[]
+  routingContext: AIRoutingContextSnapshot | null
+}
+
+export interface FollowUpSuggestion {
+  text: string
+  source: 'model' | 'deterministic'
+  affordance?: FollowUpAffordance | null
+}
+
+export interface FollowUpResolution {
+  kind: FollowUpResolutionKind
+  followUpClass: FollowUpClass | null
+  effectivePrompt: string
+  shouldReuseContext: boolean
+  shouldResetContext: boolean
+}
+
+export type AIMessageRating = 'up' | 'down'
+
+export interface AIStartFocusAction {
+  kind: 'start_focus_session'
+  label: string
+  payload: FocusStartPayload
+}
+
+export interface AIStopFocusAction {
+  kind: 'stop_focus_session'
+  label: string
+  sessionId: number
+}
+
+export interface AIReviewFocusAction {
+  kind: 'review_focus_session'
+  label: string
+  sessionId: number
+  placeholder?: string | null
+  suggestedNote?: string | null
+}
+
+export type AIMessageAction = AIStartFocusAction | AIStopFocusAction | AIReviewFocusAction
+
+export type AIMessageArtifactKind = 'report' | 'table' | 'chart' | 'export'
+export type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json'
+
+export interface AIMessageArtifact {
+  id: string
+  kind: AIMessageArtifactKind
+  title: string
+  subtitle?: string | null
+  format: AIMessageArtifactFormat
+  path: string
+  openTarget: OpenTarget
+  createdAt: number
+}
+
+export type AISurfaceSummaryScope = 'timeline_week' | 'app_detail'
+
+export interface AISurfaceSummary {
+  scope: AISurfaceSummaryScope
+  scopeKey: string
+  jobType: Extract<AIJobType, 'week_review' | 'app_narrative'>
+  title?: string | null
+  summary: string
+  updatedAt: number
+  stale?: boolean
+}
+
+export interface AIChatStreamEvent {
+  requestId: string
+  delta: string
+  snapshot: string
+}
+
+export interface AIThreadMessageMetadata {
+  answerKind?: AIAnswerKind | null
+  suggestedFollowUps?: FollowUpSuggestion[]
+  retryable?: boolean
+  retrySourceUserMessageId?: number | null
+  contextSnapshot?: AIConversationState | null
+  providerError?: boolean
+  actions?: AIMessageAction[]
+  artifacts?: AIMessageArtifact[]
+  rating?: AIMessageRating | null
+  ratingUpdatedAt?: number | null
+}
+
+export interface AIThreadMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: number
+  answerKind?: AIAnswerKind | null
+  suggestedFollowUps?: FollowUpSuggestion[]
+  retryable?: boolean
+  retrySourceUserMessageId?: number | null
+  contextSnapshot?: AIConversationState | null
+  providerError?: boolean
+  actions?: AIMessageAction[]
+  artifacts?: AIMessageArtifact[]
+  rating?: AIMessageRating | null
+  ratingUpdatedAt?: number | null
+}
+
+export interface AIChatTurnResult {
+  assistantMessage: AIThreadMessage
+  conversationState: AIConversationState | null
+}
+
+export interface AIChatSendRequest {
+  message: string
+  contextOverride?: AIConversationState | null
+  clientRequestId?: string | null
+}
+
+export interface AIMessageFeedbackUpdate {
+  messageId: number
+  rating: AIMessageRating | null
 }
 
 export interface WebsiteSummary {
@@ -174,12 +381,60 @@ export interface ArtifactRef {
   totalSeconds: number
   confidence: number
   canonicalAppId?: string | null
+  ownerBundleId?: string | null
+  ownerAppName?: string | null
+  ownerAppInstanceId?: string | null
   url?: string | null
   path?: string | null
   host?: string | null
   canonicalKey?: string
   openTarget: OpenTarget
   metadata?: Record<string, unknown> | null
+}
+
+export type ResolvedIconSource =
+  | 'active_window'
+  | 'app_file'
+  | 'app_identity'
+  | 'app_bundle'
+  | 'uwp_manifest'
+  | 'artifact_file'
+  | 'artifact_app'
+  | 'browser_cache'
+  | 'site_origin'
+  | 'site_fallback'
+  | 'miss'
+
+export type IconRequest =
+  | {
+      kind: 'app'
+      bundleId?: string | null
+      appName?: string | null
+      canonicalAppId?: string | null
+      appInstanceId?: string | null
+    }
+  | {
+      kind: 'site'
+      domain?: string | null
+      pageUrl?: string | null
+    }
+  | {
+      kind: 'artifact'
+      artifactType?: ArtifactRef['artifactType']
+      canonicalAppId?: string | null
+      ownerBundleId?: string | null
+      ownerAppName?: string | null
+      ownerAppInstanceId?: string | null
+      path?: string | null
+      url?: string | null
+      host?: string | null
+      title?: string | null
+    }
+
+export interface ResolvedIconPayload {
+  cacheKey: string
+  dataUrl: string | null
+  source: ResolvedIconSource
 }
 
 export interface PageRef extends ArtifactRef {
@@ -289,7 +544,7 @@ export interface AppProfile {
   displayName: string
   roleSummary: string
   topArtifacts: ArtifactRef[]
-  pairedApps: Array<{ canonicalAppId: string; displayName: string; totalSeconds: number }>
+  pairedApps: Array<{ canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>
   topBlockIds: string[]
   computedAt: number
 }
@@ -314,7 +569,7 @@ export interface AppDetailPayload {
   sessionCount: number
   topArtifacts: ArtifactRef[]
   topPages: PageRef[]
-  pairedApps: Array<{ canonicalAppId: string; displayName: string; totalSeconds: number }>
+  pairedApps: Array<{ canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>
   blockAppearances: Array<{
     blockId: string
     startTime: number
@@ -354,6 +609,7 @@ export type AIJobType =
   | 'week_review'
   | 'app_narrative'
   | 'chat_answer'
+  | 'chat_followup_suggestions'
   | 'report_generation'
   | 'attribution_assist'
 
@@ -379,15 +635,80 @@ export interface ProcessSnapshot {
 
 export type AppTheme = 'system' | 'light' | 'dark'
 
+export type OnboardingPlatform = 'macos' | 'windows' | 'linux'
+
+export type TrackingPermissionState =
+  | 'granted'
+  | 'missing'
+  | 'awaiting_relaunch'
+  | 'unsupported_or_unknown'
+
+export type OnboardingStage =
+  | 'welcome'
+  | 'permission'
+  | 'relaunch_required'
+  | 'verifying_permission'
+  | 'proof'
+  | 'personalize'
+  | 'complete'
+
+export type ProofState = 'idle' | 'collecting' | 'ready'
+export type PersonalizationState = 'pending' | 'completed'
+export type AISetupState = 'pending' | 'dismissed' | 'connected'
+
+export interface OnboardingState {
+  flowVersion: number
+  platform: OnboardingPlatform
+  stage: OnboardingStage
+  trackingPermissionState: TrackingPermissionState
+  permissionRequestedAt: number | null
+  proofState: ProofState
+  personalizationState: PersonalizationState
+  aiSetupState: AISetupState
+  completedAt: number | null
+}
+
+export type ProviderConnectionStatus =
+  | 'valid'
+  | 'invalid_credentials'
+  | 'unsupported_format'
+  | 'provider_unreachable'
+
+export interface ProviderConnectionResult {
+  status: ProviderConnectionStatus
+  provider: AIProvider
+  detectedProvider: AIProvider | null
+  message: string
+  canSaveAnyway: boolean
+}
+
+export interface WorkspaceResult {
+  workspaceId: string
+  mnemonic: string
+  linkCode: string
+  linkToken: string
+}
+
+export interface BrowserLinkResult {
+  displayCode: string
+  fullToken: string
+}
+
+export interface SyncStatus {
+  isLinked: boolean
+  workspaceId: string | null
+  lastSyncAt: number | null
+}
+
 export interface AppSettings {
   // Provider API keys are stored in OS keychain via keytar (never in plain-text)
   analyticsOptIn: boolean       // false = no telemetry (default)
   launchOnLogin: boolean
   theme: AppTheme
   onboardingComplete: boolean
+  onboardingState: OnboardingState
   userName: string
   userGoals: string[]
-  dailyFocusGoalHours: number
   firstLaunchDate: number       // Unix ms — set on first launch, used for day-7 feedback prompt
   feedbackPromptShown: boolean  // true once the day-7 prompt has been shown
   aiProvider: AIProviderMode
@@ -406,12 +727,11 @@ export interface AppSettings {
   aiSpendSoftLimitUsd?: number
   aiRedactFilePaths?: boolean
   aiRedactEmails?: boolean
+  allowThirdPartyWebsiteIconFallback?: boolean
   dailySummaryEnabled?: boolean
   morningNudgeEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
-  focusIntent?: string
-  defaultFocusMinutes?: number
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -426,6 +746,85 @@ export interface LiveSession {
   canonicalAppId?: string | null
   appInstanceId?: string | null
   captureSource?: string | null
+}
+
+export type TrackingModuleSource = 'package' | 'unpacked' | 'hyprctl' | 'swaymsg' | 'xdotool' | 'xprop'
+export type LinuxTrackingSupportLevel = 'ready' | 'limited' | 'unsupported'
+
+export interface LinuxTrackingHelperCommands {
+  hyprctl: boolean
+  swaymsg: boolean
+  xdotool: boolean
+  xprop: boolean
+}
+
+export interface LinuxTrackingDiagnostics {
+  supportLevel: LinuxTrackingSupportLevel
+  supportMessage: string
+  sessionType: string
+  desktop: string
+  helperCommands: LinuxTrackingHelperCommands
+  display: string | null
+  waylandDisplay: string | null
+}
+
+export interface TrackingRawWindowDiagnostics {
+  title: string
+  application: string
+  path: string
+  pid: number
+  isUWPApp: boolean
+  uwpPackage: string
+}
+
+export interface TrackingResolvedWindowDiagnostics {
+  backend: string
+  bundleId: string
+  appName: string
+  title: string
+  pid: number
+  path: string
+}
+
+export interface TrackingStatusDiagnostics {
+  moduleSource: TrackingModuleSource | null
+  loadError: string | null
+  pollError: string | null
+  backendTrace: string[]
+  lastRawWindow: TrackingRawWindowDiagnostics | null
+  lastResolvedWindow: TrackingResolvedWindowDiagnostics | null
+}
+
+export type LinuxPackageType = 'appimage' | 'deb' | 'rpm' | 'pacman' | 'unknown' | null
+
+export interface LinuxDesktopDiagnostics {
+  sessionType: string | null
+  display: string | null
+  waylandDisplay: string | null
+  desktop: string | null
+  packageType: LinuxPackageType
+  packageDetectionSource: 'appimage-env' | 'dpkg-query' | 'rpm-query' | 'pacman-query' | 'unresolved' | null
+  packageOwner: string | null
+  packageManagerCommand: 'dpkg-query' | 'rpm' | 'pacman' | null
+  packageMatchedPath: string | null
+  packageDetectionErrors: string[]
+  appImage: string | null
+  autostartPath: string
+  autostartEnabled: boolean
+  notificationSupported: boolean
+  secureStoreAvailable: boolean
+  secureStoreError: string | null
+  secureStoreHint: string | null
+  dbusSessionBusAddress: string | null
+  dbusSessionBusAddressInferred: boolean
+  secretServiceReachable: boolean | null
+}
+
+export interface TrackingDiagnosticsPayload {
+  platform: NodeJS.Platform
+  trackingStatus: TrackingStatusDiagnostics
+  linuxTracking: LinuxTrackingDiagnostics | null
+  linuxDesktop: LinuxDesktopDiagnostics | null
 }
 
 export type AppCategory =
@@ -549,6 +948,9 @@ export const IPC = {
     GET_HISTORY_DAY: 'db:get-history-day',
     GET_TIMELINE_DAY: 'db:get-timeline-day',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
+    GET_CATEGORY_OVERRIDES: 'db:get-category-overrides',
+    SET_CATEGORY_OVERRIDE: 'db:set-category-override',
+    CLEAR_CATEGORY_OVERRIDE: 'db:clear-category-override',
     GET_APP_SESSIONS: 'db:get-app-sessions',
     GET_WEBSITE_SUMMARIES: 'db:get-website-summaries',
     GET_PEAK_HOURS: 'db:get-peak-hours',
@@ -559,6 +961,7 @@ export const IPC = {
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
     SET_BLOCK_LABEL_OVERRIDE: 'db:set-block-label-override',
+    CLEAR_BLOCK_LABEL_OVERRIDE: 'db:clear-block-label-override',
   },
   DEBUG: {
     GET_INFO: 'debug:get-info',
@@ -575,6 +978,11 @@ export const IPC = {
   },
   AI: {
     SEND_MESSAGE: 'ai:send-message',
+    STREAM_EVENT: 'ai:stream-event',
+    SET_MESSAGE_FEEDBACK: 'ai:set-message-feedback',
+    GENERATE_DAY_SUMMARY: 'ai:generate-day-summary',
+    GET_WEEK_REVIEW: 'ai:get-week-review',
+    GET_APP_NARRATIVE: 'ai:get-app-narrative',
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
@@ -588,13 +996,24 @@ export const IPC = {
     HAS_API_KEY: 'settings:has-api-key',
     SET_API_KEY: 'settings:set-api-key',
     CLEAR_API_KEY: 'settings:clear-api-key',
+    VALIDATE_API_KEY: 'settings:validate-api-key',
   },
   PROJECTIONS: {
     INVALIDATED: 'projections:invalidated',
   },
+  ICONS: {
+    RESOLVE: 'icons:resolve',
+  },
   TRACKING: {
     GET_LIVE: 'tracking:get-live',
+    GET_DIAGNOSTICS: 'tracking:get-diagnostics',
     GET_PROCESS_METRICS: 'tracking:get-process-metrics',
+    GET_PERMISSION_STATE: 'tracking:get-permission-state',
+    REQUEST_SCREEN_PERMISSION: 'tracking:request-screen-permission',
+  },
+  APP: {
+    RELAUNCH: 'app:relaunch',
+    COMPLETE_ONBOARDING: 'app:complete-onboarding',
   },
   SYNC: {
     GET_STATUS: 'sync:get-status',

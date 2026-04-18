@@ -1,5 +1,5 @@
-// Query resolvers that produce the structured payloads defined in
-// CLAUDE.md Appendix ("AI Context Payload Reference").
+// Query resolvers that produce the structured payloads used by
+// Daylens AI and work-history queries.
 //
 // resolveClientQuery  → client/project question payload
 // resolveDayContext   → full-day context payload
@@ -21,6 +21,10 @@ interface ProjectRow {
 }
 
 interface ClientAliasRow {
+  alias: string
+}
+
+interface ProjectAliasRow {
   alias: string
 }
 
@@ -75,7 +79,7 @@ interface RollupRow {
   session_count: number
 }
 
-// ─── Output payload types (matches CLAUDE.md Appendix) ──────────────────────
+// ─── Output payload types ───────────────────────────────────────────────────
 
 export interface SessionAppEntry {
   app_name: string
@@ -95,9 +99,11 @@ export interface SessionPayload {
   end: string
   duration_ms: number
   active_ms: number
+  attribution_status: 'attributed' | 'ambiguous' | 'unattributed'
   project_id: string | null
   project_name: string | null
   confidence: number | null
+  title: string | null
   apps: SessionAppEntry[]
   evidence: EvidenceEntry[]
 }
@@ -137,6 +143,126 @@ export interface ClientQueryPayload {
     max_merge_gap_ms: number
     exclude_idle_over_ms: number
   }
+}
+
+export interface ClientPortfolioEntry {
+  client_id: string
+  client_name: string
+  attributed_ms: number
+  ambiguous_ms: number
+  session_count: number
+  project_names: string[]
+}
+
+export interface ClientComparisonPayload {
+  left: ClientQueryPayload
+  right: ClientQueryPayload
+  winner_client_id: string | null
+}
+
+export type ClientEvidenceKind = 'email' | 'workbook' | 'document' | 'tab' | 'file' | 'unknown'
+
+export interface ClientEvidenceItem {
+  label: string
+  kind: ClientEvidenceKind
+  weight: number
+  session_count: number
+  app_names: string[]
+}
+
+export interface ClientEvidencePayload {
+  target: ClientQueryPayload['target']
+  range: ClientQueryPayload['range']
+  items: ClientEvidenceItem[]
+}
+
+export interface ClientTimelineEntry {
+  work_session_id: string
+  start: string
+  end: string
+  duration_ms: number
+  title: string | null
+  project_name: string | null
+  confidence: number | null
+  attribution_status: 'attributed' | 'ambiguous' | 'unattributed'
+  apps: SessionAppEntry[]
+  evidence: EvidenceEntry[]
+}
+
+export interface ClientTimelinePayload {
+  target: ClientQueryPayload['target']
+  range: ClientQueryPayload['range']
+  sessions: ClientTimelineEntry[]
+}
+
+export interface ClientAppBreakdownEntry {
+  app_name: string
+  duration_ms: number
+  session_count: number
+  roles: string[]
+}
+
+export interface ClientAppBreakdownPayload {
+  target: ClientQueryPayload['target']
+  range: ClientQueryPayload['range']
+  apps: ClientAppBreakdownEntry[]
+}
+
+export interface ClientInvoiceLineItem {
+  label: string
+  duration_ms: number
+  app_names: string[]
+  evidence: string[]
+}
+
+export interface ClientInvoicePayload {
+  target: ClientQueryPayload['target']
+  range: ClientQueryPayload['range']
+  line_items: ClientInvoiceLineItem[]
+  ambiguous_ms: number
+  ambiguous_sessions: SessionPayload[]
+}
+
+export interface ProjectQueryPayload {
+  question: string
+  timezone: string
+  range: { start: string; end: string }
+  target: {
+    project_id: string
+    project_name: string
+    client_id: string
+    client_name: string
+    aliases: string[]
+  }
+  totals: ClientQueryPayload['totals']
+  sessions: SessionPayload[]
+  rules: ClientQueryPayload['rules']
+}
+
+export interface ProjectEvidencePayload {
+  target: ProjectQueryPayload['target']
+  range: ProjectQueryPayload['range']
+  items: ClientEvidenceItem[]
+}
+
+export interface ProjectTimelinePayload {
+  target: ProjectQueryPayload['target']
+  range: ProjectQueryPayload['range']
+  sessions: ClientTimelineEntry[]
+}
+
+export interface ProjectAppBreakdownPayload {
+  target: ProjectQueryPayload['target']
+  range: ProjectQueryPayload['range']
+  apps: ClientAppBreakdownEntry[]
+}
+
+export interface ProjectInvoicePayload {
+  target: ProjectQueryPayload['target']
+  range: ProjectQueryPayload['range']
+  line_items: ClientInvoiceLineItem[]
+  ambiguous_ms: number
+  ambiguous_sessions: SessionPayload[]
 }
 
 export interface DaySessionPayload {
@@ -283,6 +409,49 @@ function sessionEvidence(db: Database.Database, sessionId: string): EvidenceEntr
   return rows.map((r) => ({ type: r.evidence_type, value: r.evidence_value, weight: r.weight }))
 }
 
+function classifyEvidenceKind(type: string, value: string): ClientEvidenceKind {
+  const normalizedType = type.toLowerCase()
+  const normalizedValue = value.toLowerCase()
+  if (normalizedType.includes('email')) return 'email'
+  if (normalizedType.includes('tab') || normalizedType.includes('domain')) return 'tab'
+  if (normalizedValue.match(/\.(xlsx|xls|csv)\b/)) return 'workbook'
+  if (normalizedValue.match(/\.(docx|doc|pages|gdoc|md|txt|pdf)\b/)) return 'document'
+  if (normalizedType.includes('file')) return 'file'
+  return 'unknown'
+}
+
+function evidenceLabel(entry: EvidenceEntry): string {
+  return entry.value.trim()
+}
+
+function projectNamesForClientInRange(
+  db: Database.Database,
+  clientId: string,
+  fromMs: number,
+  toMs: number,
+): string[] {
+  const rows = db.prepare(`
+    SELECT DISTINCT p.name
+    FROM work_sessions ws
+    JOIN projects p ON p.id = ws.project_id
+    WHERE ws.client_id = ? AND ws.started_at >= ? AND ws.started_at < ?
+    ORDER BY p.name ASC
+  `).all(clientId, fromMs, toMs) as Array<{ name: string }>
+
+  return rows.map((row) => row.name).filter(Boolean)
+}
+
+function trackedWorkRange(db: Database.Database): { startMs: number; endMs: number } | null {
+  const row = db.prepare(`
+    SELECT MIN(started_at) AS start_ms, MAX(ended_at) AS end_ms
+    FROM work_sessions
+    WHERE client_id IS NOT NULL
+  `).get() as { start_ms: number | null; end_ms: number | null } | undefined
+
+  if (!row?.start_ms || !row?.end_ms) return null
+  return { startMs: row.start_ms, endMs: row.end_ms + 1 }
+}
+
 // ─── resolveClientQuery ─────────────────────────────────────────────────────
 
 export function resolveClientQuery(
@@ -329,9 +498,11 @@ export function resolveClientQuery(
       end: msToIso(ws.ended_at, timezone),
       duration_ms: ws.duration_ms,
       active_ms: ws.active_ms,
+      attribution_status: ws.attribution_status,
       project_id: ws.project_id,
       project_name: ws.project_id ? (projectMap.get(ws.project_id) ?? null) : null,
       confidence: ws.attribution_confidence,
+      title: ws.title,
       apps: sessionApps(db, ws.id, appNameMap),
       evidence: sessionEvidence(db, ws.id),
     })
@@ -345,7 +516,7 @@ export function resolveClientQuery(
     WHERE ws.attribution_status = 'ambiguous'
       AND ws.started_at >= ? AND ws.started_at < ?
       AND ws.id IN (
-        SELECT DISTINCT sa.segment_id FROM segment_attributions sa
+        SELECT DISTINCT wss.work_session_id FROM segment_attributions sa
         JOIN work_session_segments wss ON wss.segment_id = sa.segment_id
         WHERE sa.client_id = ? AND sa.confidence > 0.3
       )
@@ -383,6 +554,7 @@ export function resolveClientQuery(
         client_name: clientNames.get(cid) ?? null,
         confidence: Math.round(conf * 100) / 100,
       })),
+      reason: 'low confidence; competing client evidence',
     }
   })
 
@@ -412,6 +584,459 @@ export function resolveClientQuery(
       max_merge_gap_ms: MAX_MERGE_GAP,
       exclude_idle_over_ms: EXCLUDE_IDLE_OVER,
     },
+  }
+}
+
+export function resolveProjectQuery(
+  projectId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ProjectQueryPayload | null {
+  const timezone = tz()
+  const project = db.prepare(`SELECT id, client_id, name FROM projects WHERE id = ?`).get(projectId) as ProjectRow | undefined
+  if (!project) return null
+
+  const client = db.prepare(`SELECT id, name FROM clients WHERE id = ?`).get(project.client_id) as ClientRow | undefined
+  if (!client) return null
+
+  const aliases = (db.prepare(`
+    SELECT alias FROM project_aliases WHERE project_id = ?
+  `).all(projectId) as ProjectAliasRow[]).map((row) => row.alias)
+
+  const appNameMap = loadAppNameMap(db)
+  const sessions = db.prepare(`
+    SELECT * FROM work_sessions
+    WHERE project_id = ? AND started_at >= ? AND started_at < ?
+    ORDER BY started_at ASC
+  `).all(projectId, fromMs, toMs) as WorkSessionRow[]
+
+  let attributedMs = 0
+  let ambiguousMs = 0
+  let excludedIdleMs = 0
+  const sessionPayloads: SessionPayload[] = []
+
+  for (const ws of sessions) {
+    if (ws.attribution_status === 'attributed') attributedMs += ws.active_ms
+    else if (ws.attribution_status === 'ambiguous') ambiguousMs += ws.active_ms
+    excludedIdleMs += ws.idle_ms
+
+    sessionPayloads.push({
+      work_session_id: ws.id,
+      start: msToIso(ws.started_at, timezone),
+      end: msToIso(ws.ended_at, timezone),
+      duration_ms: ws.duration_ms,
+      active_ms: ws.active_ms,
+      attribution_status: ws.attribution_status,
+      project_id: ws.project_id,
+      project_name: project.name,
+      confidence: ws.attribution_confidence,
+      title: ws.title,
+      apps: sessionApps(db, ws.id, appNameMap),
+      evidence: sessionEvidence(db, ws.id),
+    })
+  }
+
+  return {
+    question,
+    timezone,
+    range: {
+      start: msToIso(fromMs, timezone),
+      end: msToIso(toMs, timezone),
+    },
+    target: {
+      project_id: project.id,
+      project_name: project.name,
+      client_id: client.id,
+      client_name: client.name,
+      aliases,
+    },
+    totals: {
+      attributed_ms: attributedMs,
+      attributed_hours: Math.round((attributedMs / 3_600_000) * 100) / 100,
+      ambiguous_ms: ambiguousMs,
+      excluded_idle_ms: excludedIdleMs,
+      session_count: sessions.length,
+    },
+    sessions: sessionPayloads,
+    rules: {
+      min_confidence_to_include: MIN_CONFIDENCE,
+      max_merge_gap_ms: MAX_MERGE_GAP,
+      exclude_idle_over_ms: EXCLUDE_IDLE_OVER,
+    },
+  }
+}
+
+export function getTrackedWorkRange(
+  db: Database.Database = getDb(),
+): { startMs: number; endMs: number } | null {
+  return trackedWorkRange(db)
+}
+
+export function listClientsForRange(
+  fromMs: number,
+  toMs: number,
+  db: Database.Database = getDb(),
+): ClientPortfolioEntry[] {
+  const rows = db.prepare(`
+    SELECT
+      ws.client_id AS client_id,
+      c.name AS client_name,
+      SUM(CASE WHEN ws.attribution_status = 'attributed' THEN ws.active_ms ELSE 0 END) AS attributed_ms,
+      SUM(CASE WHEN ws.attribution_status = 'ambiguous' THEN ws.active_ms ELSE 0 END) AS ambiguous_ms,
+      COUNT(*) AS session_count
+    FROM work_sessions ws
+    JOIN clients c ON c.id = ws.client_id
+    WHERE ws.client_id IS NOT NULL
+      AND c.status = 'active'
+      AND ws.started_at >= ?
+      AND ws.started_at < ?
+    GROUP BY ws.client_id, c.name
+    ORDER BY attributed_ms DESC, ambiguous_ms DESC, c.name ASC
+  `).all(fromMs, toMs) as Array<{
+    client_id: string
+    client_name: string
+    attributed_ms: number
+    ambiguous_ms: number
+    session_count: number
+  }>
+
+  return rows.map((row) => ({
+    ...row,
+    project_names: projectNamesForClientInRange(db, row.client_id, fromMs, toMs),
+  }))
+}
+
+export function compareClientsForRange(
+  leftClientId: string,
+  rightClientId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ClientComparisonPayload | null {
+  const left = resolveClientQuery(leftClientId, fromMs, toMs, question, db)
+  const right = resolveClientQuery(rightClientId, fromMs, toMs, question, db)
+  if (!left || !right) return null
+
+  const leftTotal = left.totals.attributed_ms
+  const rightTotal = right.totals.attributed_ms
+  const winner_client_id = leftTotal === rightTotal
+    ? null
+    : leftTotal > rightTotal
+      ? left.target.client_id
+      : right.target.client_id
+
+  return { left, right, winner_client_id }
+}
+
+export function resolveClientEvidenceForRange(
+  clientId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ClientEvidencePayload | null {
+  const payload = resolveClientQuery(clientId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  const items = new Map<string, ClientEvidenceItem>()
+  for (const session of payload.sessions) {
+    const appNames = session.apps.map((app) => app.app_name)
+    for (const evidence of session.evidence) {
+      const label = evidenceLabel(evidence)
+      if (!label) continue
+      const kind = classifyEvidenceKind(evidence.type, label)
+      const key = `${kind}:${label.toLowerCase()}`
+      const existing = items.get(key)
+      if (existing) {
+        existing.weight = Math.max(existing.weight, evidence.weight)
+        existing.session_count += 1
+        for (const appName of appNames) {
+          if (!existing.app_names.includes(appName)) existing.app_names.push(appName)
+        }
+        continue
+      }
+
+      items.set(key, {
+        label,
+        kind,
+        weight: evidence.weight,
+        session_count: 1,
+        app_names: [...appNames],
+      })
+    }
+
+    if (session.title?.trim()) {
+      const title = session.title.trim()
+      const key = `unknown:${title.toLowerCase()}`
+      if (!items.has(key)) {
+        items.set(key, {
+          label: title,
+          kind: classifyEvidenceKind('window_title', title),
+          weight: session.confidence ?? 0.5,
+          session_count: 1,
+          app_names: [...appNames],
+        })
+      }
+    }
+  }
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    items: [...items.values()].sort((left, right) => {
+      if (right.weight !== left.weight) return right.weight - left.weight
+      if (right.session_count !== left.session_count) return right.session_count - left.session_count
+      return left.label.localeCompare(right.label)
+    }),
+  }
+}
+
+export function resolveClientTimelineForRange(
+  clientId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ClientTimelinePayload | null {
+  const payload = resolveClientQuery(clientId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    sessions: payload.sessions.map((session) => ({
+      work_session_id: session.work_session_id,
+      start: session.start,
+      end: session.end,
+      duration_ms: session.duration_ms,
+      title: session.title,
+      project_name: session.project_name,
+      confidence: session.confidence,
+      attribution_status: session.attribution_status,
+      apps: session.apps,
+      evidence: session.evidence,
+    })),
+  }
+}
+
+export function resolveClientAmbiguitiesForRange(
+  clientId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): AmbiguityEntry[] {
+  const payload = resolveClientQuery(clientId, fromMs, toMs, question, db)
+  return payload?.ambiguities ?? []
+}
+
+export function resolveClientAppBreakdownForRange(
+  clientId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ClientAppBreakdownPayload | null {
+  const payload = resolveClientQuery(clientId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  const apps = new Map<string, ClientAppBreakdownEntry>()
+  for (const session of payload.sessions) {
+    for (const app of session.apps) {
+      const existing = apps.get(app.app_name)
+      if (existing) {
+        existing.duration_ms += app.duration_ms
+        existing.session_count += 1
+        if (!existing.roles.includes(app.role)) existing.roles.push(app.role)
+      } else {
+        apps.set(app.app_name, {
+          app_name: app.app_name,
+          duration_ms: app.duration_ms,
+          session_count: 1,
+          roles: [app.role],
+        })
+      }
+    }
+  }
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    apps: [...apps.values()].sort((left, right) => right.duration_ms - left.duration_ms),
+  }
+}
+
+export function buildClientInvoiceNarrativeForRange(
+  clientId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ClientInvoicePayload | null {
+  const payload = resolveClientQuery(clientId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  const line_items = payload.sessions
+    .filter((session) => session.attribution_status === 'attributed')
+    .map((session) => ({
+      label: session.title?.trim() || session.project_name || payload.target.client_name,
+      duration_ms: session.active_ms,
+      app_names: session.apps.map((app) => app.app_name),
+      evidence: session.evidence.slice(0, 3).map((item) => item.value),
+    }))
+    .sort((left, right) => right.duration_ms - left.duration_ms)
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    line_items,
+    ambiguous_ms: payload.totals.ambiguous_ms,
+    ambiguous_sessions: payload.sessions.filter((session) => session.attribution_status === 'ambiguous'),
+  }
+}
+
+export function resolveProjectEvidenceForRange(
+  projectId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ProjectEvidencePayload | null {
+  const payload = resolveProjectQuery(projectId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  const items = new Map<string, ClientEvidenceItem>()
+  for (const session of payload.sessions) {
+    const appNames = session.apps.map((app) => app.app_name)
+    for (const evidence of session.evidence) {
+      const label = evidenceLabel(evidence)
+      if (!label) continue
+      const kind = classifyEvidenceKind(evidence.type, label)
+      const key = `${kind}:${label.toLowerCase()}`
+      const existing = items.get(key)
+      if (existing) {
+        existing.weight = Math.max(existing.weight, evidence.weight)
+        existing.session_count += 1
+        for (const appName of appNames) {
+          if (!existing.app_names.includes(appName)) existing.app_names.push(appName)
+        }
+        continue
+      }
+
+      items.set(key, {
+        label,
+        kind,
+        weight: evidence.weight,
+        session_count: 1,
+        app_names: [...appNames],
+      })
+    }
+  }
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    items: [...items.values()].sort((left, right) => {
+      if (right.weight !== left.weight) return right.weight - left.weight
+      if (right.session_count !== left.session_count) return right.session_count - left.session_count
+      return left.label.localeCompare(right.label)
+    }),
+  }
+}
+
+export function resolveProjectTimelineForRange(
+  projectId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ProjectTimelinePayload | null {
+  const payload = resolveProjectQuery(projectId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    sessions: payload.sessions.map((session) => ({
+      work_session_id: session.work_session_id,
+      start: session.start,
+      end: session.end,
+      duration_ms: session.duration_ms,
+      title: session.title,
+      project_name: session.project_name,
+      confidence: session.confidence,
+      attribution_status: session.attribution_status,
+      apps: session.apps,
+      evidence: session.evidence,
+    })),
+  }
+}
+
+export function resolveProjectAppBreakdownForRange(
+  projectId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ProjectAppBreakdownPayload | null {
+  const payload = resolveProjectQuery(projectId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  const apps = new Map<string, ClientAppBreakdownEntry>()
+  for (const session of payload.sessions) {
+    for (const app of session.apps) {
+      const existing = apps.get(app.app_name)
+      if (existing) {
+        existing.duration_ms += app.duration_ms
+        existing.session_count += 1
+        if (!existing.roles.includes(app.role)) existing.roles.push(app.role)
+      } else {
+        apps.set(app.app_name, {
+          app_name: app.app_name,
+          duration_ms: app.duration_ms,
+          session_count: 1,
+          roles: [app.role],
+        })
+      }
+    }
+  }
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    apps: [...apps.values()].sort((left, right) => right.duration_ms - left.duration_ms),
+  }
+}
+
+export function buildProjectInvoiceNarrativeForRange(
+  projectId: string,
+  fromMs: number,
+  toMs: number,
+  question: string,
+  db: Database.Database = getDb(),
+): ProjectInvoicePayload | null {
+  const payload = resolveProjectQuery(projectId, fromMs, toMs, question, db)
+  if (!payload) return null
+
+  const line_items = payload.sessions
+    .filter((session) => session.attribution_status === 'attributed')
+    .map((session) => ({
+      label: session.title?.trim() || payload.target.project_name,
+      duration_ms: session.active_ms,
+      app_names: session.apps.map((app) => app.app_name),
+      evidence: session.evidence.slice(0, 3).map((item) => item.value),
+    }))
+    .sort((left, right) => right.duration_ms - left.duration_ms)
+
+  return {
+    target: payload.target,
+    range: payload.range,
+    line_items,
+    ambiguous_ms: payload.totals.ambiguous_ms,
+    ambiguous_sessions: payload.sessions.filter((session) => session.attribution_status === 'ambiguous'),
   }
 }
 
@@ -572,6 +1197,37 @@ export function findClientByName(
   return fuzzy ?? null
 }
 
+export function findProjectByName(
+  name: string,
+  db: Database.Database = getDb(),
+): ProjectRow | null {
+  const normalized = name.toLowerCase().trim()
+
+  const direct = db.prepare(`
+    SELECT p.id, p.client_id, p.name FROM projects p
+    JOIN clients c ON c.id = p.client_id
+    WHERE LOWER(p.name) = ? AND p.status = 'active' AND c.status = 'active'
+  `).get(normalized) as ProjectRow | undefined
+  if (direct) return direct
+
+  const alias = db.prepare(`
+    SELECT p.id, p.client_id, p.name FROM projects p
+    JOIN project_aliases pa ON pa.project_id = p.id
+    JOIN clients c ON c.id = p.client_id
+    WHERE pa.alias_normalized = ? AND p.status = 'active' AND c.status = 'active'
+  `).get(normalized) as ProjectRow | undefined
+  if (alias) return alias
+
+  const fuzzy = db.prepare(`
+    SELECT p.id, p.client_id, p.name FROM projects p
+    JOIN clients c ON c.id = p.client_id
+    WHERE LOWER(p.name) LIKE ? AND p.status = 'active' AND c.status = 'active'
+    ORDER BY LENGTH(p.name) ASC
+    LIMIT 1
+  `).get(`%${normalized}%`) as ProjectRow | undefined
+  return fuzzy ?? null
+}
+
 export function listClients(
   db: Database.Database = getDb(),
 ): Array<{ id: string; name: string; projectCount: number }> {
@@ -583,6 +1239,18 @@ export function listClients(
     GROUP BY c.id
     ORDER BY c.name ASC
   `).all() as Array<{ id: string; name: string; projectCount: number }>
+}
+
+export function listProjects(
+  db: Database.Database = getDb(),
+): Array<{ id: string; client_id: string; name: string; client_name: string }> {
+  return db.prepare(`
+    SELECT p.id, p.client_id, p.name, c.name AS client_name
+    FROM projects p
+    JOIN clients c ON c.id = p.client_id
+    WHERE p.status = 'active' AND c.status = 'active'
+    ORDER BY p.name ASC
+  `).all() as Array<{ id: string; client_id: string; name: string; client_name: string }>
 }
 
 export function getRollupSummary(

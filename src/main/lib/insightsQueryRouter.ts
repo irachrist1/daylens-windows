@@ -4,17 +4,72 @@ import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import { computeFocusScore } from '../lib/focusScore'
 import { deriveWorkEvidenceSummary, type WorkEvidenceSignal } from '../lib/workEvidence'
-import { findClientByName, resolveClientQuery } from '../core/query/attributionResolvers'
+import {
+  buildClientInvoiceNarrativeForRange,
+  buildProjectInvoiceNarrativeForRange,
+  compareClientsForRange,
+  findClientByName,
+  findProjectByName,
+  getTrackedWorkRange,
+  listClients,
+  listClientsForRange,
+  listProjects,
+  resolveClientAmbiguitiesForRange,
+  resolveClientAppBreakdownForRange,
+  resolveClientEvidenceForRange,
+  resolveClientQuery,
+  resolveClientTimelineForRange,
+  resolveProjectAppBreakdownForRange,
+  resolveProjectEvidenceForRange,
+  resolveProjectQuery,
+  resolveProjectTimelineForRange,
+  type AmbiguityEntry,
+  type ClientEvidenceItem,
+  type ClientPortfolioEntry,
+  type ClientQueryPayload,
+  type ProjectQueryPayload,
+} from '../core/query/attributionResolvers'
+import { getTimelineDayPayload, userVisibleLabelForBlock } from '../services/workBlocks'
+import { resolveWeeklyBriefContext, type WeeklyBriefContext } from './weeklyBrief'
+
+export type EntityIntent =
+  | 'portfolio'
+  | 'comparison'
+  | 'evidence'
+  | 'timeline'
+  | 'appBreakdown'
+  | 'ambiguity'
+  | 'invoice'
+  | 'time'
+
+export interface EntityContext {
+  entityId: string
+  entityName: string
+  entityType: 'client' | 'project'
+  rangeStartMs: number
+  rangeEndMs: number
+  rangeLabel: string
+  intent: EntityIntent
+}
 
 export interface TemporalContext {
   date: Date
   timeWindow: { start: Date; end: Date } | null
+  weeklyBrief: WeeklyBriefContext | null
+  entity: EntityContext | null
 }
 
-export interface RouterResult {
-  answer: string
-  resolvedContext: TemporalContext
-}
+export type RouterResult =
+  | {
+    kind: 'answer'
+    answer: string
+    resolvedContext: TemporalContext
+  }
+  | {
+    kind: 'weeklyBrief'
+    briefContext: WeeklyBriefContext
+    resolvedContext: TemporalContext
+  }
 
 const FOLLOW_UP_PATTERNS = [
   'that time',
@@ -350,11 +405,17 @@ function resolveTemporalContext(question: string, defaultDate: Date, previousCon
   return {
     date,
     timeWindow: resolveTimeWindow(question, date, previousContext),
+    weeklyBrief: previousContext?.weeklyBrief ?? null,
+    entity: previousContext?.entity ?? null,
   }
 }
 
 function isWeeklyQuestion(normalized: string): boolean {
   return normalized.includes('this week') || normalized.includes('last week')
+}
+
+function isYesterdayQuestion(normalized: string): boolean {
+  return normalized.includes('yesterday')
 }
 
 function isAllTimeQuestion(normalized: string): boolean {
@@ -378,6 +439,34 @@ function isAllTimeQuestion(normalized: string): boolean {
 
 function isFocusedCategory(category: AppCategory): boolean {
   return FOCUSED_CATEGORIES.includes(category)
+}
+
+function localDateString(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function relativeDayLabel(date: Date, reference: Date = new Date()): string {
+  const sameDay =
+    date.getFullYear() === reference.getFullYear()
+    && date.getMonth() === reference.getMonth()
+    && date.getDate() === reference.getDate()
+  if (sameDay) return 'Today'
+
+  const yesterday = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate())
+  yesterday.setDate(yesterday.getDate() - 1)
+  const isYesterday =
+    date.getFullYear() === yesterday.getFullYear()
+    && date.getMonth() === yesterday.getMonth()
+    && date.getDate() === yesterday.getDate()
+  if (isYesterday) return 'Yesterday'
+
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  })
 }
 
 function formatCategoryName(category: AppCategory): string {
@@ -499,6 +588,124 @@ function dailyTopCategoryAnswer(apps: AppUsageSummary[], sites: WebsiteSummary[]
   ].filter(Boolean).join(' ')
 }
 
+function aggregateDayArtifacts(date: Date, db: Database.Database) {
+  const payload = getTimelineDayPayload(db, localDateString(date), null)
+  const blocks = payload.blocks.filter((block) => (block.endTime - block.startTime) >= 3 * 60_000)
+  const artifactTotals = new Map<string, {
+    title: string
+    subtitle: string | null
+    totalSeconds: number
+  }>()
+
+  for (const block of blocks) {
+    for (const artifact of block.topArtifacts) {
+      const title = artifact.displayTitle.trim()
+      if (!title) continue
+      const subtitle = artifact.subtitle?.trim() || artifact.host || artifact.path || null
+      const key = artifact.id || `${artifact.artifactType}:${title}:${subtitle ?? ''}`
+      const existing = artifactTotals.get(key)
+      if (existing) {
+        existing.totalSeconds += artifact.totalSeconds
+      } else {
+        artifactTotals.set(key, {
+          title,
+          subtitle,
+          totalSeconds: artifact.totalSeconds,
+        })
+      }
+    }
+  }
+
+  const artifacts = [...artifactTotals.values()]
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
+
+  return { payload, blocks, artifacts }
+}
+
+function describeBlockDetail(block: ReturnType<typeof getTimelineDayPayload>['blocks'][number]): string {
+  const artifacts = block.topArtifacts
+    .slice(0, 2)
+    .map((artifact) => artifact.displayTitle.trim())
+    .filter(Boolean)
+  if (artifacts.length > 0) return artifacts.join(', ')
+
+  const sites = block.websites
+    .slice(0, 2)
+    .map((site) => site.domain.replace(/^www\./, ''))
+    .filter(Boolean)
+  if (sites.length > 0) return sites.join(', ')
+
+  const apps = block.topApps
+    .filter((app) => app.category !== 'system')
+    .slice(0, 2)
+    .map((app) => app.appName)
+  return apps.join(', ')
+}
+
+function buildDayBlocksAnswer(date: Date, db: Database.Database, header?: string): string | null {
+  const { payload, blocks, artifacts } = aggregateDayArtifacts(date, db)
+  if (payload.totalSeconds === 0 && blocks.length === 0) return null
+
+  const label = header ?? relativeDayLabel(date)
+  const lines: string[] = [
+    `${label}: ${formatDuration(payload.totalSeconds)} tracked, focus ${payload.focusPct}%.`,
+  ]
+
+  if (blocks.length > 0) {
+    lines.push('Main blocks:')
+    for (const block of blocks.slice(0, 4)) {
+      const detail = describeBlockDetail(block)
+      lines.push(
+        `- ${formatTime(block.startTime)}-${formatTime(block.endTime)}: ${userVisibleLabelForBlock(block)}${detail ? ` — ${detail}` : ''}`,
+      )
+    }
+  }
+
+  if (artifacts.length > 0) {
+    lines.push(`Key artifacts: ${artifacts.slice(0, 5).map((artifact) => artifact.title).join(', ')}.`)
+  }
+
+  return lines.join('\n')
+}
+
+function buildArtifactAnswer(date: Date, db: Database.Database): string | null {
+  const { artifacts } = aggregateDayArtifacts(date, db)
+  if (artifacts.length === 0) return null
+
+  const label = relativeDayLabel(date)
+  return [
+    `${label} you touched these artifacts:`,
+    ...artifacts.slice(0, 8).map((artifact, index) =>
+      `${index + 1}. ${artifact.title}${artifact.subtitle ? ` — ${artifact.subtitle}` : ''} (${formatDuration(Math.round(artifact.totalSeconds))})`,
+    ),
+  ].join('\n')
+}
+
+function buildComparisonAnswer(date: Date, db: Database.Database): string | null {
+  const previousDate = new Date(date)
+  previousDate.setDate(previousDate.getDate() - 1)
+
+  const today = aggregateDayArtifacts(date, db)
+  const previous = aggregateDayArtifacts(previousDate, db)
+  if (today.payload.totalSeconds === 0 && previous.payload.totalSeconds === 0) return null
+
+  const todayLead = today.blocks[0] ? userVisibleLabelForBlock(today.blocks[0]) : null
+  const previousLead = previous.blocks[0] ? userVisibleLabelForBlock(previous.blocks[0]) : null
+  const todayArtifacts = today.artifacts.slice(0, 2).map((artifact) => artifact.title).join(', ')
+  const previousArtifacts = previous.artifacts.slice(0, 2).map((artifact) => artifact.title).join(', ')
+
+  return [
+    `Today vs yesterday: ${formatDuration(today.payload.totalSeconds)} vs ${formatDuration(previous.payload.totalSeconds)} tracked.`,
+    `Focus: ${today.payload.focusPct}% today vs ${previous.payload.focusPct}% yesterday.`,
+    todayLead || previousLead
+      ? `Main thread: ${todayLead ? `today was "${todayLead}"` : 'today had no clear dominant block'}; ${previousLead ? `yesterday was "${previousLead}"` : 'yesterday had no clear dominant block'}.`
+      : null,
+    todayArtifacts || previousArtifacts
+      ? `Artifacts shifted from ${previousArtifacts || 'no clear artifacts yesterday'} to ${todayArtifacts || 'no clear artifacts today'}.`
+      : null,
+  ].filter(Boolean).join('\n')
+}
+
 function durationMatchAnswer(normalized: string, apps: AppUsageSummary[], sites: WebsiteSummary[]): string | null {
   for (const app of apps) {
     if (normalized.includes(app.appName.toLowerCase())) {
@@ -573,79 +780,657 @@ function timeRangeAnswer(window: { start: Date; end: Date }, sessions: AppSessio
   return `Between ${formatTime(window.start.getTime())} and ${formatTime(window.end.getTime())}, the main thread was ${evidence.task.label.toLowerCase()}. Top sessions: ${topSessions.join(', ')}. Strongest signals: ${formatSignalList(evidence.signals, 3)}.`
 }
 
-const CLIENT_QUESTION_PATTERNS = [
+interface ResolvedRange {
+  startMs: number
+  endMs: number
+  label: string
+}
+
+interface RoutedEntityAnswer {
+  answer: string
+  entityContext: EntityContext | null
+}
+
+type ResolvedEntity =
+  | {
+    entityType: 'client'
+    id: string
+    name: string
+  }
+  | {
+    entityType: 'project'
+    id: string
+    name: string
+    clientId: string
+    clientName: string
+  }
+
+const SINGLE_ENTITY_PATTERNS = [
   /(?:how (?:many|much) (?:hours?|time))\s+(?:did i|have i|i)\s+(?:spend|spent|log(?:ged)?|work(?:ed)?)\s+(?:on|for|with|at)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\s*\?|$)/i,
   /(?:hours?|time)\s+(?:on|for|with)\s+['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
-  /(?:client|project)\s+['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
   /(?:what (?:did i|was i) (?:work(?:ing)?|do(?:ing)?) (?:on|for))\s+['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
+  /\bwhich\s+(.+?)\s+(?:emails?|workbooks?|docs?|documents?|tabs?)\b/i,
+  /\b(?:which|what)\s+(?:docs?|documents?|tabs?)\s+(?:matched|for|on)\s+(.+?)(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+  /\bbreak\s+(.+?)\s+down\s+by\s+app\b/i,
+  /\bshow\s+(?:the\s+)?(.+?)\s+timeline\b/i,
+  /\bif i had to invoice\s+(.+?)(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
 ]
 
-function tryRouteClientQuestion(
+const COMPARISON_PATTERNS = [
+  /\bcompare\s+(.+?)\s+(?:vs|versus)\s+(.+?)(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+  /\b(.+?)\s+(?:vs|versus)\s+(.+?)(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+  /\bambiguous between\s+(.+?)\s+and\s+(.+?)(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+  /\bcompare\s+(.+?)\s+and\s+(.+?)(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+]
+
+function formatDurationMs(durationMs: number): string {
+  return formatDuration(Math.max(0, Math.round(durationMs / 1000)))
+}
+
+function humanList(items: string[]): string {
+  if (items.length === 0) return ''
+  if (items.length === 1) return items[0]
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+}
+
+function lastTrackedRange(db: Database.Database): ResolvedRange | null {
+  const tracked = getTrackedWorkRange(db)
+  if (!tracked) return null
+  return {
+    startMs: tracked.startMs,
+    endMs: tracked.endMs,
+    label: 'all tracked history',
+  }
+}
+
+function resolveQuestionRange(
   normalized: string,
-  original: string,
   context: TemporalContext,
   db: Database.Database,
-): string | null {
-  let clientName: string | null = null
-  for (const pattern of CLIENT_QUESTION_PATTERNS) {
-    const match = original.match(pattern)
-    if (match?.[1]) {
-      clientName = match[1].trim().replace(/[?.!]+$/, '').trim()
-      break
-    }
+  preferAllTrackedTime = false,
+): ResolvedRange {
+  if (isAllTimeQuestion(normalized) || preferAllTrackedTime) {
+    const tracked = lastTrackedRange(db)
+    if (tracked) return tracked
   }
-  if (!clientName) return null
 
-  const client = findClientByName(clientName, db)
-  if (!client) return null
-
-  const isWeekly = normalized.includes('this week') || normalized.includes('last week')
-  let fromMs: number
-  let toMs: number
-
-  if (isWeekly) {
+  if (normalized.includes('this week') || normalized.includes('last week')) {
     const end = new Date(context.date)
     end.setHours(23, 59, 59, 999)
     const start = new Date(end)
-    start.setDate(end.getDate() - 6)
+    start.setDate(start.getDate() - 6)
     start.setHours(0, 0, 0, 0)
-    fromMs = start.getTime()
-    toMs = end.getTime()
-  } else {
-    const [f, t] = dayBounds(context.date)
-    fromMs = f
-    toMs = t
+    return {
+      startMs: start.getTime(),
+      endMs: end.getTime() + 1,
+      label: normalized.includes('last week') ? 'last week' : 'this week',
+    }
   }
 
-  const payload = resolveClientQuery(client.id, fromMs, toMs, original, db)
-  if (!payload) return null
+  const [startMs, endMs] = dayBounds(context.date)
+  return {
+    startMs,
+    endMs,
+    label: relativeDayLabel(context.date),
+  }
+}
 
+function timePhraseRegex(): RegExp {
+  return /\b(this week|last week|today|yesterday|all time|all-time|across all|all tracked|since tracking|historically)\b/i
+}
+
+function cleanEntityName(raw: string): string {
+  return raw
+    .replace(/\b(this week|last week|today|yesterday|all time|all-time|across all|all tracked|since tracking|historically)\b/gi, '')
+    .replace(/[?.!,:]+$/g, '')
+    .trim()
+}
+
+function escapeRegex(raw: string): string {
+  return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function detectClientMentions(question: string, db: Database.Database): Array<{ id: string; name: string }> {
+  const normalized = question.toLowerCase()
+  return listClients(db)
+    .filter((client) => new RegExp(`\\b${escapeRegex(client.name.toLowerCase())}\\b`, 'i').test(normalized))
+    .map((client) => ({ id: client.id, name: client.name }))
+}
+
+function detectProjectMentions(
+  question: string,
+  db: Database.Database,
+): Array<{ id: string; name: string; clientId: string; clientName: string }> {
+  const normalized = question.toLowerCase()
+  return listProjects(db)
+    .filter((project) => new RegExp(`\\b${escapeRegex(project.name.toLowerCase())}\\b`, 'i').test(normalized))
+    .map((project) => ({
+      id: project.id,
+      name: project.name,
+      clientId: project.client_id,
+      clientName: project.client_name,
+    }))
+}
+
+function extractSingleClient(question: string, previousContext: TemporalContext | null, db: Database.Database): { id: string; name: string } | null {
+  for (const pattern of SINGLE_ENTITY_PATTERNS) {
+    const match = question.match(pattern)
+    if (!match?.[1]) continue
+    const candidate = cleanEntityName(match[1])
+    if (!candidate) continue
+    const client = findClientByName(candidate, db)
+    if (client) return client
+  }
+
+  const mentions = detectClientMentions(question, db)
+  if (mentions.length >= 1) return mentions[0]
+
+  if (previousContext?.entity?.entityType === 'client') {
+    return {
+      id: previousContext.entity.entityId,
+      name: previousContext.entity.entityName,
+    }
+  }
+
+  return null
+}
+
+function extractSingleProject(
+  question: string,
+  previousContext: TemporalContext | null,
+  db: Database.Database,
+): { id: string; name: string; clientId: string; clientName: string } | null {
+  for (const pattern of SINGLE_ENTITY_PATTERNS) {
+    const match = question.match(pattern)
+    if (!match?.[1]) continue
+    const candidate = cleanEntityName(match[1])
+    if (!candidate) continue
+    const project = findProjectByName(candidate, db)
+    if (project) {
+      const client = listProjects(db).find((item) => item.id === project.id)
+      if (client) {
+        return {
+          id: client.id,
+          name: client.name,
+          clientId: client.client_id,
+          clientName: client.client_name,
+        }
+      }
+    }
+  }
+
+  const mentions = detectProjectMentions(question, db)
+  if (mentions.length >= 1) return mentions[0]
+
+  if (previousContext?.entity?.entityType === 'project') {
+    const project = listProjects(db).find((item) => item.id === previousContext.entity?.entityId)
+    if (project) {
+      return {
+        id: project.id,
+        name: project.name,
+        clientId: project.client_id,
+        clientName: project.client_name,
+      }
+    }
+    return {
+      id: previousContext.entity.entityId,
+      name: previousContext.entity.entityName,
+      clientId: '',
+      clientName: '',
+    }
+  }
+
+  return null
+}
+
+function extractComparisonClients(question: string, db: Database.Database): Array<{ id: string; name: string }> | null {
+  for (const pattern of COMPARISON_PATTERNS) {
+    const match = question.match(pattern)
+    if (!match?.[1] || !match?.[2]) continue
+    const left = findClientByName(cleanEntityName(match[1]), db)
+    const right = findClientByName(cleanEntityName(match[2]), db)
+    if (left && right && left.id !== right.id) return [left, right]
+  }
+
+  const mentions = detectClientMentions(question, db)
+  if (mentions.length >= 2) return mentions.slice(0, 2)
+
+  return null
+}
+
+function isClientListQuestion(normalized: string): boolean {
+  return normalized.includes('list all my clients')
+    || normalized.includes('who are my clients')
+    || normalized.includes('time per client')
+    || normalized.includes('clientele')
+}
+
+function isComparisonQuestion(normalized: string): boolean {
+  return normalized.includes(' vs ')
+    || normalized.includes(' versus ')
+    || normalized.startsWith('compare ')
+}
+
+function isEntityEvidenceQuestion(normalized: string): boolean {
+  return normalized.includes('doc')
+    || normalized.includes('tab')
+    || normalized.includes('email')
+    || normalized.includes('workbook')
+}
+
+function isEntityTimelineQuestion(normalized: string): boolean {
+  return normalized.includes('timeline')
+}
+
+function isEntityAppBreakdownQuestion(normalized: string): boolean {
+  return normalized.includes('break') && normalized.includes('down by app')
+}
+
+function isEntityAmbiguityQuestion(normalized: string): boolean {
+  return normalized.includes('ambiguous')
+}
+
+function isEntityInvoiceQuestion(normalized: string): boolean {
+  return normalized.includes('invoice')
+    || normalized.includes('line items')
+    || normalized.includes('bill')
+}
+
+function isEntityTimeQuestion(normalized: string): boolean {
+  return normalized.includes('how much time')
+    || normalized.includes('how many hours')
+    || normalized.includes('how long')
+    || normalized.includes('time spent')
+    || normalized.includes('hours on')
+}
+
+function buildEntityContext(
+  entity: ResolvedEntity,
+  range: ResolvedRange,
+  intent: EntityIntent,
+): EntityContext {
+  return {
+    entityId: entity.id,
+    entityName: entity.name,
+    entityType: entity.entityType,
+    rangeStartMs: range.startMs,
+    rangeEndMs: range.endMs,
+    rangeLabel: range.label,
+    intent,
+  }
+}
+
+function topEvidenceLabels(items: ClientEvidenceItem[], limit = 3): string[] {
+  return items
+    .map((item) => item.label.trim())
+    .filter(Boolean)
+    .slice(0, limit)
+}
+
+function buildClientTimeAnswer(payload: ClientQueryPayload): string {
   const { totals } = payload
   if (totals.session_count === 0) {
-    return `No tracked work sessions for ${client.name} in that period.`
+    return `No tracked work sessions for ${payload.target.client_name} in that period.`
   }
 
-  const parts: string[] = []
-  const attrHours = Math.round((totals.attributed_ms / 3_600_000) * 10) / 10
-  parts.push(`${attrHours}h attributed to ${client.name}`)
-  if (totals.ambiguous_ms > 0) {
-    const ambigMin = Math.round(totals.ambiguous_ms / 60_000)
-    parts.push(`plus ${ambigMin}m ambiguous`)
-  }
-  parts.push(`across ${totals.session_count} session${totals.session_count !== 1 ? 's' : ''}`)
-
-  const sessionDetails = payload.sessions.slice(0, 5).map((s) => {
-    const start = s.start.replace(/T/, ' ').replace(/[+-]\d{2}:\d{2}$/, '')
-    const apps = s.apps.slice(0, 3).map((a) => a.app_name).join(', ')
-    const conf = s.confidence ? ` (${Math.round(s.confidence * 100)}%)` : ''
-    return `  ${start}: ${s.project_name ?? 'no project'} — ${apps}${conf}`
+  const sessionDetails = payload.sessions.slice(0, 5).map((session) => {
+    const start = new Date(session.start)
+    const apps = session.apps.slice(0, 3).map((app) => app.app_name).join(', ')
+    const conf = session.confidence ? ` (${Math.round(session.confidence * 100)}%)` : ''
+    const lead = session.title?.trim() || session.project_name || payload.target.client_name
+    return `- ${formatTime(start.getTime())}: ${lead} — ${apps}${conf}`
   })
 
   return [
-    parts.join(', ') + '.',
+    `${formatDurationMs(totals.attributed_ms)} attributed to ${payload.target.client_name}${totals.ambiguous_ms > 0 ? `, plus ${formatDurationMs(totals.ambiguous_ms)} ambiguous` : ''}, across ${totals.session_count} session${totals.session_count === 1 ? '' : 's'}.`,
     sessionDetails.length > 0 ? 'Sessions:' : null,
     ...sessionDetails,
   ].filter(Boolean).join('\n')
+}
+
+function buildProjectTimeAnswer(payload: ProjectQueryPayload): string {
+  const { totals } = payload
+  if (totals.session_count === 0) {
+    return `No tracked work sessions for ${payload.target.project_name} in that period.`
+  }
+
+  const sessionDetails = payload.sessions.slice(0, 5).map((session) => {
+    const start = new Date(session.start)
+    const apps = session.apps.slice(0, 3).map((app) => app.app_name).join(', ')
+    const conf = session.confidence ? ` (${Math.round(session.confidence * 100)}%)` : ''
+    const lead = session.title?.trim() || payload.target.project_name
+    return `- ${formatTime(start.getTime())}: ${lead} — ${apps}${conf}`
+  })
+
+  return [
+    `${formatDurationMs(totals.attributed_ms)} attributed to ${payload.target.project_name}${payload.target.client_name ? ` for ${payload.target.client_name}` : ''}${totals.ambiguous_ms > 0 ? `, plus ${formatDurationMs(totals.ambiguous_ms)} ambiguous` : ''}, across ${totals.session_count} session${totals.session_count === 1 ? '' : 's'}.`,
+    sessionDetails.length > 0 ? 'Sessions:' : null,
+    ...sessionDetails,
+  ].filter(Boolean).join('\n')
+}
+
+function buildClientListAnswer(entries: ClientPortfolioEntry[], rangeLabel: string): string | null {
+  if (entries.length === 0) return null
+  return [
+    `Clients in ${rangeLabel}:`,
+    ...entries.slice(0, 8).map((entry, index) =>
+      `${index + 1}. ${entry.client_name} — ${formatDurationMs(entry.attributed_ms)} attributed${entry.ambiguous_ms > 0 ? `, ${formatDurationMs(entry.ambiguous_ms)} ambiguous` : ''}, ${entry.session_count} session${entry.session_count === 1 ? '' : 's'}${entry.project_names.length > 0 ? ` (${entry.project_names.slice(0, 2).join(', ')})` : ''}`,
+    ),
+  ].join('\n')
+}
+
+function buildClientComparisonAnswer(
+  comparison: NonNullable<ReturnType<typeof compareClientsForRange>>,
+  leftEvidence: ClientEvidenceItem[],
+  rightEvidence: ClientEvidenceItem[],
+  rangeLabel: string,
+): string {
+  const { left, right, winner_client_id } = comparison
+  const leftDiff = left.totals.attributed_ms - right.totals.attributed_ms
+  const verdict = winner_client_id === null
+    ? `${left.target.client_name} and ${right.target.client_name} were effectively tied in ${rangeLabel}.`
+    : `Comparing ${left.target.client_name} vs ${right.target.client_name} in ${rangeLabel}: ${winner_client_id === left.target.client_id ? left.target.client_name : right.target.client_name} took more attributed time by ${formatDurationMs(Math.abs(leftDiff))}.`
+
+  return [
+    verdict,
+    `- ${left.target.client_name}: ${formatDurationMs(left.totals.attributed_ms)} attributed${left.totals.ambiguous_ms > 0 ? `, ${formatDurationMs(left.totals.ambiguous_ms)} ambiguous` : ''}. Main artifacts: ${humanList(topEvidenceLabels(leftEvidence, 3)) || 'none'}.`,
+    `- ${right.target.client_name}: ${formatDurationMs(right.totals.attributed_ms)} attributed${right.totals.ambiguous_ms > 0 ? `, ${formatDurationMs(right.totals.ambiguous_ms)} ambiguous` : ''}. Main artifacts: ${humanList(topEvidenceLabels(rightEvidence, 3)) || 'none'}.`,
+  ].join('\n')
+}
+
+function buildClientEvidenceAnswer(
+  clientName: string,
+  rangeLabel: string,
+  items: ClientEvidenceItem[],
+  normalized: string,
+): string | null {
+  const filtered = items.filter((item) => {
+    if (normalized.includes('emails')) return item.kind === 'email'
+    if (normalized.includes('workbooks')) return item.kind === 'workbook'
+    if (normalized.includes('docs') || normalized.includes('documents')) return item.kind === 'document' || item.kind === 'workbook' || item.kind === 'file'
+    if (normalized.includes('tabs')) return item.kind === 'tab'
+    return item.kind !== 'unknown'
+  })
+
+  const ranked = (filtered.length > 0 ? filtered : items).slice(0, 8)
+  if (ranked.length === 0) return null
+
+  return [
+    `${clientName} evidence in ${rangeLabel}:`,
+    ...ranked.map((item, index) =>
+      `${index + 1}. ${item.label} — ${item.kind}${item.app_names.length > 0 ? ` via ${humanList(item.app_names.slice(0, 2))}` : ''}`,
+    ),
+  ].join('\n')
+}
+
+function buildClientAppBreakdownAnswer(
+  clientName: string,
+  rangeLabel: string,
+  apps: NonNullable<ReturnType<typeof resolveClientAppBreakdownForRange>>['apps'],
+  ambiguousMs: number,
+): string | null {
+  if (apps.length === 0) return null
+  return [
+    `${clientName} by app in ${rangeLabel}:`,
+    ...apps.slice(0, 8).map((app, index) =>
+      `${index + 1}. ${app.app_name} — ${formatDurationMs(app.duration_ms)} across ${app.session_count} session${app.session_count === 1 ? '' : 's'}`,
+    ),
+    ambiguousMs > 0 ? `Ambiguous time kept separate: ${formatDurationMs(ambiguousMs)}.` : null,
+  ].filter(Boolean).join('\n')
+}
+
+function buildClientTimelineAnswer(
+  clientName: string,
+  rangeLabel: string,
+  sessions: NonNullable<ReturnType<typeof resolveClientTimelineForRange>>['sessions'],
+): string | null {
+  if (sessions.length === 0) return null
+  return [
+    `${clientName} timeline for ${rangeLabel}:`,
+    ...sessions.slice(0, 8).map((session) => {
+      const start = new Date(session.start)
+      const end = new Date(session.end)
+      const lead = session.title?.trim() || session.project_name || clientName
+      const apps = session.apps.slice(0, 2).map((app) => app.app_name).join(', ')
+      const confidence = session.confidence ? ` (${Math.round(session.confidence * 100)}%)` : ''
+      return `- ${formatTime(start.getTime())}-${formatTime(end.getTime())}: ${lead}${apps ? ` — ${apps}` : ''}${confidence}`
+    }),
+  ].join('\n')
+}
+
+function buildClientAmbiguityAnswer(
+  clientName: string,
+  rangeLabel: string,
+  ambiguities: AmbiguityEntry[],
+  relatedClientName?: string,
+): string | null {
+  const filtered = relatedClientName
+    ? ambiguities.filter((entry) => entry.candidates.some((candidate) => candidate.client_name === relatedClientName))
+    : ambiguities
+  if (filtered.length === 0) return null
+
+  return [
+    `Ambiguous ${clientName} sessions in ${rangeLabel}:`,
+    ...filtered.slice(0, 6).map((entry) => {
+      const start = new Date(entry.start)
+      const end = new Date(entry.end)
+      const candidates = entry.candidates
+        .map((candidate) => `${candidate.client_name ?? 'Unattributed'} (${Math.round(candidate.confidence * 100)}%)`)
+        .join(', ')
+      return `- ${formatTime(start.getTime())}-${formatTime(end.getTime())}: ${candidates}. Reason: ${entry.reason ?? 'low confidence'}`
+    }),
+  ].join('\n')
+}
+
+function buildClientInvoiceAnswer(
+  invoice: NonNullable<ReturnType<typeof buildClientInvoiceNarrativeForRange>>,
+  rangeLabel: string,
+): string {
+  return [
+    `Invoice narrative for ${invoice.target.client_name} in ${rangeLabel}:`,
+    ...invoice.line_items.slice(0, 6).map((item) =>
+      `- ${item.label} — ${formatDurationMs(item.duration_ms)}${item.app_names.length > 0 ? ` in ${humanList(item.app_names.slice(0, 2))}` : ''}${item.evidence.length > 0 ? `. Evidence: ${humanList(item.evidence.slice(0, 2))}` : ''}`,
+    ),
+    invoice.ambiguous_ms > 0
+      ? `Exclude as uncertain: ${formatDurationMs(invoice.ambiguous_ms)} ambiguous time${invoice.ambiguous_sessions.length > 0 ? ` across ${invoice.ambiguous_sessions.length} session${invoice.ambiguous_sessions.length === 1 ? '' : 's'}` : ''}.`
+      : null,
+  ].filter(Boolean).join('\n')
+}
+
+function buildProjectInvoiceAnswer(
+  invoice: NonNullable<ReturnType<typeof buildProjectInvoiceNarrativeForRange>>,
+  rangeLabel: string,
+): string {
+  return [
+    `Invoice narrative for ${invoice.target.project_name} in ${rangeLabel}:`,
+    ...invoice.line_items.slice(0, 6).map((item) =>
+      `- ${item.label} — ${formatDurationMs(item.duration_ms)}${item.app_names.length > 0 ? ` in ${humanList(item.app_names.slice(0, 2))}` : ''}${item.evidence.length > 0 ? `. Evidence: ${humanList(item.evidence.slice(0, 2))}` : ''}`,
+    ),
+    invoice.ambiguous_ms > 0
+      ? `Exclude as uncertain: ${formatDurationMs(invoice.ambiguous_ms)} ambiguous time${invoice.ambiguous_sessions.length > 0 ? ` across ${invoice.ambiguous_sessions.length} session${invoice.ambiguous_sessions.length === 1 ? '' : 's'}` : ''}.`
+      : null,
+  ].filter(Boolean).join('\n')
+}
+
+function buildProjectAmbiguityAnswer(
+  payload: ProjectQueryPayload,
+  rangeLabel: string,
+): string | null {
+  const ambiguousSessions = payload.sessions.filter((session) => session.attribution_status === 'ambiguous')
+  if (ambiguousSessions.length === 0) return null
+
+  return [
+    `Ambiguous ${payload.target.project_name} sessions in ${rangeLabel}:`,
+    ...ambiguousSessions.slice(0, 6).map((session) => {
+      const start = new Date(session.start)
+      const end = new Date(session.end)
+      const apps = session.apps.slice(0, 2).map((app) => app.app_name).join(', ')
+      const confidence = session.confidence ? ` (${Math.round(session.confidence * 100)}%)` : ''
+      const lead = session.title?.trim() || payload.target.project_name
+      return `- ${formatTime(start.getTime())}-${formatTime(end.getTime())}: ${lead}${apps ? ` — ${apps}` : ''}${confidence}`
+    }),
+    'Project-level ambiguity means these sessions touched the project but still carried uncertain attribution.',
+  ].join('\n')
+}
+
+function tryRouteEntityQuestion(
+  normalized: string,
+  question: string,
+  context: TemporalContext,
+  previousContext: TemporalContext | null,
+  db: Database.Database,
+): RoutedEntityAnswer | null {
+  if (context.timeWindow) return null
+
+  if (isClientListQuestion(normalized)) {
+    const range = resolveQuestionRange(normalized, context, db, !timePhraseRegex().test(question))
+    const clients = listClientsForRange(range.startMs, range.endMs, db)
+    const answer = buildClientListAnswer(clients, range.label)
+    return answer ? { answer, entityContext: null } : null
+  }
+
+  const comparisonClients = extractComparisonClients(question, db)
+  if (comparisonClients && (isComparisonQuestion(normalized) || isEntityAmbiguityQuestion(normalized))) {
+    const [leftClient, rightClient] = comparisonClients
+    const range = resolveQuestionRange(normalized, context, db)
+    if (isEntityAmbiguityQuestion(normalized)) {
+      const ambiguities = resolveClientAmbiguitiesForRange(leftClient.id, range.startMs, range.endMs, question, db)
+      const answer = buildClientAmbiguityAnswer(leftClient.name, range.label, ambiguities, rightClient.name)
+      return answer
+        ? { answer, entityContext: buildEntityContext({ ...leftClient, entityType: 'client' }, range, 'ambiguity') }
+        : null
+    }
+
+    const comparison = compareClientsForRange(leftClient.id, rightClient.id, range.startMs, range.endMs, question, db)
+    if (!comparison) return null
+    const leftEvidence = resolveClientEvidenceForRange(leftClient.id, range.startMs, range.endMs, question, db)?.items ?? []
+    const rightEvidence = resolveClientEvidenceForRange(rightClient.id, range.startMs, range.endMs, question, db)?.items ?? []
+    return {
+      answer: buildClientComparisonAnswer(comparison, leftEvidence, rightEvidence, range.label),
+      entityContext: buildEntityContext({ ...leftClient, entityType: 'client' }, range, 'comparison'),
+    }
+  }
+
+  const range = previousContext?.entity && !timePhraseRegex().test(question)
+    ? {
+      startMs: previousContext.entity.rangeStartMs,
+      endMs: previousContext.entity.rangeEndMs,
+      label: previousContext.entity.rangeLabel,
+    }
+    : resolveQuestionRange(normalized, context, db)
+
+  const project = extractSingleProject(question, previousContext, db)
+  if (project) {
+    if (isEntityEvidenceQuestion(normalized)) {
+      const evidence = resolveProjectEvidenceForRange(project.id, range.startMs, range.endMs, question, db)
+      const answer = evidence ? buildClientEvidenceAnswer(project.name, range.label, evidence.items, normalized) : null
+      return answer
+        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'evidence') }
+        : null
+    }
+
+    if (isEntityTimelineQuestion(normalized)) {
+      const timeline = resolveProjectTimelineForRange(project.id, range.startMs, range.endMs, question, db)
+      const answer = timeline ? buildClientTimelineAnswer(project.name, range.label, timeline.sessions) : null
+      return answer
+        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'timeline') }
+        : null
+    }
+
+    if (isEntityAppBreakdownQuestion(normalized)) {
+      const breakdown = resolveProjectAppBreakdownForRange(project.id, range.startMs, range.endMs, question, db)
+      const payload = resolveProjectQuery(project.id, range.startMs, range.endMs, question, db)
+      const answer = breakdown && payload
+        ? buildClientAppBreakdownAnswer(project.name, range.label, breakdown.apps, payload.totals.ambiguous_ms)
+        : null
+      return answer
+        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'appBreakdown') }
+        : null
+    }
+
+    if (isEntityInvoiceQuestion(normalized)) {
+      const invoice = buildProjectInvoiceNarrativeForRange(project.id, range.startMs, range.endMs, question, db)
+      const answer = invoice ? buildProjectInvoiceAnswer(invoice, range.label) : null
+      return answer
+        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'invoice') }
+        : null
+    }
+
+    if (isEntityAmbiguityQuestion(normalized)) {
+      const payload = resolveProjectQuery(project.id, range.startMs, range.endMs, question, db)
+      const answer = payload ? buildProjectAmbiguityAnswer(payload, range.label) : null
+      return answer
+        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'ambiguity') }
+        : null
+    }
+
+    if (isEntityTimeQuestion(normalized)) {
+      const payload = resolveProjectQuery(project.id, range.startMs, range.endMs, question, db)
+      if (!payload) return null
+      return {
+        answer: buildProjectTimeAnswer(payload),
+        entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'time'),
+      }
+    }
+  }
+
+  const client = extractSingleClient(question, previousContext, db)
+  if (!client) return null
+
+  if (isEntityEvidenceQuestion(normalized)) {
+    const evidence = resolveClientEvidenceForRange(client.id, range.startMs, range.endMs, question, db)
+    const answer = evidence ? buildClientEvidenceAnswer(client.name, range.label, evidence.items, normalized) : null
+    return answer
+      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'evidence') }
+      : null
+  }
+
+  if (isEntityTimelineQuestion(normalized)) {
+    const timeline = resolveClientTimelineForRange(client.id, range.startMs, range.endMs, question, db)
+    const answer = timeline ? buildClientTimelineAnswer(client.name, range.label, timeline.sessions) : null
+    return answer
+      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'timeline') }
+      : null
+  }
+
+  if (isEntityAppBreakdownQuestion(normalized)) {
+    const breakdown = resolveClientAppBreakdownForRange(client.id, range.startMs, range.endMs, question, db)
+    const payload = resolveClientQuery(client.id, range.startMs, range.endMs, question, db)
+    const answer = breakdown && payload
+      ? buildClientAppBreakdownAnswer(client.name, range.label, breakdown.apps, payload.totals.ambiguous_ms)
+      : null
+    return answer
+      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'appBreakdown') }
+      : null
+  }
+
+  if (isEntityInvoiceQuestion(normalized)) {
+    const invoice = buildClientInvoiceNarrativeForRange(client.id, range.startMs, range.endMs, question, db)
+    const answer = invoice ? buildClientInvoiceAnswer(invoice, range.label) : null
+    return answer
+      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'invoice') }
+      : null
+  }
+
+  if (isEntityAmbiguityQuestion(normalized)) {
+    const ambiguities = resolveClientAmbiguitiesForRange(client.id, range.startMs, range.endMs, question, db)
+    const answer = buildClientAmbiguityAnswer(client.name, range.label, ambiguities)
+    return answer
+      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'ambiguity') }
+      : null
+  }
+
+  if (isEntityTimeQuestion(normalized)) {
+    const payload = resolveClientQuery(client.id, range.startMs, range.endMs, question, db)
+    if (!payload) return null
+    return {
+      answer: buildClientTimeAnswer(payload),
+      entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'time'),
+    }
+  }
+
+  return null
 }
 
 export async function routeInsightsQuestion(
@@ -660,11 +1445,29 @@ export async function routeInsightsQuestion(
   const normalized = trimmed.toLowerCase()
   const resolvedContext = resolveTemporalContext(trimmed, defaultDate, previousContext)
 
-  console.log(`[router] q="${trimmed.slice(0, 80)}" allTime=${isAllTimeQuestion(normalized)} weekly=${isWeeklyQuestion(normalized)}`)
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[router] q="${trimmed.slice(0, 80)}" allTime=${isAllTimeQuestion(normalized)} weekly=${isWeeklyQuestion(normalized)} yesterday=${isYesterdayQuestion(normalized)}`)
+  }
+  if (resolvedContext.timeWindow) {
+    const sessions = getSessionsForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
+    const sites = getWebsiteSummariesForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
+    const answer = timeRangeAnswer(resolvedContext.timeWindow, sessions, sites)
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
+  }
 
-  // ─── Client/project attribution routing ──────────────────────────────────
-  const clientAnswer = tryRouteClientQuestion(normalized, trimmed, resolvedContext, db)
-  if (clientAnswer) return { answer: clientAnswer, resolvedContext }
+  // ─── Client/entity attribution routing ───────────────────────────────────
+  const entityAnswer = tryRouteEntityQuestion(normalized, trimmed, resolvedContext, previousContext, db)
+  if (entityAnswer) {
+    return {
+      kind: 'answer',
+      answer: entityAnswer.answer,
+      resolvedContext: {
+        ...resolvedContext,
+        weeklyBrief: null,
+        entity: entityAnswer.entityContext,
+      },
+    }
+  }
 
   // ─── All-time / across-all-sessions routing ───────────────────────────────
   if (isAllTimeQuestion(normalized)) {
@@ -673,10 +1476,12 @@ export async function routeInsightsQuestion(
     const allTimeSites = getWebsiteSummariesForRange(db, fromMs, toMs)
     const allTimeApps = getAppSummariesForRange(db, fromMs, toMs)
 
-    console.log(`[router] allTime branch: sites=${allTimeSites.length} apps=${allTimeApps.length}`)
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[router] allTime branch: sites=${allTimeSites.length} apps=${allTimeApps.length}`)
+    }
     if (allTimeSites.length === 0 && allTimeApps.length === 0) return null
 
-    const allTimeContext: TemporalContext = { date: new Date(), timeWindow: null }
+    const allTimeContext: TemporalContext = { date: new Date(), timeWindow: null, weeklyBrief: null, entity: null }
     const firstSession = (db.prepare('SELECT MIN(start_time) as t FROM app_sessions').get() as { t: number | null } | undefined)?.t
     const trackingDays = firstSession
       ? Math.max(1, Math.round((toMs - firstSession) / (24 * 60 * 60 * 1000)))
@@ -707,7 +1512,7 @@ export async function routeInsightsQuestion(
       }
       const header = `Across all tracked sessions (~${trackingDays} days of data):`
       const total = lines.length > 1 ? `\nTotal: ${formatDuration(totalSeconds)}.` : ''
-      return { answer: `${header}\n${lines.join('\n')}${total}`, resolvedContext: allTimeContext }
+      return { kind: 'answer', answer: `${header}\n${lines.join('\n')}${total}`, resolvedContext: allTimeContext }
     }
 
     // General all-time: show distraction sites first, then top sites
@@ -718,6 +1523,7 @@ export async function routeInsightsQuestion(
       const lines = distractionSites.slice(0, 8).map((s) => `- ${s.domain}: ${formatDuration(s.totalSeconds)}`)
       const totalDistraction = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
       return {
+        kind: 'answer',
         answer: `Across all tracked sessions (~${trackingDays} days of data):\n${lines.join('\n')}\nTotal distraction time: ${formatDuration(totalDistraction)}.`,
         resolvedContext: allTimeContext,
       }
@@ -725,8 +1531,21 @@ export async function routeInsightsQuestion(
 
     const topSites = allTimeSites.slice(0, 5).map((s) => `- ${s.domain}: ${formatDuration(s.totalSeconds)}`)
     return {
+      kind: 'answer',
       answer: `Top sites across all tracked sessions (~${trackingDays} days):\n${topSites.join('\n')}`,
       resolvedContext: allTimeContext,
+    }
+  }
+
+  const weeklyBrief = resolveWeeklyBriefContext(trimmed, defaultDate, previousContext?.weeklyBrief ?? null)
+  if (weeklyBrief) {
+    return {
+      kind: 'weeklyBrief',
+      briefContext: weeklyBrief,
+      resolvedContext: {
+        ...resolvedContext,
+        weeklyBrief,
+      },
     }
   }
 
@@ -747,7 +1566,7 @@ export async function routeInsightsQuestion(
         : topNonFocusApp
           ? `${topNonFocusApp.appName} was the biggest non-focus pull this week at ${formatDuration(topNonFocusApp.totalSeconds)}.`
           : "I don't see one dominant distraction sink this week."
-      return { answer, resolvedContext }
+      return { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
     }
     if (
       normalized.includes('what was i working on')
@@ -757,13 +1576,15 @@ export async function routeInsightsQuestion(
       || normalized.includes('summarize this week')
     ) {
       const answer = buildTimelineSummary(apps, sites, sessions) ?? dailyTopCategoryAnswer(apps, sites)
-      return answer ? { answer, resolvedContext } : null
+      return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
     }
 
     // Catch-all: generic "this week" / "last week" question with no specific sub-pattern
     {
       const totalSeconds = apps.reduce((sum, a) => sum + a.totalSeconds, 0)
-      console.log(`[router] weekly catch-all: apps=${apps.length} sites=${sites.length} totalSec=${totalSeconds}`)
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[router] weekly catch-all: apps=${apps.length} sites=${sites.length} totalSec=${totalSeconds}`)
+      }
       if (totalSeconds === 0 && sites.length === 0) return null
 
       const weekLabel = normalized.includes('last week') ? 'Last week' : 'This week'
@@ -782,15 +1603,8 @@ export async function routeInsightsQuestion(
         distractionSeconds > 0 ? `Distraction time (YouTube, X, etc.): ${formatDuration(distractionSeconds)}.` : null,
       ].filter((line): line is string => line !== null)
 
-      return { answer: lines.join('\n'), resolvedContext }
+      return { kind: 'answer', answer: lines.join('\n'), resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
     }
-  }
-
-  if (resolvedContext.timeWindow) {
-    const sessions = getSessionsForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
-    const sites = getWebsiteSummariesForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
-    const answer = timeRangeAnswer(resolvedContext.timeWindow, sessions, sites)
-    return answer ? { answer, resolvedContext } : null
   }
 
   const [fromMs, toMs] = dayBounds(resolvedContext.date)
@@ -800,22 +1614,54 @@ export async function routeInsightsQuestion(
 
   if (normalized.includes('what changed most') || normalized.includes('what time changed most')) {
     const answer = largestChangeAnswer(resolvedContext.date, db)
-    return answer ? { answer, resolvedContext } : null
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
+  }
+
+  if (
+    normalized.includes('compare today with yesterday')
+    || normalized.includes('compare today and yesterday')
+  ) {
+    const answer = buildComparisonAnswer(new Date(defaultDate.getFullYear(), defaultDate.getMonth(), defaultDate.getDate()), db)
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
+  }
+
+  if (
+    normalized.includes('which files')
+    || normalized.includes('what files')
+    || normalized.includes('which docs')
+    || normalized.includes('what docs')
+    || normalized.includes('which pages')
+    || normalized.includes('what pages')
+    || normalized.includes('what did i touch')
+    || normalized.includes('key artifacts')
+  ) {
+    const answer = buildArtifactAnswer(resolvedContext.date, db)
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
+  }
+
+  if (
+    normalized.includes('summarize today as a short report')
+    || normalized.includes('short report i could share')
+    || normalized.includes('report i could share')
+    || normalized.includes('actually get done')
+  ) {
+    const answer = buildDayBlocksAnswer(resolvedContext.date, db)
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
   if (normalized.includes('when was i most focused')) {
     const answer = peakFocusWindowAnswer(resolvedContext.date, db)
-    return answer ? { answer, resolvedContext } : null
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
   if (normalized.includes('where did my time go') || normalized.includes('where did the time go')) {
     const answer = rankedTimeAllocationAnswer(apps)
-    return answer ? { answer, resolvedContext } : null
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
   if (normalized.includes('what distracted me') || normalized.includes('biggest distraction')) {
     const answer = buildDistractionAnswer(apps, sites, sessions)
-    return answer ? { answer, resolvedContext } : null
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
   if (
@@ -824,13 +1670,19 @@ export async function routeInsightsQuestion(
     || normalized.includes('what should i resume')
   ) {
     const prefix = normalized.includes('what should i resume') ? 'Resume' : 'You were mostly working on'
-    const answer = buildWorkThreadAnswer(apps, sites, sessions, prefix)
-    return answer ? { answer, resolvedContext } : null
+    const answer = buildDayBlocksAnswer(
+      resolvedContext.date,
+      db,
+      prefix === 'Resume'
+        ? 'Most recent work blocks'
+        : relativeDayLabel(resolvedContext.date),
+    ) ?? buildWorkThreadAnswer(apps, sites, sessions, prefix)
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
   if (normalized.includes('focus score') || normalized === 'was i focused?' || normalized === 'was i focused today?') {
     const answer = buildFocusScoreAnswer(apps, sessions, sites)
-    return answer ? { answer, resolvedContext } : null
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
   if (
@@ -841,8 +1693,9 @@ export async function routeInsightsQuestion(
     const topApp = apps[0]
     if (!topApp) return null
     return {
+      kind: 'answer',
       answer: `${topApp.appName} was your top app at ${formatDuration(topApp.totalSeconds)}.`,
-      resolvedContext,
+      resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
     }
   }
 
@@ -854,14 +1707,49 @@ export async function routeInsightsQuestion(
     const topSite = sites[0]
     if (!topSite) return null
     return {
+      kind: 'answer',
       answer: `${topSite.domain} was your top site at ${formatDuration(topSite.totalSeconds)}.`,
-      resolvedContext,
+      resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
     }
   }
 
   if (normalized.includes('how much time') || normalized.includes('how long')) {
     const answer = durationMatchAnswer(normalized, apps, sites)
-    return answer ? { answer, resolvedContext } : null
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
+  }
+
+  // ─── Yesterday catch-all ──────────────────────────────────────────────────
+  // Generic "yesterday" queries that didn't match any specific pattern above.
+  // Mirrors the weekly catch-all structure so the LLM gets historical context
+  // instead of falling through to null.
+  if (isYesterdayQuestion(normalized)) {
+    const blockAnswer = buildDayBlocksAnswer(resolvedContext.date, db, 'Yesterday')
+    if (blockAnswer) {
+      return { kind: 'answer', answer: blockAnswer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
+    }
+
+    const totalSeconds = apps.reduce((sum, a) => sum + a.totalSeconds, 0)
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[router] yesterday catch-all: apps=${apps.length} sites=${sites.length} totalSec=${totalSeconds}`)
+    }
+    if (totalSeconds === 0 && sites.length === 0) return null
+
+    const focusSeconds = apps.filter((a) => isFocusedCategory(a.category)).reduce((sum, a) => sum + a.totalSeconds, 0)
+    const focusScore = totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0
+    const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
+    const topSites = sites.slice(0, 5).map((s) => `${s.domain} (${formatDuration(s.totalSeconds)})`).join(', ')
+    const DISTRACTION_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
+    const distractionSites = sites.filter((s) => DISTRACTION_DOMAINS.includes(s.domain.toLowerCase()))
+    const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
+
+    const lines: string[] = [
+      `Yesterday: ${formatDuration(totalSeconds)} tracked, focus score ${focusScore}/100.`,
+      topApps ? `Top apps: ${topApps}.` : null,
+      topSites ? `Top sites: ${topSites}.` : null,
+      distractionSeconds > 0 ? `Distraction time (YouTube, X, etc.): ${formatDuration(distractionSeconds)}.` : null,
+    ].filter((line): line is string => line !== null)
+
+    return { kind: 'answer', answer: lines.join('\n'), resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
   }
 
   return null

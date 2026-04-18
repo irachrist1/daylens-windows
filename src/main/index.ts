@@ -2,8 +2,20 @@
 process.on('uncaughtException', (err) => {
   console.error('[fatal] uncaughtException:', err)
   try {
-    const { capture: analyticsCapture } = require('./services/analytics') as typeof import('./services/analytics')
-    analyticsCapture('crash', { error_name: err.name, error_message: err.message, stack: err.stack })
+    const {
+      capture: analyticsCapture,
+      captureException: analyticsCaptureException,
+    } = require('./services/analytics') as typeof import('./services/analytics')
+    analyticsCapture('app_crashed', {
+      process_type: 'main',
+      reason: 'uncaught_exception',
+    })
+    analyticsCaptureException(err, {
+      tags: {
+        process_type: 'main',
+        reason: 'uncaught_exception',
+      },
+    })
   } catch { /* analytics may not be ready */ }
   try {
     const { dialog: d } = require('electron') as typeof import('electron')
@@ -13,13 +25,30 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason) => {
   console.error('[fatal] unhandledRejection:', reason)
+  try {
+    const {
+      capture: analyticsCapture,
+      captureException: analyticsCaptureException,
+    } = require('./services/analytics') as typeof import('./services/analytics')
+    analyticsCapture('app_crashed', {
+      process_type: 'main',
+      reason: 'unhandled_rejection',
+    })
+    analyticsCaptureException(reason, {
+      tags: {
+        process_type: 'main',
+        reason: 'unhandled_rejection',
+      },
+    })
+  } catch { /* analytics may not be ready */ }
 })
 
 import { BrowserWindow, app, dialog, ipcMain, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { capture, shutdown } from './services/analytics'
+import { ANALYTICS_EVENT, classifyFailureKind, type AnalyticsEventName } from '@shared/analytics'
+import { capture, captureException, initAnalytics, shutdown } from './services/analytics'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
@@ -27,24 +56,52 @@ import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { initDb, closeDb } from './services/database'
-import { initSettings, getSettings, setSettings } from './services/settings'
+import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
-import { startBrowserTracking, stopBrowserTracking } from './services/browser'
+import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
-import { createTray, destroyTray } from './tray'
-import { initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
+import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
+import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
 import { setDailySummaryNotificationWindow, startDailySummaryNotifier } from './services/dailySummaryNotifier'
-import { registerDistractionAlerterHandlers, startDistractionAlerter } from './services/distractionAlerter'
+import { registerDistractionAlerterHandlers, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
+import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
+import { reconcileOnboardingState } from './services/onboarding'
+import { shouldStartTrackingForSettings } from './lib/onboardingState'
+import { IPC } from '@shared/types'
 
-// Fix macOS path collision with native Swift companion app.
-// Electron defaults userData to ~/Library/Application Support/<productName> which on macOS
-// would be "Daylens" — the same folder the Swift app owns. Must be called before app.whenReady().
+const APP_DISPLAY_NAME = 'Daylens'
+const APP_USER_MODEL_ID = 'com.daylens.desktop'
+const USER_DATA_DIR = process.platform === 'darwin' ? 'Daylens Desktop' : APP_DISPLAY_NAME
+const LEGACY_USER_DATA_DIR = 'DaylensWindows'
+const SMOKE_TEST = process.env.DAYLENS_SMOKE_TEST === '1'
+const SMOKE_REPORT_PATH = process.env.DAYLENS_SMOKE_REPORT_PATH?.trim() || path.join(os.tmpdir(), 'daylens-smoke-report.json')
+
+function configureUserDataPath(): void {
+  const appDataPath = app.getPath('appData')
+  const preferredPath = path.join(appDataPath, USER_DATA_DIR)
+  const legacyPath = path.join(appDataPath, LEGACY_USER_DATA_DIR)
+
+  if (fs.existsSync(preferredPath)) {
+    app.setPath('userData', preferredPath)
+    return
+  }
+
+  if (fs.existsSync(legacyPath)) {
+    app.setPath('userData', legacyPath)
+    return
+  }
+
+  app.setPath('userData', preferredPath)
+}
+
+app.setName(APP_DISPLAY_NAME)
+configureUserDataPath()
+
 if (process.platform === 'darwin') {
-  app.setPath('userData', path.join(app.getPath('appData'), 'DaylensWindows'))
-  // Set Dock icon from build assets so it shows the app icon during development
+  // Keep the visible app name as Daylens while avoiding collisions with any native companion app's data folder.
   const dockIcon = path.join(__dirname, '..', '..', 'build', 'icon.png')
   try { app.dock.setIcon(nativeImage.createFromPath(dockIcon)) } catch { /* packaged builds embed the icon */ }
 }
@@ -59,7 +116,12 @@ if (!gotTheLock) {
 }
 
 // Pin taskbar icon correctly on Windows
-app.setAppUserModelId('com.daylens.windows')
+app.setAppUserModelId(APP_USER_MODEL_ID)
+
+if (process.platform === 'linux' && SMOKE_TEST) {
+  app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-setuid-sandbox')
+}
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
 declare const MAIN_WINDOW_VITE_NAME: string
@@ -67,8 +129,135 @@ declare const MAIN_WINDOW_VITE_NAME: string
 let mainWindow: BrowserWindow | null = null
 // Set to true once the user explicitly quits via tray menu
 let isQuitting = false
+let backgroundServicesStarted = false
 // Set to latest version string when a newer release is detected
 export let updateAvailable: string | null = null
+
+function writeSmokeReport(report: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(SMOKE_REPORT_PATH), { recursive: true })
+  fs.writeFileSync(SMOKE_REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+}
+
+async function waitForRendererLoad(win: BrowserWindow): Promise<void> {
+  if (!win.webContents.isLoadingMainFrame()) return
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('Renderer did not finish loading before the smoke timeout elapsed.'))
+    }, 15_000)
+
+    const cleanup = () => {
+      clearTimeout(timeout)
+      win.webContents.removeListener('did-finish-load', handleLoad)
+      win.webContents.removeListener('did-fail-load', handleFail)
+    }
+
+    const handleLoad = () => {
+      cleanup()
+      resolve()
+    }
+
+    const handleFail = (_event: Electron.Event, errorCode: number, errorDescription: string) => {
+      cleanup()
+      reject(new Error(`Renderer failed to load (${errorCode}): ${errorDescription}`))
+    }
+
+    win.webContents.once('did-finish-load', handleLoad)
+    win.webContents.once('did-fail-load', handleFail)
+  })
+}
+
+async function runSmokeValidation(win: BrowserWindow): Promise<void> {
+  try {
+    await waitForRendererLoad(win)
+    await new Promise((resolve) => setTimeout(resolve, 2_500))
+
+    writeSmokeReport({
+      ok: true,
+      stage: 'smoke-complete',
+      reportPath: SMOKE_REPORT_PATH,
+      platform: process.platform,
+      version: app.getVersion(),
+      isPackaged: app.isPackaged,
+      windowVisible: win.isVisible(),
+      currentSession: null,
+      trackingStatus: { ...trackingStatus },
+      linuxDesktop: getLinuxDesktopDiagnostics(),
+      browserStatus: getBrowserStatus(),
+      tray: getTrayDiagnostics(),
+      updater: getUpdaterState(),
+    })
+
+    isQuitting = true
+    await shutdownApp()
+    app.exit(0)
+  } catch (err) {
+    writeSmokeReport({
+      ok: false,
+      stage: 'smoke-runtime',
+      reportPath: SMOKE_REPORT_PATH,
+      platform: process.platform,
+      version: app.getVersion(),
+      isPackaged: app.isPackaged,
+      error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      stack: err instanceof Error ? err.stack ?? null : null,
+      trackingStatus: { ...trackingStatus },
+      linuxDesktop: getLinuxDesktopDiagnostics(),
+      browserStatus: getBrowserStatus(),
+      tray: getTrayDiagnostics(),
+      updater: getUpdaterState(),
+    })
+
+    isQuitting = true
+    await shutdownApp()
+    app.exit(1)
+  }
+}
+
+function shouldUseTrayBehavior(): boolean {
+  const settings = getSettings()
+  return settings.onboardingComplete && settings.onboardingState.stage === 'complete'
+}
+
+function ensureTray(): void {
+  if (mainWindow && shouldUseTrayBehavior()) {
+    createTray(mainWindow)
+  }
+}
+
+function startBackgroundServices(): void {
+  if (backgroundServicesStarted) return
+  if (!shouldStartTrackingForSettings(getSettings())) return
+
+  startTracking()
+  startSync()
+  startDailySummaryNotifier(mainWindow)
+  setDistractionAlertWindow(mainWindow)
+  startDistractionAlerter()
+  backgroundServicesStarted = true
+
+  setTimeout(() => {
+    startBrowserTracking()
+    setImmediate(() => {
+      try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
+    })
+  }, 5_000)
+
+  setTimeout(() => {
+    capture(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, {
+      module_source: trackingStatus.moduleSource,
+      status: trackingStatus.moduleSource ? 'ok' : 'error',
+      surface: 'tracking',
+      ...(trackingStatus.loadError ? { failure_kind: classifyFailureKind(trackingStatus.loadError) } : {}),
+    })
+  }, 5_000)
+
+  setTimeout(() => {
+    try { computeAllMissingSummaries() } catch (err) { console.warn('[init] summaries:', err) }
+    setTimeout(() => finalizePreviousDay(), 0)
+  }, 10_000)
+}
 
 async function backupUserDataForUpdate(): Promise<void> {
   const userDataPath = app.getPath('userData')
@@ -195,12 +384,38 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   }
 
   destroyTray()
-  shutdown()
+  await shutdown()
 }
 
 function showFatalStartupError(title: string, err: unknown): void {
   const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
   console.error(`[fatal] ${title}:`, err)
+  if (SMOKE_TEST) {
+    try {
+      writeSmokeReport({
+        ok: false,
+        stage: title,
+        reportPath: SMOKE_REPORT_PATH,
+        platform: process.platform,
+        version: app.getVersion(),
+        isPackaged: app.isPackaged,
+        error: message,
+      })
+    } catch {
+      // Best effort only.
+    }
+    return
+  }
+  capture(ANALYTICS_EVENT.APP_CRASHED, {
+    process_type: 'main',
+    reason: 'startup_failure',
+  })
+  captureException(err, {
+    tags: {
+      process_type: 'main',
+      reason: 'startup_failure',
+    },
+  })
   try {
     dialog.showErrorBox(title, message)
   } catch {
@@ -209,7 +424,11 @@ function showFatalStartupError(title: string, err: unknown): void {
 }
 
 function createWindow(): BrowserWindow {
-  const iconExt = process.platform === 'darwin' ? 'icns' : 'ico'
+  const iconExt = process.platform === 'darwin'
+    ? 'icns'
+    : process.platform === 'win32'
+      ? 'ico'
+      : 'png'
   const iconPath = path.join(__dirname, '..', '..', 'build', `icon.${iconExt}`)
 
   const win = new BrowserWindow({
@@ -246,7 +465,12 @@ function createWindow(): BrowserWindow {
     })
   }
 
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    win.show()
+    if (SMOKE_TEST && process.platform === 'linux') {
+      void runSmokeValidation(win)
+    }
+  })
 
   // Block in-window navigation to external URLs — open in system browser instead.
   // titleBarStyle: 'hidden' means no native close button, so if the Electron window
@@ -291,6 +515,27 @@ function createWindow(): BrowserWindow {
 
   win.webContents.on('render-process-gone', (_, details) => {
     console.error('[renderer] process gone:', details.reason, details.exitCode)
+    capture(ANALYTICS_EVENT.RENDERER_PROCESS_GONE, {
+      process_type: 'renderer',
+      reason: details.reason,
+      status: 'error',
+      surface: 'renderer',
+    })
+    capture(ANALYTICS_EVENT.APP_CRASHED, {
+      process_type: 'renderer',
+      reason: 'render_process_gone',
+      status: 'error',
+    })
+    captureException(new Error(`Renderer process exited: ${details.reason}`), {
+      extra: {
+        exitCode: details.exitCode,
+        reason: details.reason,
+      },
+      tags: {
+        process_type: 'renderer',
+        reason: 'render_process_gone',
+      },
+    })
     dialog.showErrorBox(
       'Daylens renderer crashed',
       `The app display process exited unexpectedly (${details.reason}). Restarting...`,
@@ -304,7 +549,7 @@ function createWindow(): BrowserWindow {
 
   // Hide to tray on close — real quit only via tray menu
   win.on('close', (e) => {
-    if (!isQuitting) {
+    if (!isQuitting && shouldUseTrayBehavior() && hasTray()) {
       e.preventDefault()
       win.hide()
     }
@@ -338,7 +583,22 @@ ipcMain.on('window:maximize', () => {
 })
 ipcMain.on('window:close', () => {
   if (!mainWindow) return
-  if (!isQuitting) mainWindow.hide()
+  if (!isQuitting && shouldUseTrayBehavior() && hasTray()) {
+    mainWindow.hide()
+    return
+  }
+  mainWindow.close()
+})
+
+ipcMain.handle(IPC.APP.RELAUNCH, async () => {
+  isQuitting = true
+  app.relaunch()
+  app.exit(0)
+})
+
+ipcMain.handle(IPC.APP.COMPLETE_ONBOARDING, async () => {
+  ensureTray()
+  startBackgroundServices()
 })
 
 app.on('before-quit', (event) => {
@@ -360,7 +620,7 @@ app.on('before-quit', (event) => {
 
 // Analytics IPC — renderer sends events through main process (network stays in main)
 ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, unknown>) => {
-  capture(event, properties)
+  capture(event as AnalyticsEventName, properties)
 })
 
 app.whenReady()
@@ -369,8 +629,11 @@ app.whenReady()
     // backup if NSIS wiped userData during the update, before electron-store reads it.
     await recoverFromUpdateIfNeeded()
     await initSettings()
+    const reconciledSettings = await reconcileOnboardingState()
+    await initAnalytics()
     if (app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
+      await syncLinuxLaunchOnLogin(getSettings().launchOnLogin)
     }
 
     // Set firstLaunchDate on first run (used for day-7 feedback prompt)
@@ -379,11 +642,16 @@ app.whenReady()
       await setSettings({ firstLaunchDate: Date.now() })
     }
 
-    capture('app_launched', {
-      version: app.getVersion(),
-      platform: process.platform,
+    const launchSettings = getSettings()
+    const launchProvider = launchSettings.aiChatProvider ?? launchSettings.aiProvider
+    const hasAiProvider = launchProvider === 'claude-cli' || launchProvider === 'codex-cli'
+      ? true
+      : await hasApiKey(launchProvider)
+
+    capture(ANALYTICS_EVENT.APP_LAUNCHED, {
+      has_ai_provider: hasAiProvider,
       os_version: os.release(),
-      onboarding_complete: getSettings().onboardingComplete,
+      onboarding_complete: reconciledSettings.onboardingComplete,
     })
 
     initDb()
@@ -399,40 +667,18 @@ app.whenReady()
 
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
-    createTray(mainWindow)
+    ensureTray()
     initUpdater(mainWindow)
     registerUpdaterShutdown(async () => {
       isQuitting = true
       await shutdownApp({ awaitFinalSync: true, backupBeforeExit: true })
     })
 
-    startTracking()
-    startSync()
-    startDailySummaryNotifier(mainWindow)
-    startDistractionAlerter()
+    startBackgroundServices()
 
-    // Deferred 5s — after window is visible: browser tracking + Windows history backfill (#4, #5)
-    setTimeout(() => {
+    if (SMOKE_TEST && process.platform === 'linux') {
       startBrowserTracking()
-      setImmediate(() => {
-        try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
-      })
-    }, 5_000)
-
-    // Deferred 5s — report tracking engine health
-    setTimeout(() => {
-      capture('tracking_engine_status', {
-        status: trackingStatus.moduleSource ? 'ok' : 'error',
-        module_source: trackingStatus.moduleSource,
-        ...(trackingStatus.loadError ? { error_message: trackingStatus.loadError } : {}),
-      })
-    }, 5_000)
-
-    // Deferred 10s — background maintenance
-    setTimeout(() => {
-      try { computeAllMissingSummaries() } catch (err) { console.warn('[init] summaries:', err) }
-      setTimeout(() => finalizePreviousDay(), 0)
-    }, 10_000)
+    }
   })
   .catch((err) => {
     showFatalStartupError('Daylens failed to start', err)
@@ -440,15 +686,21 @@ app.whenReady()
   })
 
 app.on('window-all-closed', () => {
-  // The app runs in the system tray on all platforms — do not quit here.
-  // The only exit path is the tray "Quit" menu item which sets isQuitting = true.
-  // On macOS (no tray on some versions), still keep running via app.on('activate').
+  if (!shouldUseTrayBehavior()) {
+    isQuitting = true
+    void (async () => {
+      await shutdownApp({ awaitFinalSync: false })
+      app.quit()
+    })()
+  }
 })
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
+    ensureTray()
+    startBackgroundServices()
   } else {
     mainWindow?.show()
   }

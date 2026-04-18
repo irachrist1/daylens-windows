@@ -5,6 +5,7 @@ on:
     tags-ignore:
       - "v*-win"
       - "v*-mac"
+      - "v*-linux"
   workflow_dispatch:
 
 permissions:
@@ -29,6 +30,15 @@ jobs:
               dist-release/*.exe
               dist-release/*.blockmap
               dist-release/latest*.yml
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: daylens-preview-linux
+            artifact_paths: |
+              dist-release/*.AppImage
+              dist-release/*.deb
+              dist-release/*.rpm
+              dist-release/*.tar.gz
+              dist-release/latest-linux.yml
 
     runs-on: ${{ matrix.os }}
 
@@ -41,6 +51,12 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
+      - name: Install Linux packaging dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -59,6 +75,8 @@ jobs:
         run: |
           if [ "${{ matrix.platform }}" = "mac" ]; then
             npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
+          elif [ "${{ matrix.platform }}" = "linux" ]; then
+            npx electron-builder --linux AppImage deb rpm tar.gz --x64 --publish never --config electron-builder.config.js
           else
             npx electron-builder --win nsis --publish never --config electron-builder.config.js
           fi

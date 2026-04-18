@@ -63,7 +63,7 @@ interface FocusSessionOut {
 interface DaySnapshot {
   schemaVersion: 1
   deviceId: string
-  platform: 'windows'
+  platform: 'windows' | 'macos' | 'linux'
   date: string
   generatedAt: string
   isPartialDay: boolean
@@ -86,6 +86,12 @@ interface NormalizationMap {
 }
 
 let _normMap: NormalizationMap | null = null
+
+function currentSnapshotPlatform(): DaySnapshot['platform'] {
+  if (process.platform === 'win32') return 'windows'
+  if (process.platform === 'darwin') return 'macos'
+  return 'linux'
+}
 
 function getNormMap(): NormalizationMap {
   if (_normMap) return _normMap
@@ -118,9 +124,12 @@ function getNormMap(): NormalizationMap {
 function normalize(bundleId: string, appName: string): { appKey: string; displayName: string; category: string } {
   const map = getNormMap()
 
-  // Try exact bundleId match first, then just the exe filename
+  // Try exact and normalized bundle IDs first, then just the executable filename.
   const exeName = path.basename(bundleId).toLowerCase()
-  const appKey = map.aliases[bundleId] || map.aliases[exeName] || exeName.replace(/\.exe$/i, '')
+  const appKey = map.aliases[bundleId]
+    || map.aliases[bundleId.toLowerCase()]
+    || map.aliases[exeName]
+    || exeName.replace(/\.exe$/i, '')
 
   const catalogEntry = map.catalog[appKey]
   if (catalogEntry) {
@@ -297,7 +306,7 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   return {
     schemaVersion: 1,
     deviceId,
-    platform: 'windows',
+    platform: currentSnapshotPlatform(),
     date: dateStr,
     generatedAt: toISOWithOffset(Date.now()),
     isPartialDay,

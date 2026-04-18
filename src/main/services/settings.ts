@@ -1,6 +1,11 @@
 // Settings persistence via electron-store
 // electron-store is ESM-only in v10 — dynamic import required
-import type { AIProviderMode, AppSettings } from '@shared/types'
+import type {
+  AIProviderMode,
+  AppSettings,
+} from '@shared/types'
+import { createDefaultOnboardingState, normalizeOnboardingState } from '../lib/onboardingState'
+import { ensureSecureStore, getSecureStore } from './secureStore'
 
 // We keep a synchronous in-memory cache after first load
 let _store: { get: (k: string, d?: unknown) => unknown; set: (k: string, v: unknown) => void } | null = null
@@ -18,9 +23,9 @@ const DEFAULTS: AppSettings = {
   launchOnLogin: true,
   theme: 'system',
   onboardingComplete: false,
+  onboardingState: createDefaultOnboardingState(),
   userName: '',
   userGoals: [],
-  dailyFocusGoalHours: 4,
   firstLaunchDate: 0,
   feedbackPromptShown: false,
   aiProvider: 'anthropic',
@@ -39,10 +44,10 @@ const DEFAULTS: AppSettings = {
   aiSpendSoftLimitUsd: 10,
   aiRedactFilePaths: false,
   aiRedactEmails: false,
+  allowThirdPartyWebsiteIconFallback: true,
   dailySummaryEnabled: true,
   morningNudgeEnabled: true,
   distractionAlertThresholdMinutes: 10,
-  defaultFocusMinutes: 50,
 }
 
 export function getSettings(): AppSettings {
@@ -50,14 +55,16 @@ export function getSettings(): AppSettings {
     // Synchronous fallback before async init — return defaults
     return { ...DEFAULTS }
   }
+  const onboardingComplete = (_store.get('onboardingComplete', false) as boolean)
+  const onboardingState = normalizeOnboardingState(_store.get('onboardingState', null), onboardingComplete)
   return {
     analyticsOptIn: (_store.get('analyticsOptIn', false) as boolean),
     launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
-    onboardingComplete: (_store.get('onboardingComplete', false) as boolean),
+    onboardingComplete,
+    onboardingState,
     userName: (_store.get('userName', '') as string),
     userGoals: (_store.get('userGoals', []) as string[]),
-    dailyFocusGoalHours: (_store.get('dailyFocusGoalHours', 4) as number),
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
     aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
@@ -76,10 +83,10 @@ export function getSettings(): AppSettings {
     aiSpendSoftLimitUsd: (_store.get('aiSpendSoftLimitUsd', 10) as number),
     aiRedactFilePaths: (_store.get('aiRedactFilePaths', false) as boolean),
     aiRedactEmails: (_store.get('aiRedactEmails', false) as boolean),
+    allowThirdPartyWebsiteIconFallback: (_store.get('allowThirdPartyWebsiteIconFallback', true) as boolean),
     dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
-    defaultFocusMinutes: (_store.get('defaultFocusMinutes', 50) as number),
   }
 }
 
@@ -90,7 +97,14 @@ export async function getSettingsAsync(): Promise<AppSettings> {
 
 export async function setSettings(partial: Partial<AppSettings>): Promise<void> {
   const store = await getStore()
-  for (const [k, v] of Object.entries(partial)) {
+  const entries = { ...partial }
+  if (entries.onboardingState) {
+    entries.onboardingState = normalizeOnboardingState(entries.onboardingState, entries.onboardingState.stage === 'complete')
+    if (!('onboardingComplete' in entries)) {
+      entries.onboardingComplete = entries.onboardingState.stage === 'complete'
+    }
+  }
+  for (const [k, v] of Object.entries(entries)) {
     store.set(k, v)
   }
 }
@@ -101,16 +115,13 @@ export async function initSettings(): Promise<void> {
 
 // ─── AI provider API keys — stored in OS credential vault, never in plain-text ─
 
-const KEYTAR_SERVICE = 'DaylensWindows'
+const KEYTAR_SERVICE = 'Daylens Desktop'
+const LEGACY_KEYTAR_SERVICES = ['DaylensWindows']
 const KEYTAR_ACCOUNTS: Record<'anthropic' | 'openai' | 'google', string> = {
   anthropic: 'anthropic-api-key',
   openai: 'openai-api-key',
   google: 'google-api-key',
 }
-
-// keytar is a native CJS module — load it with require() to avoid ESM interop issues
-// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-const keytar = require('keytar') as typeof import('keytar')
 
 function keytarAccount(provider: AIProviderMode): string {
   if (provider === 'claude-cli' || provider === 'codex-cli') {
@@ -119,10 +130,30 @@ function keytarAccount(provider: AIProviderMode): string {
   return KEYTAR_ACCOUNTS[provider]
 }
 
+async function readKeyWithMigration(account: string): Promise<string | null> {
+  const keytar = getSecureStore()
+  if (!keytar) return null
+  const current = await keytar.getPassword(KEYTAR_SERVICE, account)
+  if (current) return current
+
+  for (const service of LEGACY_KEYTAR_SERVICES) {
+    const legacy = await keytar.getPassword(service, account)
+    if (!legacy) continue
+    try {
+      await keytar.setPassword(KEYTAR_SERVICE, account, legacy)
+    } catch {
+      // Best effort migration; returning the legacy key is still better than failing closed.
+    }
+    return legacy
+  }
+
+  return null
+}
+
 export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return true
   try {
-    const key = await keytar.getPassword(KEYTAR_SERVICE, keytarAccount(provider))
+    const key = await readKeyWithMigration(keytarAccount(provider))
     return !!key
   } catch (err) {
     console.error(`[settings] hasApiKey failed for ${provider}:`, err)
@@ -133,7 +164,7 @@ export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
 export async function getApiKey(provider: AIProviderMode): Promise<string | null> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return null
   try {
-    return await keytar.getPassword(KEYTAR_SERVICE, keytarAccount(provider))
+    return await readKeyWithMigration(keytarAccount(provider))
   } catch {
     return null
   }
@@ -142,6 +173,7 @@ export async function getApiKey(provider: AIProviderMode): Promise<string | null
 export async function setApiKey(provider: AIProviderMode, key: string): Promise<void> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return
   try {
+    const keytar = ensureSecureStore(`Saving the ${provider} API key`)
     await keytar.setPassword(KEYTAR_SERVICE, keytarAccount(provider), key)
   } catch (err) {
     console.error(`[settings] setApiKey failed for ${provider}:`, err)
@@ -152,7 +184,13 @@ export async function setApiKey(provider: AIProviderMode, key: string): Promise<
 export async function clearApiKey(provider: AIProviderMode): Promise<void> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return
   try {
-    await keytar.deletePassword(KEYTAR_SERVICE, keytarAccount(provider))
+    const keytar = getSecureStore()
+    if (!keytar) return
+    const account = keytarAccount(provider)
+    await Promise.all([
+      keytar.deletePassword(KEYTAR_SERVICE, account),
+      ...LEGACY_KEYTAR_SERVICES.map((service) => keytar.deletePassword(service, account)),
+    ])
   } catch {
     // Key may not exist — ignore
   }

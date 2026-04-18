@@ -9,6 +9,7 @@ const convexSiteUrl = JSON.stringify(
 // When the key is absent the analytics module is a no-op.
 const posthogKey = JSON.stringify(process.env.POSTHOG_KEY || '')
 const posthogHost = JSON.stringify(process.env.POSTHOG_HOST || '')
+const sentryDsn = JSON.stringify(process.env.SENTRY_DSN || '')
 
 export default defineConfig({
   resolve: {
@@ -23,11 +24,13 @@ export default defineConfig({
         __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
         __POSTHOG_KEY__: posthogKey,
         __POSTHOG_HOST__: posthogHost,
+        __SENTRY_DSN__: sentryDsn,
       }
     : {
         __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
         __POSTHOG_KEY__: posthogKey,
         __POSTHOG_HOST__: posthogHost,
+        __SENTRY_DSN__: sentryDsn,
       },
   build: {
     // Build as Node (not browser) so node: builtins are not externalized

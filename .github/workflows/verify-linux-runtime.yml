@@ -1,0 +1,141 @@
+name: Verify Linux Runtime
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify-linux-runtime:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Linux packaging and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11
+          docker --version
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package Linux artifacts
+        run: npx electron-builder --linux AppImage deb rpm --x64 --config electron-builder.config.js --publish never
+
+      - name: Sanity-check emitted artifacts
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          test -f "dist-release/Daylens-${VERSION}.AppImage"
+          test -f "dist-release/Daylens-${VERSION}.deb"
+          test -f "dist-release/Daylens-${VERSION}.rpm"
+          test -f "dist-release/latest-linux.yml"
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.AppImage")" -gt 1000000
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.deb")" -gt 1000000
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.rpm")" -gt 1000000
+
+      - name: Smoke-test AppImage runtime
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          chmod +x "dist-release/Daylens-${VERSION}.AppImage"
+          xvfb-run -a env \
+            DAYLENS_SMOKE_TEST=1 \
+            DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            "./dist-release/Daylens-${VERSION}.AppImage" \
+            --no-sandbox \
+            --disable-setuid-sandbox
+          node scripts/verify-linux-smoke.js \
+            --report "$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            --expect-package-type appimage \
+            --expect-package-source appimage-env \
+            --expect-updater-supported true
+
+      - name: Smoke-test DEB install
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          PACKAGE_FILE="dist-release/Daylens-${VERSION}.deb"
+          PACKAGE_NAME="$(dpkg-deb -f "$PACKAGE_FILE" Package)"
+          sudo dpkg -i "$PACKAGE_FILE" || sudo apt-get install -f -y
+          APP_PATH="$(dpkg -L "$PACKAGE_NAME" | grep '/daylens$' | head -n 1)"
+          test -n "$APP_PATH"
+          xvfb-run -a env \
+            DAYLENS_SMOKE_TEST=1 \
+            DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-deb-smoke.json" \
+            "$APP_PATH" \
+            --no-sandbox \
+            --disable-setuid-sandbox
+          node scripts/verify-linux-smoke.js \
+            --report "$RUNNER_TEMP/daylens-deb-smoke.json" \
+            --expect-package-type deb \
+            --expect-package-source dpkg-query \
+            --expect-updater-supported true \
+            --require-package-owner
+          sudo apt-get remove -y "$PACKAGE_NAME" || true
+
+      - name: Smoke-test RPM install
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$RUNNER_TEMP:/smoke" \
+            -w /workspace \
+            fedora:40 \
+            bash -lc '
+              set -euo pipefail
+              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool xprop dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
+              PACKAGE_FILE="dist-release/Daylens-'"${VERSION}"'.rpm"
+              dnf install --nogpgcheck -y "$PACKAGE_FILE"
+              PACKAGE_NAME="$(rpm -qp --queryformat "%{NAME}" "$PACKAGE_FILE")"
+              APP_PATH="$(rpm -ql "$PACKAGE_NAME" | grep "/daylens$" | head -n 1)"
+              test -n "$APP_PATH"
+              Xvfb :99 -screen 0 1280x720x24 >/tmp/daylens-xvfb.log 2>&1 &
+              XVFB_PID=$!
+              trap "kill $XVFB_PID" EXIT
+              export DISPLAY=:99
+              export DAYLENS_SMOKE_TEST=1
+              export DAYLENS_SMOKE_REPORT_PATH=/smoke/daylens-rpm-smoke.json
+              "$APP_PATH" \
+                --no-sandbox \
+                --disable-setuid-sandbox
+              node scripts/verify-linux-smoke.js \
+                --report /smoke/daylens-rpm-smoke.json \
+                --expect-package-type rpm \
+                --expect-package-source rpm-query \
+                --expect-updater-supported true \
+                --require-package-owner
+            '
+
+      - name: Upload smoke reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-smoke-reports
+          path: |
+            ${{ runner.temp }}/daylens-appimage-smoke.json
+            ${{ runner.temp }}/daylens-deb-smoke.json
+            ${{ runner.temp }}/daylens-rpm-smoke.json

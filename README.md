@@ -1,26 +1,56 @@
-# Daylens Windows
+# Daylens
 
-Daylens Windows is a local-first Electron app that tracks active windows, browser history, and focus sessions, then turns that activity into a timeline of what you were actually doing.
+Daylens is a cross-platform activity tracker for your laptop. It quietly logs what you're working on so you, and the AI tools you use, can ask grounded questions about your work history.
 
-It stores the source data in local SQLite, keeps the renderer behind IPC, supports API and CLI AI backends, and can sync read-only snapshots to the shared Daylens web companion.
+It is built for questions like:
 
-## Current surfaces
+- "How much should I charge Client X based on how long I've been working on this for the past month?"
+- "What did I do between 2-4 pm on Wednesday?"
+- "Show me everything I touched for Project X. Why is it not working now if it worked yesterday?"
 
-- `Today` for live tracking and daily totals
-- `Focus` for manual focus sessions and guidance
-- `History` for the per-day timeline
-- `Apps` for app-level usage analysis
-- `Insights` for AI and local-data answers
-- `Settings` for provider, sync, theme, and startup options
+Think of it as Google for your workday history, and Spotify Wrapped for how you actually spend your time.
 
-## Read next
+Daylens captures local evidence from the tools you use - apps, windows, browser activity, files, and reconstructed work sessions - then turns that into a timeline you can inspect directly or query through AI. It is not meant to be an app-usage vanity dashboard. It is meant to help you understand what you worked on, how long it took, what changed, and what context surrounded that work.
 
-- [Current state](docs/CURRENT_STATE.md) for the compact source of truth
-- [Development](#development) for common commands
+This repository is historically named `daylens-windows`, but the Electron desktop app in this repo is the cross-platform Daylens source of truth for macOS, Windows, and Linux. Platform-specific validation status still lives in [docs/ISSUES.md](docs/ISSUES.md), and the broader product direction includes editor-facing integrations so tools such as Claude Code, Cursor, and other MCP-style clients can pull in Daylens context while you build, debug, and investigate.
+
+## Current product surfaces
+
+- `Onboarding` for first-run tracking setup and proof of capture
+- `Timeline` for reconstructed work blocks, prior days, week view, and artifact evidence
+- `Apps` for app-level context, paired tools, and the work happening inside them
+- `AI` for grounded summaries, follow-up questions, freeform work-history queries, and report/export generation
+- `Settings` for tracking, providers, notifications, privacy, updates, and appearance
+
+Current implementation gaps and near-term product backlog live in [docs/ISSUES.md](docs/ISSUES.md). Keep feature status there instead of duplicating it across other docs.
+
+## Current repo status
+
+- Local-first SQLite persistence
+- Cross-platform foreground-window tracking, including Linux compositor-aware fallbacks and desktop-entry cleanup upon review
+- Browser history ingestion for Chromium browsers on both platforms, plus Firefox on Windows
+- Cross-platform icon resolution for apps, sites, files, and artifacts
+- Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, AI-generated report/export artifacts, and week/app summaries implemented pending verification
+- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, and sparse app category overrides implemented pending verification
+- Packaged macOS, Windows, and Linux build pipelines upon review
+
+Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md](docs/ISSUES.md), including what was manually validated on macOS versus what still remains implemented pending verification on Windows and Linux.
 
 ## Development
 
-- `npm start` runs the Electron app in development mode.
-- `npm run typecheck` checks TypeScript without emitting build output.
-- `npm run build:all` builds the main, preload, and renderer bundles.
-- `npm run dist:win` builds the Windows installer and update metadata into `dist-release/`.
+- `npm start` runs the Electron app in development mode
+- `npm run typecheck` checks TypeScript without emitting output
+- `npm run build:all` builds the main, preload, and renderer bundles
+- `npm run test:ai-chat` runs the AI chat, onboarding, cleanup, and prompt-caching tests
+- `npm run test:entity-prompts` runs the entity-routing prompt benchmark tests
+- `npm run dist:win` builds the Windows installer and update metadata into `dist-release/`
+- `npm run dist:mac` builds the macOS archive and DMG into `dist-release/`
+- `npm run dist:linux` builds the Linux release artifacts into `dist-release/`
+
+## Canonical docs
+
+- [docs/CLAUDE.md](docs/CLAUDE.md) for a lightweight session guide
+- [docs/ABOUT.md](docs/ABOUT.md) for reusable product copy
+- [docs/AGENTS.md](docs/AGENTS.md) for the product and build contract
+- [docs/IDEAS.md](docs/IDEAS.md) for future directions
+- [docs/ISSUES.md](docs/ISSUES.md) for current constraints and open problems

@@ -12,6 +12,7 @@ import {
   stopFocusSession,
 } from '../db/queries'
 import { getDb } from '../services/database'
+import { triggerDistractionCheck } from '../services/distractionAlerter'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 
 export function registerFocusHandlers(): void {
@@ -23,6 +24,7 @@ export function registerFocusHandlers(): void {
     const sessionId = startFocusSession(getDb(), normalized)
     invalidateProjectionScope('timeline', 'focus_session_started')
     invalidateProjectionScope('insights', 'focus_session_started')
+    triggerDistractionCheck()
     return sessionId
   })
 
@@ -30,6 +32,7 @@ export function registerFocusHandlers(): void {
     stopFocusSession(getDb(), id)
     invalidateProjectionScope('timeline', 'focus_session_stopped')
     invalidateProjectionScope('insights', 'focus_session_stopped')
+    triggerDistractionCheck()
   })
 
   ipcMain.handle(IPC.FOCUS.GET_ACTIVE, () => {

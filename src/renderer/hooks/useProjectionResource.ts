@@ -38,6 +38,11 @@ export function useProjectionResource<T>({
   const dataRef = useRef<T | null>(null)
   const inFlightRef = useRef<Promise<void> | null>(null)
   const pendingRefreshRef = useRef(false)
+  // Callers typically pass `load` as an inline function, so its identity changes
+  // every render. Keep the latest in a ref so `refresh` stays stable — otherwise
+  // the mount effect would re-fire every render, flooding IPC and leaking memory.
+  const loadRef = useRef(load)
+  loadRef.current = load
 
   useEffect(() => {
     dataRef.current = data
@@ -61,7 +66,7 @@ export function useProjectionResource<T>({
       setReloading(true)
     }
 
-    const request = load()
+    const request = loadRef.current()
       .then((next) => {
         if (!mountedRef.current || requestId !== requestIdRef.current) return
         dataRef.current = next
@@ -85,7 +90,7 @@ export function useProjectionResource<T>({
       })
     inFlightRef.current = request
     return request
-  }, [enabled, load, pauseWhenHidden])
+  }, [enabled, pauseWhenHidden])
 
   useEffect(() => {
     mountedRef.current = true
@@ -103,7 +108,7 @@ export function useProjectionResource<T>({
       pendingRefreshRef.current = false
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, refresh, ...dependencies])
+  }, [enabled, ...dependencies])
 
   useEffect(() => {
     if (!enabled) return

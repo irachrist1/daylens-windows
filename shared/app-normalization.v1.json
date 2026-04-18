@@ -29,7 +29,7 @@
     "linear": "linear", "linear.exe": "linear",
     "com.microsoft.Outlook": "outlook", "outlook.exe": "outlook",
     "com.anthropic.claudefordesktop": "claude", "claude.exe": "claude",
-    "com.openai.chat": "chatgpt", "chatgpt.exe": "chatgpt",
+    "com.openai.chat": "chatgpt", "com.openai.atlas": "chatgpt", "chatgpt.exe": "chatgpt",
     "powershell.exe": "powershell", "pwsh.exe": "powershell",
     "notepad.exe": "notepad",
     "explorer.exe": "explorer",
@@ -37,7 +37,7 @@
 
     "ghostty": "ghostty", "ghostty.exe": "ghostty", "com.mitchellh.ghostty": "ghostty",
     "codex": "codex", "codex.exe": "codex", "com.openai.codex": "codex", "codex cli": "codex",
-    "ticktick.exe": "ticktick", "com.ticktick.task": "ticktick", "ticktick": "ticktick",
+    "ticktick.exe": "ticktick", "com.ticktick.task": "ticktick", "com.ticktick.task.mac": "ticktick", "ticktick": "ticktick",
     "toggltrack.exe": "toggltrack", "toggl track.exe": "toggltrack", "com.toggl.toggldesktop": "toggltrack", "toggl track": "toggltrack",
     "journal.exe": "journal", "com.apple.journal": "journal",
     "iphone mirroring.exe": "iphone-mirroring", "com.apple.iphonemirroring": "iphone-mirroring", "iphone mirroring": "iphone-mirroring",
@@ -51,13 +51,15 @@
     "com.microsoft.onenote": "onenote", "onenote.exe": "onenote",
     "todoist.exe": "todoist", "com.todoist.mac.Todoist": "todoist",
     "raycast": "raycast", "com.raycast.macos": "raycast",
+    "com.apple.systempreferences": "system-settings",
     "com.apple.finder": "finder",
     "com.apple.Notes": "notes",
     "com.apple.MobileSMS": "messages", "messages.exe": "messages",
     "com.apple.Music": "apple-music",
+    "com.apple.podcasts": "podcasts",
     "com.apple.Preview": "preview",
     "com.apple.mail": "apple-mail",
-    "whatsapp.exe": "whatsapp", "com.whatsapp.WhatsApp": "whatsapp",
+    "whatsapp.exe": "whatsapp", "com.whatsapp.WhatsApp": "whatsapp", "net.whatsapp.whatsapp": "whatsapp",
     "telegram.exe": "telegram", "com.telegram.desktop": "telegram",
     "signal.exe": "signal", "org.whispersystems.signal-desktop": "signal",
     "1password.exe": "1password", "com.1password.1password": "1password",
@@ -71,9 +73,9 @@
     "rubymine.exe": "rubymine", "com.jetbrains.rubymine": "rubymine",
     "sublime_text.exe": "sublime", "com.sublimetext.4": "sublime",
     "zed.exe": "zed", "dev.zed.Zed": "zed",
-    "perplexity.exe": "perplexity", "com.perplexity.Perplexity": "perplexity",
+    "perplexity.exe": "perplexity", "com.perplexity.Perplexity": "perplexity", "comet.exe": "comet", "ai.perplexity.comet": "comet",
     "copilot.exe": "copilot",
-    "dia.exe": "dia", "dia": "dia", "com.dia.app": "dia", "app.dia.desktop": "dia", "ai.dia.mac": "dia",
+    "dia.exe": "dia", "dia": "dia", "com.dia.app": "dia", "app.dia.desktop": "dia", "ai.dia.mac": "dia", "company.thebrowser.dia": "dia",
     "com.google.android.apps.docs": "google-docs",
     "bear": "bear", "bear.exe": "bear", "net.shinyfrog.bear": "bear",
     "craft.exe": "craft", "com.luki.Craft": "craft",
@@ -103,7 +105,9 @@
     "spotify": "spotify", "com.spotify.client": "spotify",
     "t3 code": "t3code", "t3code.exe": "t3code", "t3 code (alpha)": "t3code",
     "linear.exe": "linear", "com.linear": "linear",
-    "arc.exe": "arc", "company.thebrowser.browser": "arc"
+    "arc.exe": "arc", "company.thebrowser.browser": "arc",
+    "com.github.electron": "electron",
+    "com.daylens.app.dev": "daylens"
   },
   "catalog": {
     "chrome": { "displayName": "Google Chrome", "defaultCategory": "browsing" },
@@ -158,6 +162,7 @@
     "windowmanager": { "displayName": "WindowManager", "defaultCategory": "system" },
     "1password": { "displayName": "1Password", "defaultCategory": "system" },
     "raycast": { "displayName": "Raycast", "defaultCategory": "productivity" },
+    "system-settings": { "displayName": "System Settings", "defaultCategory": "system" },
 
     "slack": { "displayName": "Slack", "defaultCategory": "communication" },
     "teams": { "displayName": "Microsoft Teams", "defaultCategory": "communication" },
@@ -200,11 +205,13 @@
     "claude": { "displayName": "Claude", "defaultCategory": "aiTools" },
     "chatgpt": { "displayName": "ChatGPT", "defaultCategory": "aiTools" },
     "perplexity": { "displayName": "Perplexity", "defaultCategory": "aiTools" },
+    "comet": { "displayName": "Comet", "defaultCategory": "browsing" },
     "copilot": { "displayName": "Copilot", "defaultCategory": "aiTools" },
     "dia": { "displayName": "Dia", "defaultCategory": "aiTools" },
 
     "spotify": { "displayName": "Spotify", "defaultCategory": "entertainment" },
     "apple-music": { "displayName": "Apple Music", "defaultCategory": "entertainment" },
+    "podcasts": { "displayName": "Podcasts", "defaultCategory": "entertainment" },
     "vlc": { "displayName": "VLC", "defaultCategory": "entertainment" },
 
     "obs": { "displayName": "OBS Studio", "defaultCategory": "entertainment" },
@@ -214,6 +221,8 @@
 
     "google-docs": { "displayName": "Google Docs", "defaultCategory": "writing" },
     "screenshot": { "displayName": "Screenshot", "defaultCategory": "system" },
-    "t3code": { "displayName": "T3 Code", "defaultCategory": "development" }
+    "t3code": { "displayName": "T3 Code", "defaultCategory": "development" },
+    "electron": { "displayName": "Electron", "defaultCategory": "development" },
+    "daylens": { "displayName": "Daylens", "defaultCategory": "productivity" }
   }
 }

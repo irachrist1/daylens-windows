@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
+import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
+import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
 import { useProjectionResource } from '../hooks/useProjectionResource'
+import { track } from '../lib/analytics'
 import { ipc } from '../lib/ipc'
 import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, todayString } from '../lib/format'
@@ -123,11 +125,20 @@ export default function Apps() {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null)
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
   const contentRef = useRef<HTMLDivElement | null>(null)
+  const lastTrackedDetailKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     const onResize = () => setIsCompact(window.innerWidth < 1120)
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  useEffect(() => {
+    track(ANALYTICS_EVENT.APPS_OPENED, {
+      surface: 'apps',
+      trigger: 'navigation',
+      view: 'apps',
+    })
   }, [])
 
   const appsResource = useProjectionResource<{
@@ -203,12 +214,36 @@ export default function Apps() {
     ),
     load: () => ipc.db.getAppDetail(selectedCanonicalId as string, days),
   })
+  const narrativeResource = useProjectionResource<AISurfaceSummary | null>({
+    scope: 'apps',
+    enabled: !!selectedCanonicalId,
+    dependencies: [selectedCanonicalId, days],
+    shouldReload: (event) => (
+      !event.canonicalAppId
+      || event.canonicalAppId === selectedCanonicalId
+    ),
+    load: () => ipc.ai.getAppNarrative(selectedCanonicalId as string, days).catch(() => null),
+  })
 
   const expectedRangeKey = `${days}d:${todayString()}`
   const detail = detailResource.data && detailResource.data.canonicalAppId === selectedCanonicalId
     && detailResource.data.rangeKey === expectedRangeKey
     ? detailResource.data
     : null
+  const narrative = narrativeResource.data ?? null
+
+  useEffect(() => {
+    if (!detail) return
+    const detailKey = `${detail.canonicalAppId}:${detail.rangeKey}`
+    if (lastTrackedDetailKeyRef.current === detailKey) return
+    lastTrackedDetailKeyRef.current = detailKey
+    track(ANALYTICS_EVENT.APP_DETAIL_OPENED, {
+      surface: 'apps',
+      tracked_time_bucket: trackedTimeBucket(detail.totalSeconds),
+      trigger: 'click',
+      view: 'apps',
+    })
+  }, [detail])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -340,7 +375,7 @@ export default function Apps() {
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <EntityIcon appName={summary.appName} bundleId={summary.bundleId} size={26} />
+                      <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={26} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 650, color: 'var(--color-text-primary)' }}>
                           {formatDisplayAppName(summary.appName)}
@@ -407,7 +442,7 @@ export default function Apps() {
                                 cursor: 'pointer',
                               }}
                             >
-                              <EntityIcon appName={summary.appName} bundleId={summary.bundleId} size={26} />
+                              <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={26} />
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <InlineRevealText
                                   text={formatDisplayAppName(summary.appName)}
@@ -456,7 +491,7 @@ export default function Apps() {
                   padding: '20px 22px',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'start', gap: 14 }}>
-                    <EntityIcon appName={selectedSummary.appName} bundleId={selectedSummary.bundleId} size={38} />
+                    <EntityIcon appName={selectedSummary.appName} bundleId={selectedSummary.bundleId} canonicalAppId={selectedSummary.canonicalAppId} size={38} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <InlineRevealText
                         text={formatDisplayAppName(selectedSummary.appName)}
@@ -466,10 +501,36 @@ export default function Apps() {
                         {categoryLabel(selectedSummary.category)} • {formatDuration(selectedSummary.totalSeconds)} in the last {days === 1 ? 'day' : `${days} days`}
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => void narrativeResource.refresh()}
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: 8,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'var(--color-surface-low)',
+                        color: 'var(--color-text-secondary)',
+                        fontSize: 11.5,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Refresh
+                    </button>
                   </div>
                   <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
-                    {detail ? detailSummary(detail) : 'Loading app context…'}
+                    {narrative?.summary || (detail ? detailSummary(detail) : 'Loading app context…')}
                   </p>
+                  {narrativeResource.loading && !narrative && (
+                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                      Generating a stronger app narrative…
+                    </div>
+                  )}
+                  {narrative?.stale && (
+                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                      Showing the last saved narrative while new activity settles.
+                    </div>
+                  )}
                 </div>
 
                 {detailResource.error && (
@@ -541,9 +602,14 @@ export default function Apps() {
                             >
                               <EntityIcon
                                 artifactType={artifact.artifactType}
+                                canonicalAppId={artifact.canonicalAppId}
+                                ownerBundleId={artifact.ownerBundleId}
+                                ownerAppName={artifact.ownerAppName}
+                                ownerAppInstanceId={artifact.ownerAppInstanceId}
                                 title={artifact.displayTitle}
                                 path={artifact.path}
                                 domain={artifact.host}
+                                url={artifact.url}
                                 size={28}
                               />
                               <div style={{ flex: 1, minWidth: 0 }}>
@@ -571,7 +637,7 @@ export default function Apps() {
                         <div style={{ display: 'grid', gap: 12 }}>
                           {detail.pairedApps.slice(0, 8).map((app) => (
                             <div key={app.canonicalAppId} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                              <EntityIcon appName={app.displayName} size={28} />
+                              <EntityIcon appName={app.displayName} bundleId={app.bundleId} canonicalAppId={app.canonicalAppId} size={28} />
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <InlineRevealText
                                   text={app.displayName}

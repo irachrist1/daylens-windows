@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { finishAIUsageEvent, startAIUsageEvent } from '../db/queries'
 import { getDb } from './database'
 import { capture } from './analytics'
+import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import type {
   AIInvocationSource,
@@ -28,6 +29,12 @@ export interface AIProviderUsage {
 export interface ProviderTextResponse {
   text: string
   usage?: AIProviderUsage | null
+}
+
+export interface AITextJobExecutionOptions {
+  cachePolicy: 'off' | 'stable_prefix' | 'repeated_payload'
+  promptCachingEnabled: boolean
+  onDelta?: (delta: string) => void | Promise<void>
 }
 
 interface AIJobDefinition {
@@ -107,6 +114,15 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     providerPreferenceKey: 'aiChatProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'quality',
+  },
+  chat_followup_suggestions: {
+    jobType: 'chat_followup_suggestions',
+    screen: 'ai_chat',
+    foreground: true,
+    timeoutMs: 8_000,
+    providerPreferenceKey: 'aiChatProvider',
+    cachePolicy: 'repeated_payload',
+    modelStrategy: 'economy',
   },
   report_generation: {
     jobType: 'report_generation',
@@ -302,8 +318,13 @@ function redactAIText(input: string, settings: AppSettings): string {
   return output
 }
 
-async function resolveProviderConfigsForJob(jobType: AIJobType, settings: AppSettings): Promise<ResolvedProviderConfig[]> {
-  const orderedProviders = applyStrategyProviderFallback(preferredProviderForJob(jobType, settings), settings)
+async function resolveProviderConfigsForJob(
+  jobType: AIJobType,
+  settings: AppSettings,
+  preferredProviderOverride?: AIProviderMode | null,
+): Promise<ResolvedProviderConfig[]> {
+  const preferredProvider = preferredProviderOverride ?? preferredProviderForJob(jobType, settings)
+  const orderedProviders = applyStrategyProviderFallback(preferredProvider, settings)
   const definition = JOB_DEFINITIONS[jobType]
   const configs: ResolvedProviderConfig[] = []
 
@@ -334,16 +355,26 @@ export async function executeTextAIJob(
     systemPrompt: string
     userMessage: string
     prior?: Array<{ role: 'user' | 'assistant'; content: string }>
+    preferredProviderOverride?: AIProviderMode | null
   },
   runner: (
     config: ResolvedProviderConfig,
     systemPrompt: string,
     prior: Array<{ role: 'user' | 'assistant'; content: string }>,
     userMessage: string,
+    options: AITextJobExecutionOptions,
   ) => Promise<ProviderTextResponse>,
+  streamOptions?: {
+    onDelta?: (delta: string) => void | Promise<void>
+  },
 ): Promise<{ text: string; config: ResolvedProviderConfig; usage: AIProviderUsage | null; cachePolicy: AIJobDefinition['cachePolicy'] }> {
   const settings = await getSettingsAsync()
   const definition = JOB_DEFINITIONS[payload.jobType]
+  const executionOptions: AITextJobExecutionOptions = {
+    cachePolicy: definition.cachePolicy,
+    promptCachingEnabled: settings.aiPromptCachingEnabled ?? true,
+    onDelta: streamOptions?.onDelta,
+  }
   const eventId = randomUUID()
   const startedAt = Date.now()
   const prior = payload.prior ?? []
@@ -353,7 +384,7 @@ export async function executeTextAIJob(
     role: message.role,
     content: redactAIText(message.content, settings),
   }))
-  const configs = await resolveProviderConfigsForJob(payload.jobType, settings)
+  const configs = await resolveProviderConfigsForJob(payload.jobType, settings, payload.preferredProviderOverride)
 
   startAIUsageEvent(getDb(), {
     id: eventId,
@@ -370,7 +401,7 @@ export async function executeTextAIJob(
 
   for (const config of configs) {
     try {
-      const response = await runner(config, systemPrompt, sanitizedPrior, userMessage)
+      const response = await runner(config, systemPrompt, sanitizedPrior, userMessage, executionOptions)
       const completedAt = Date.now()
       const usage = response.usage ?? null
       const cacheHit = Boolean((usage?.cacheReadTokens ?? 0) > 0)
@@ -388,7 +419,7 @@ export async function executeTextAIJob(
         cacheWriteTokens: usage?.cacheWriteTokens ?? null,
         cacheHit,
       })
-      capture('ai_job_completed', {
+      capture(ANALYTICS_EVENT.AI_JOB_COMPLETED, {
         job_type: payload.jobType,
         screen: payload.screen ?? definition.screen,
         provider: config.provider,
@@ -428,14 +459,14 @@ export async function executeTextAIJob(
     completedAt,
     latencyMs: completedAt - startedAt,
   })
-  capture('ai_job_failed', {
+  capture(ANALYTICS_EVENT.AI_JOB_FAILED, {
+    failure_kind: classifyFailureKind(lastError),
     job_type: payload.jobType,
     screen: payload.screen ?? definition.screen,
     provider: lastConfig?.provider ?? null,
     model: lastConfig?.model ?? null,
     trigger_source: payload.triggerSource,
     latency_ms: completedAt - startedAt,
-    failure_reason: friendlyError.message,
     cache_policy: definition.cachePolicy,
   })
 

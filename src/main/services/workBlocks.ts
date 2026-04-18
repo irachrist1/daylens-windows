@@ -940,6 +940,9 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
     artifactType: DocumentRef['artifactType']
     totalSeconds: number
     canonicalAppId: string | null
+    ownerBundleId: string | null
+    ownerAppName: string | null
+    ownerAppInstanceId: string | null
   }>()
 
   for (const session of sessions) {
@@ -955,6 +958,9 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
     if (existing) {
       existing.totalSeconds += session.durationSeconds
       existing.sessionIds.push(session.id)
+      existing.ownerBundleId = existing.ownerBundleId ?? session.bundleId
+      existing.ownerAppName = existing.ownerAppName ?? session.appName
+      existing.ownerAppInstanceId = existing.ownerAppInstanceId ?? session.appInstanceId ?? null
       continue
     }
 
@@ -964,6 +970,9 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
       artifactType,
       totalSeconds: session.durationSeconds,
       canonicalAppId,
+      ownerBundleId: session.bundleId,
+      ownerAppName: session.appName,
+      ownerAppInstanceId: session.appInstanceId ?? null,
     })
   }
 
@@ -980,9 +989,17 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
         totalSeconds: value.totalSeconds,
         confidence: 0.7,
         canonicalAppId: value.canonicalAppId,
+        ownerBundleId: value.ownerBundleId,
+        ownerAppName: value.ownerAppName,
+        ownerAppInstanceId: value.ownerAppInstanceId,
         openTarget: {
           kind: 'unsupported',
           value: null,
+        },
+        metadata: {
+          ownerBundleId: value.ownerBundleId,
+          ownerAppName: value.ownerAppName,
+          ownerAppInstanceId: value.ownerAppInstanceId,
         },
         sourceSessionIds: value.sessionIds,
       }
@@ -1278,6 +1295,32 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
   if (pageLabel) return pageLabel
   const domainLabel = block.websites[0] ? shortDomainLabel(block.websites[0].domain) : null
   return usefulDerivedLabel(domainLabel)
+}
+
+export type BackgroundRelabelDisposition = 'skip' | 'review' | 'relabel'
+
+export function hasStableDeterministicBlockLabel(block: WorkContextBlock): boolean {
+  return Boolean(
+    preferredArtifactLabel(block)
+    || usefulDerivedLabel(block.workflowRefs[0]?.label)
+    || usefulDerivedLabel(block.ruleBasedLabel),
+  )
+}
+
+function hasLegacyWeakAiLabel(block: WorkContextBlock): boolean {
+  const aiLabel = block.aiLabel?.trim()
+  return Boolean(aiLabel) && !usefulDerivedLabel(aiLabel)
+}
+
+export function backgroundRelabelDispositionForBlock(block: WorkContextBlock): BackgroundRelabelDisposition {
+  if (block.isLive) return 'skip'
+  if (block.label.override?.trim()) return 'skip'
+  // Persisted AI labels do not yet carry a reliable quality score, so cleanup
+  // only auto-reopens obvious legacy placeholder labels instead of churning
+  // already-specific AI labels.
+  if (hasLegacyWeakAiLabel(block)) return 'relabel'
+  if (block.aiLabel?.trim()) return 'skip'
+  return hasStableDeterministicBlockLabel(block) ? 'review' : 'relabel'
 }
 
 function finalizedLabelForBlock(
@@ -2059,6 +2102,7 @@ export function getArtifactDetails(
   } | undefined
 
   if (!row) return null
+  const metadata = JSON.parse(row.metadata_json || '{}') as Record<string, unknown>
   return {
     id: row.id,
     artifactType: row.artifact_type,
@@ -2067,6 +2111,9 @@ export function getArtifactDetails(
     totalSeconds: 0,
     confidence: 0.5,
     canonicalAppId: row.canonical_app_id,
+    ownerBundleId: typeof metadata.ownerBundleId === 'string' ? metadata.ownerBundleId : null,
+    ownerAppName: typeof metadata.ownerAppName === 'string' ? metadata.ownerAppName : null,
+    ownerAppInstanceId: typeof metadata.ownerAppInstanceId === 'string' ? metadata.ownerAppInstanceId : null,
     url: row.url,
     path: row.path,
     host: row.host,
@@ -2075,7 +2122,7 @@ export function getArtifactDetails(
       : row.path
         ? { kind: 'local_path', value: row.path }
         : { kind: 'unsupported', value: null },
-    metadata: JSON.parse(row.metadata_json || '{}') as Record<string, unknown>,
+    metadata,
   }
 }
 
@@ -2170,7 +2217,7 @@ export function getAppDetailPayload(
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 8)
 
-  const pairedAppsMap = new Map<string, { canonicalAppId: string; displayName: string; totalSeconds: number }>()
+  const pairedAppsMap = new Map<string, { canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>()
   for (const block of relatedBlocks) {
     for (const app of block.topApps) {
       const identity = resolveCanonicalApp(app.bundleId, app.appName)
@@ -2179,9 +2226,11 @@ export function getAppDetailPayload(
       const existing = pairedAppsMap.get(pairedCanonicalId)
       if (existing) {
         existing.totalSeconds += app.totalSeconds
+        if (!existing.bundleId && app.bundleId) existing.bundleId = app.bundleId
       } else {
         pairedAppsMap.set(pairedCanonicalId, {
           canonicalAppId: pairedCanonicalId,
+          bundleId: app.bundleId ?? null,
           displayName: identity.displayName,
           totalSeconds: app.totalSeconds,
         })
@@ -2206,7 +2255,9 @@ export function getAppDetailPayload(
   const appCharacter = sampleSession
     ? getAppCharacter(db, sampleSession.bundleId, days)
     : null
-  const displayName = sampleSession?.appName ?? resolveCanonicalApp(canonicalAppId, canonicalAppId).displayName
+  const displayName = sampleSession
+    ? resolveCanonicalApp(sampleSession.bundleId, sampleSession.appName).displayName
+    : resolveCanonicalApp(canonicalAppId, canonicalAppId).displayName
   const profile: AppProfile = {
     canonicalAppId,
     displayName,

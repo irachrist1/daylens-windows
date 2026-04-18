@@ -1,8 +1,8 @@
 // Legacy module — the daily_summaries table was removed in migration v14
-// in favour of `daily_entity_rollups` (see CLAUDE.md, Layer 4). The
-// attribution pipeline (`services/attribution.ts`) writes the new rollups
-// during sessionization. These stubs are retained only so existing call
-// sites (e.g. `index.ts` startup) keep compiling until step 4 removes them.
+// in favour of `daily_entity_rollups`. The attribution pipeline
+// (`services/attribution.ts`) writes the new rollups during sessionization.
+// These stubs are retained only so existing call sites (e.g. `index.ts`
+// startup) keep compiling until the final cleanup removes them.
 
 interface DailySummaryRow {
   date: string

@@ -1,659 +1,683 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
+import type { AppSettings, DayTimelinePayload, LiveSession, OnboardingStage, ProofState, TrackingPermissionState } from '@shared/types'
+import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
-import type { AIProvider, AIProviderMode } from '@shared/types'
-import { AI_PROVIDER_META, AI_PROVIDERS, detectProviderFromApiKey } from '../lib/aiProvider'
-
-// ─── Goal definitions ─────────────────────────────────────────────────────────
+import { formatDuration, todayString } from '../lib/format'
 
 const GOALS = [
-  {
-    id: 'deep-work',
-    label: 'Deep work & focus',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-        <circle cx="10" cy="10" r="8" />
-        <circle cx="10" cy="10" r="3.5" />
-        <line x1="10" y1="2" x2="10" y2="5" />
-        <line x1="10" y1="15" x2="10" y2="18" />
-        <line x1="2" y1="10" x2="5" y2="10" />
-        <line x1="15" y1="10" x2="18" y2="10" />
-      </svg>
-    ),
-  },
-  {
-    id: 'understand-habits',
-    label: 'Understand my habits',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2" y="13" width="3" height="5" rx="1" />
-        <rect x="8.5" y="8" width="3" height="10" rx="1" />
-        <rect x="15" y="4" width="3" height="14" rx="1" />
-      </svg>
-    ),
-  },
-  {
-    id: 'less-distraction',
-    label: 'Less time on distractions',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-        <circle cx="10" cy="10" r="8" />
-        <circle cx="10" cy="10" r="3" />
-        <line x1="10" y1="2" x2="10" y2="7" />
-        <line x1="10" y1="13" x2="10" y2="18" />
-        <line x1="13" y1="10" x2="10" y2="10" />
-      </svg>
-    ),
-  },
-  {
-    id: 'ai-insights',
-    label: 'AI-powered insights',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M10 2 L11.8 7.2 L17 7.2 L12.9 10.3 L14.4 15.5 L10 12.5 L5.6 15.5 L7.1 10.3 L3 7.2 L8.2 7.2 Z" />
-      </svg>
-    ),
-  },
+  { id: 'deep-work', label: 'See where my focus actually went' },
+  { id: 'understand-habits', label: 'Understand my work patterns' },
+  { id: 'less-distraction', label: 'Spot noise before it takes over' },
+  { id: 'ai-insights', label: 'Ask better questions about my week' },
 ]
 
-// ─── Animated character-by-character text reveal ──────────────────────────────
+interface ProofSnapshot {
+  liveSession: LiveSession | null
+  timeline: DayTimelinePayload | null
+  ready: boolean
+}
 
-function AnimatedText({
-  text,
-  delayPerChar = 30,
+function StageHeading({
+  eyebrow,
+  title,
+  body,
+}: {
+  eyebrow: string
+  title: string
+  body: string
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div className="onboarding-eyebrow">{eyebrow}</div>
+      <h1 className="onboarding-title">{title}</h1>
+      <p className="onboarding-sub">{body}</p>
+    </div>
+  )
+}
+
+function SummaryTile({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: string
+  detail?: string
+}) {
+  return (
+    <div className="onboarding-summary-tile">
+      <div className="onboarding-summary-label">{label}</div>
+      <div className="onboarding-summary-value">{value}</div>
+      {detail && <div className="onboarding-summary-detail">{detail}</div>}
+    </div>
+  )
+}
+
+function proofDetail(snapshot: ProofSnapshot): Array<{ label: string; value: string; detail?: string }> {
+  const items: Array<{ label: string; value: string; detail?: string }> = []
+  if (snapshot.liveSession) {
+    items.push({
+      label: 'Current activity',
+      value: snapshot.liveSession.appName,
+      detail: snapshot.liveSession.windowTitle || 'Live session detected right now',
+    })
+  }
+  if (snapshot.timeline) {
+    if (snapshot.timeline.totalSeconds > 0) {
+      items.push({
+        label: 'Tracked today',
+        value: formatDuration(snapshot.timeline.totalSeconds),
+        detail: `${snapshot.timeline.blocks.length} work block${snapshot.timeline.blocks.length === 1 ? '' : 's'} reconstructed so far`,
+      })
+    }
+    if (snapshot.timeline.siteCount > 0) {
+      items.push({
+        label: 'Browser evidence',
+        value: `${snapshot.timeline.siteCount} site${snapshot.timeline.siteCount === 1 ? '' : 's'}`,
+        detail: 'Named pages and browser context are already flowing in.',
+      })
+    }
+  }
+  return items.slice(0, 3)
+}
+
+export default function Onboarding({
+  initialSettings,
   onComplete,
 }: {
-  text: string
-  delayPerChar?: number
-  onComplete?: () => void
+  initialSettings: AppSettings
+  onComplete: () => void
 }) {
-  const [revealed, setRevealed] = useState(0)
-  const onCompleteRef = useRef(onComplete)
-  onCompleteRef.current = onComplete
+  const [settings, setSettings] = useState(initialSettings)
+  const [goals, setGoals] = useState<Set<string>>(new Set(initialSettings.userGoals))
+  const [permissionState, setPermissionState] = useState<TrackingPermissionState>(initialSettings.onboardingState.trackingPermissionState)
+  const [busy, setBusy] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [proof, setProof] = useState<ProofSnapshot>({ liveSession: null, timeline: null, ready: false })
+  const onboardingTrackedRef = useRef(false)
+  const proofTrackedRef = useRef(false)
+
+  const platform = settings.onboardingState.platform
+  const stage = settings.onboardingState.stage
+  const isMac = platform === 'macos'
+  const proofTiles = useMemo(() => proofDetail(proof), [proof])
 
   useEffect(() => {
-    setRevealed(0)
-    if (!text) return
-    let i = 0
-    const tick = () => {
-      i++
-      setRevealed(i)
-      if (i < text.length) {
-        setTimeout(tick, delayPerChar)
-      } else {
-        onCompleteRef.current?.()
-      }
+    if (onboardingTrackedRef.current) return
+    onboardingTrackedRef.current = true
+    track(ANALYTICS_EVENT.ONBOARDING_STARTED, {
+      stage,
+      surface: 'onboarding',
+      trigger: 'navigation',
+    })
+  }, [stage])
+
+  async function persistOnboarding(
+    nextStage: OnboardingStage,
+    partial: Partial<AppSettings['onboardingState']> = {},
+  ) {
+    const nextState = {
+      ...settings.onboardingState,
+      ...partial,
+      stage: nextStage,
     }
-    const t = setTimeout(tick, delayPerChar)
-    return () => clearTimeout(t)
-  }, [text, delayPerChar])
-
-  return (
-    <span>
-      {text.slice(0, revealed)}
-      <span style={{ opacity: 0 }}>{text.slice(revealed)}</span>
-    </span>
-  )
-}
-
-// ─── Screen 1: Name input ─────────────────────────────────────────────────────
-
-function Screen1({
-  name,
-  onNameChange,
-  onContinue,
-}: {
-  name: string
-  onNameChange: (v: string) => void
-  onContinue: () => void
-}) {
-  return (
-    <div className="onboarding-screen">
-      <h1 className="onboarding-title">Welcome to Daylens.</h1>
-      <p className="onboarding-sub">
-        A quiet companion that watches how you spend your time — so you don't have to.
-      </p>
-
-      <div className="onboarding-field">
-        <label className="onboarding-label">What should we call you?</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => onNameChange(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && name.trim() && onContinue()}
-          placeholder="Your first name"
-          className="onboarding-input"
-          autoFocus
-        />
-      </div>
-
-      <button
-        onClick={onContinue}
-        disabled={!name.trim()}
-        className="onboarding-btn-primary"
-      >
-        Continue
-      </button>
-    </div>
-  )
-}
-
-// ─── Screen 2: Goals selection ────────────────────────────────────────────────
-
-function Screen2({
-  name,
-  goals,
-  onGoalToggle,
-  onContinue,
-}: {
-  name: string
-  goals: Set<string>
-  onGoalToggle: (id: string) => void
-  onContinue: () => void
-}) {
-  const [bodyVisible, setBodyVisible] = useState(false)
-  const headingText = `Fantastic to meet you, ${name}.`
-
-  return (
-    <div className="onboarding-screen">
-      <h1 className="onboarding-title" style={{ minHeight: '2.4em' }}>
-        <AnimatedText text={headingText} delayPerChar={30} onComplete={() => setBodyVisible(true)} />
-      </h1>
-
-      <div
-        className="onboarding-body-block"
-        style={{
-          opacity: bodyVisible ? 1 : 0,
-          transition: 'opacity 400ms ease',
-        }}
-      >
-        <p className="onboarding-sub">
-          This app watches the apps and websites you use, and turns that into insight.
-          What would you most like help with?
-        </p>
-
-        <div className="onboarding-goals-grid">
-          {GOALS.map((goal) => {
-            const selected = goals.has(goal.id)
-            return (
-              <button
-                key={goal.id}
-                onClick={() => onGoalToggle(goal.id)}
-                className="onboarding-goal-card"
-                style={{
-                  borderColor: selected ? 'var(--color-accent)' : 'rgba(104,174,255,0.2)',
-                  background: selected ? 'rgba(104,174,255,0.08)' : 'transparent',
-                  color: selected ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-                }}
-              >
-                <span className="onboarding-goal-icon">{goal.icon}</span>
-                <span className="onboarding-goal-label">{goal.label}</span>
-              </button>
-            )
-          })}
-        </div>
-
-        <p className="onboarding-hint">
-          We'll personalise what you see. You can change this any time.
-        </p>
-
-        <button onClick={onContinue} className="onboarding-btn-primary">
-          Continue
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ─── Screen 3: API key + finish ───────────────────────────────────────────────
-
-function Screen3({
-  provider,
-  onProviderChange,
-  apiKey,
-  onApiKeyChange,
-  launchOnLogin,
-  onLaunchOnLoginChange,
-  onFinish,
-  onSkip,
-  saving,
-  errorMessage,
-}: {
-  provider: AIProviderMode
-  onProviderChange: (provider: AIProviderMode) => void
-  apiKey: string
-  onApiKeyChange: (v: string) => void
-  launchOnLogin: boolean
-  onLaunchOnLoginChange: (v: boolean) => void
-  onFinish: () => void
-  onSkip: () => void
-  saving: boolean
-  errorMessage: string | null
-}) {
-  const [showKey, setShowKey] = useState(false)
-  const isCliProvider = provider === 'claude-cli' || provider === 'codex-cli'
-  const providerMeta = AI_PROVIDER_META[isCliProvider ? 'anthropic' : provider as AIProvider]
-
-  return (
-    <div className="onboarding-screen">
-      <h1 className="onboarding-title">One last thing.</h1>
-      <p className="onboarding-sub">
-        Daylens can use Anthropic, OpenAI, or Gemini to answer questions about your day.
-        Or connect via CLI if you already have a subscription.
-      </p>
-
-      <div className="onboarding-field">
-        <label className="onboarding-label">AI provider</label>
-        <div style={{
-          display: 'flex', gap: 4, padding: 3, borderRadius: 12,
-          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-        }}>
-          {AI_PROVIDERS.map((value) => {
-            const selected = provider === value
-            return (
-              <button
-                key={value}
-                onClick={() => onProviderChange(value)}
-                className="onboarding-btn-secondary"
-                style={{
-                  flex: 1, minWidth: 0,
-                  background: selected ? 'var(--color-accent)' : 'transparent',
-                  color: selected ? '#0d1117' : 'var(--color-text-secondary)',
-                  border: 'none', padding: '10px 12px',
-                }}
-              >
-                {AI_PROVIDER_META[value].shortLabel}
-              </button>
-            )
-          })}
-        </div>
-
-        {/* CLI options */}
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          {(['claude-cli', 'codex-cli'] as const).map((cliId) => {
-            const selected = provider === cliId
-            return (
-              <button
-                key={cliId}
-                onClick={() => { onProviderChange(cliId); onApiKeyChange('') }}
-                style={{
-                  flex: 1, padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
-                  border: selected ? '1px solid rgba(104,174,255,0.5)' : '1px solid rgba(255,255,255,0.08)',
-                  background: selected ? 'rgba(104,174,255,0.12)' : 'transparent',
-                  color: selected ? '#68AEFF' : '#5e7a92',
-                  fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-                  transition: 'border-color 180ms, background 180ms, color 180ms',
-                }}
-              >
-                {cliId === 'claude-cli' ? 'Claude CLI' : 'Codex CLI'}
-                <span style={{ display: 'block', fontSize: 10, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>
-                  No key needed
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      {!isCliProvider && (
-        <div className="onboarding-field">
-          <label className="onboarding-label">{providerMeta.label} API key</label>
-          <div style={{ position: 'relative' }}>
-            <input
-              type={showKey ? 'text' : 'password'}
-              value={apiKey}
-              onChange={(e) => onApiKeyChange(e.target.value)}
-              placeholder={providerMeta.keyPlaceholder}
-              className="onboarding-input"
-              style={{ paddingRight: 44 }}
-              disabled={saving}
-            />
-            <button
-              onClick={() => setShowKey((v) => !v)}
-              disabled={saving}
-              style={{
-                position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-                background: 'none', border: 'none', cursor: 'pointer',
-                color: 'var(--color-text-tertiary)', padding: 0, display: 'flex', alignItems: 'center',
-              }}
-            >
-              {showKey ? (
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                  <path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" />
-                  <circle cx="8" cy="8" r="1.5" />
-                  <line x1="2" y1="2" x2="14" y2="14" />
-                </svg>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                  <path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" />
-                  <circle cx="8" cy="8" r="1.5" />
-                </svg>
-              )}
-            </button>
-          </div>
-          <button
-            className="onboarding-external-link"
-            onClick={() => ipc.shell.openExternal(providerMeta.docsUrl)}
-          >
-            Open the {providerMeta.shortLabel} key page
-          </button>
-        </div>
-      )}
-
-      {isCliProvider && (
-        <p className="onboarding-hint">
-          {provider === 'claude-cli'
-            ? 'Make sure the Claude CLI is installed and you\'re logged in: npm install -g @anthropic-ai/claude-code'
-            : 'Make sure the Codex CLI is installed and you\'re logged in: npm install -g @openai/codex'}
-        </p>
-      )}
-
-      {errorMessage && <p className="onboarding-error">{errorMessage}</p>}
-
-      <label className="onboarding-checkbox-row">
-        <input
-          type="checkbox"
-          checked={launchOnLogin}
-          onChange={(e) => onLaunchOnLoginChange(e.target.checked)}
-          className="onboarding-checkbox"
-          disabled={saving}
-        />
-        <span className="onboarding-checkbox-label">Launch Daylens when I log in</span>
-      </label>
-
-      <button onClick={onFinish} className="onboarding-btn-primary" disabled={saving}>
-        {saving ? 'Saving…' : 'Open Daylens'}
-      </button>
-
-      <button onClick={onSkip} className="onboarding-btn-skip" disabled={saving}>
-        {saving ? 'Saving…' : 'Skip for now'}
-      </button>
-    </div>
-  )
-}
-
-// ─── Root Onboarding component ────────────────────────────────────────────────
-
-export default function Onboarding({ onComplete }: { onComplete: () => void }) {
-  const [screen, setScreen]       = useState<1 | 2 | 3>(1)
-  const [exiting, setExiting]     = useState(false)
-  const [name, setName]           = useState('')
-  const [goals, setGoals]         = useState<Set<string>>(new Set())
-  const [provider, setProvider]   = useState<AIProviderMode>('anthropic')
-  const [apiKey, setApiKey]       = useState('')
-  const [launchOnLogin, setLaunchOnLogin] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [finishError, setFinishError] = useState<string | null>(null)
-
-  function transition(next: 1 | 2 | 3) {
-    setExiting(true)
-    setTimeout(() => {
-      setScreen(next)
-      setExiting(false)
-    }, 300)
+    setSettings((current) => ({ ...current, onboardingState: nextState }))
+    await ipc.settings.set({ onboardingState: nextState })
   }
 
+  async function refreshPermissionState() {
+    if (!isMac) return
+    const nextState = await ipc.tracking.getPermissionState()
+    setPermissionState(nextState)
+
+    if (nextState !== 'granted') {
+      if (stage === 'verifying_permission') {
+        await persistOnboarding('permission', {
+          trackingPermissionState: nextState,
+          proofState: 'idle',
+        })
+      }
+      return
+    }
+
+    const nextStage = nextMacStageAfterGrantedPermission({
+      currentStage: stage,
+      permissionRequestedAt: settings.onboardingState.permissionRequestedAt,
+      origin: 'refresh',
+    })
+
+    if (!nextStage) return
+
+    if (nextStage === 'relaunch_required') {
+      await persistOnboarding('relaunch_required', {
+        trackingPermissionState: 'awaiting_relaunch',
+      })
+      return
+    }
+
+    if (nextStage === 'verifying_permission') {
+      await persistOnboarding('verifying_permission', {
+        trackingPermissionState: 'granted',
+      })
+      return
+    }
+
+    if (nextStage === 'proof') {
+      await persistOnboarding('proof', {
+        trackingPermissionState: 'granted',
+        proofState: 'collecting',
+        permissionRequestedAt: null,
+      })
+    }
+  }
+
+  useEffect(() => {
+    if (!isMac || stage !== 'permission') return
+    void refreshPermissionState()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMac, stage, settings.onboardingState.permissionRequestedAt])
+
+  useEffect(() => {
+    if (!isMac || stage !== 'verifying_permission') return
+
+    const timer = window.setTimeout(() => {
+      void refreshPermissionState()
+    }, 650)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMac, stage, settings.onboardingState.permissionRequestedAt])
+
+  useEffect(() => {
+    if (stage !== 'proof') return
+
+    let cancelled = false
+
+    async function loadProof() {
+      try {
+        const [timeline, liveSession] = await Promise.all([
+          ipc.db.getTimelineDay(todayString()).catch(() => null),
+          ipc.tracking.getLiveSession().catch(() => null),
+        ])
+        if (cancelled) return
+
+        const ready = Boolean(
+          liveSession
+          || (timeline && (
+            timeline.totalSeconds > 0
+            || timeline.blocks.length > 0
+            || timeline.siteCount > 0
+            || timeline.segments.length > 0
+          )),
+        )
+
+        setProof({ liveSession, timeline, ready })
+
+        const nextProofState: ProofState = ready ? 'ready' : 'collecting'
+        if (settings.onboardingState.proofState !== nextProofState || settings.onboardingState.stage !== 'proof') {
+          const nextState = {
+            ...settings.onboardingState,
+            stage: 'proof' as const,
+            proofState: nextProofState,
+          }
+          setSettings((current) => ({ ...current, onboardingState: nextState }))
+          await ipc.settings.set({ onboardingState: nextState })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMessage(err instanceof Error ? err.message : String(err))
+        }
+      }
+    }
+
+    void loadProof()
+    const interval = window.setInterval(() => { void loadProof() }, 2_500)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [settings, stage])
+
+  useEffect(() => {
+    if (!proof.ready || proofTrackedRef.current) return
+    proofTrackedRef.current = true
+    track(ANALYTICS_EVENT.TRACKING_PROOF_READY, {
+      block_count_bucket: blockCountBucket(proof.timeline?.blocks.length ?? 0),
+      surface: 'onboarding',
+      tracked_time_bucket: trackedTimeBucket(proof.timeline?.totalSeconds ?? 0),
+      trigger: 'system',
+      view: 'onboarding',
+    })
+  }, [proof.ready, proof.timeline])
+
   function toggleGoal(id: string) {
-    setGoals((prev) => {
-      const next = new Set(prev)
+    setGoals((previous) => {
+      const next = new Set(previous)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
   }
 
-  async function finish(skipApiKey = false) {
-    if (saving) return
-    const isCliProvider = provider === 'claude-cli' || provider === 'codex-cli'
-    const key = (skipApiKey || isCliProvider) ? '' : apiKey.trim()
-    const detectedProvider = detectProviderFromApiKey(key)
-    const resolvedProvider = detectedProvider ?? provider
-    setSaving(true)
-    setFinishError(null)
+  async function finishOnboarding() {
+    if (busy) return
+    setBusy(true)
+    setErrorMessage(null)
+
+    const completedAt = Date.now()
+    const nextOnboardingState = {
+      ...settings.onboardingState,
+      stage: 'complete' as const,
+      proofState: 'ready' as const,
+      personalizationState: 'completed' as const,
+      completedAt,
+    }
 
     try {
-      await ipc.settings.set({ aiProvider: resolvedProvider })
-      if (key) await ipc.settings.setApiKey(key, resolvedProvider)
       await ipc.settings.set({
         onboardingComplete: true,
-        userName: name.trim(),
+        onboardingState: nextOnboardingState,
         userGoals: Array.from(goals),
-        launchOnLogin,
-        aiProvider: resolvedProvider,
       })
-      track('onboarding_completed', { goals: Array.from(goals), api_key_entered: !!key, provider: resolvedProvider })
-      if (key) track('api_key_saved', { provider: resolvedProvider })
+      await ipc.app.completeOnboarding()
+      track(ANALYTICS_EVENT.ONBOARDING_COMPLETED, {
+        platform,
+        selected_goal_count: goals.size,
+        surface: 'onboarding',
+      })
       onComplete()
     } catch (err) {
-      setFinishError(err instanceof Error ? err.message : String(err))
+      setErrorMessage(err instanceof Error ? err.message : String(err))
     } finally {
-      setSaving(false)
+      setBusy(false)
     }
+  }
+
+  async function beginPermissionRequest() {
+    setBusy(true)
+    setErrorMessage(null)
+    try {
+      const requestedAt = Date.now()
+      const nextState = await ipc.tracking.requestScreenPermission()
+      setPermissionState(nextState)
+      if (nextState === 'awaiting_relaunch') {
+        await persistOnboarding('relaunch_required', {
+          trackingPermissionState: nextState,
+          permissionRequestedAt: requestedAt,
+        })
+      } else {
+        await persistOnboarding('permission', {
+          trackingPermissionState: nextState,
+          permissionRequestedAt: requestedAt,
+        })
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleContinueFromWelcome() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
+      platform,
+      step: 'welcome',
+      surface: 'onboarding',
+    })
+    await persistOnboarding(isMac ? 'permission' : 'proof', {
+      proofState: isMac ? 'idle' : 'collecting',
+    })
+  }
+
+  async function continueFromProof() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
+      platform,
+      step: 'proof',
+      surface: 'onboarding',
+    })
+    await persistOnboarding('personalize', {
+      proofState: proof.ready ? 'ready' : settings.onboardingState.proofState,
+    })
   }
 
   return (
     <div className="onboarding-root">
-      <div
-        className="onboarding-container"
-        style={{
-          opacity: exiting ? 0 : 1,
-          transform: exiting ? 'translateY(-8px)' : 'translateY(0)',
-          transition: 'opacity 280ms ease-out, transform 280ms ease-out',
-        }}
-      >
-        {screen === 1 && (
-          <Screen1
-            name={name}
-            onNameChange={setName}
-            onContinue={() => {
-              if (name.trim()) {
-                track('onboarding_step_completed', { step: 1 })
-                transition(2)
-              }
-            }}
-          />
+      <div className="onboarding-shell">
+        {stage === 'welcome' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              eyebrow="Welcome"
+              title="Daylens turns raw activity into a real picture of your work."
+              body={isMac
+                ? 'Everything stays grounded in local activity. On Mac, Daylens needs Screen Recording permission so it can read window titles and context. It does not record or upload video.'
+                : 'Everything starts locally on this machine. Daylens will begin reconstructing today into real work blocks, so the Timeline has proof before you ever touch AI.'}
+            />
+            <div className="onboarding-callout">
+              <div className="onboarding-callout-title">What to expect</div>
+              <div className="onboarding-callout-body">
+                {isMac
+                  ? 'A quick permission step, then a restart, then Daylens shows you real tracked proof before any personalization.'
+                  : 'A quick proof step, one optional personalization pass, and then you land in Timeline with real activity already showing up.'}
+              </div>
+            </div>
+            <button className="onboarding-btn-primary" onClick={() => void handleContinueFromWelcome()}>
+              Continue
+            </button>
+          </div>
         )}
-        {screen === 2 && (
-          <Screen2
-            name={name.trim()}
-            goals={goals}
-            onGoalToggle={toggleGoal}
-            onContinue={() => {
-              track('onboarding_step_completed', { step: 2, goals: Array.from(goals) })
-              transition(3)
-            }}
-          />
+
+        {stage === 'permission' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              eyebrow="Screen Recording"
+              title="macOS calls this Screen Recording. Daylens uses it for context, not video."
+              body="Without this permission, Daylens cannot read the active window title or reconstruct what you were actually working on. Nothing here records your screen or uploads video anywhere."
+            />
+            <div className="onboarding-callout">
+              <div className="onboarding-callout-title">How it works</div>
+              <div className="onboarding-callout-body">
+                Open System Settings, enable Daylens under Screen Recording, then come back here. Once it is enabled, Daylens needs one restart before tracking becomes fully available.
+              </div>
+            </div>
+            <div className="onboarding-actions">
+              <button className="onboarding-btn-primary" onClick={() => void beginPermissionRequest()} disabled={busy}>
+                {busy ? 'Opening settings…' : 'Open Screen Recording Settings'}
+              </button>
+              <button className="onboarding-btn-secondary" onClick={() => void refreshPermissionState()}>
+                I already enabled it
+              </button>
+            </div>
+            <div className="onboarding-hint">
+              Permission status: {permissionState === 'granted' ? 'Enabled' : permissionState === 'awaiting_relaunch' ? 'Ready for restart' : 'Still missing'}
+            </div>
+          </div>
         )}
-        {screen === 3 && (
-          <Screen3
-            provider={provider}
-            onProviderChange={(p) => setProvider(p)}
-            apiKey={apiKey}
-            onApiKeyChange={setApiKey}
-            launchOnLogin={launchOnLogin}
-            onLaunchOnLoginChange={setLaunchOnLogin}
-            onFinish={() => void finish(false)}
-            onSkip={() => void finish(true)}
-            saving={saving}
-            errorMessage={finishError}
-          />
+
+        {stage === 'relaunch_required' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              eyebrow="Almost there"
+              title="Daylens is ready. One restart makes the permission take effect."
+              body="macOS only unlocks window titles for apps that relaunch after Screen Recording is granted. Restart Daylens now and it will come back into proof mode."
+            />
+            <button className="onboarding-btn-primary" onClick={() => void ipc.app.relaunch()}>
+              Restart Daylens
+            </button>
+          </div>
         )}
+
+        {stage === 'verifying_permission' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              eyebrow="Verifying"
+              title="Checking Screen Recording access and starting Daylens."
+              body="Daylens is confirming the macOS permission after relaunch so the Timeline can open with real window titles and context instead of an empty shell."
+            />
+            <div className="onboarding-proof-card">
+              <div className="onboarding-proof-pending">
+                <span className="onboarding-spinner" aria-hidden="true" />
+                <div>
+                  <div className="onboarding-callout-title">Verifying permission</div>
+                  <div className="onboarding-callout-body">
+                    If macOS kept the permission, Daylens will move straight into proof. If not, you will land back on the permission step with the exact next action.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {stage === 'proof' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              eyebrow="Proof"
+              title={proof.ready ? 'Daylens is working.' : 'Looking for your first real signal…'}
+              body={proof.ready
+                ? 'This is the moment Daylens should earn trust: real activity, live context, and a Timeline that will not open empty.'
+                : 'Keep Daylens open for a moment while it detects live work or reconstructs the first useful block from local history.'}
+            />
+            <div className="onboarding-proof-card">
+              {!proof.ready && (
+                <div className="onboarding-proof-pending">
+                  <span className="onboarding-spinner" aria-hidden="true" />
+                  <div>
+                    <div className="onboarding-callout-title">Gathering local proof</div>
+                    <div className="onboarding-callout-body">
+                      Daylens is waiting for a live session, browser evidence, or the first reconstructed work block.
+                    </div>
+                  </div>
+                </div>
+              )}
+              {proofTiles.length > 0 && (
+                <div className="onboarding-summary-grid">
+                  {proofTiles.map((item) => (
+                    <SummaryTile key={item.label} label={item.label} value={item.value} detail={item.detail} />
+                  ))}
+                </div>
+              )}
+            </div>
+            <button className="onboarding-btn-primary" disabled={!proof.ready} onClick={() => void continueFromProof()}>
+              Open the last step
+            </button>
+          </div>
+        )}
+
+        {stage === 'personalize' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              eyebrow="Personalize"
+              title="Pick what you want Daylens to help with first."
+              body="This is optional and lightweight. It only tunes what Daylens emphasizes once you land in the real app."
+            />
+            <div className="onboarding-goals-grid">
+              {GOALS.map((goal) => {
+                const selected = goals.has(goal.id)
+                return (
+                  <button
+                    key={goal.id}
+                    className="onboarding-goal-card"
+                    onClick={() => toggleGoal(goal.id)}
+                    style={{
+                      borderColor: selected ? 'rgba(125, 193, 255, 0.45)' : 'var(--color-border-ghost)',
+                      background: selected ? 'rgba(97, 165, 255, 0.10)' : 'var(--color-surface)',
+                    }}
+                  >
+                    <div className="onboarding-goal-dot" />
+                    <span>{goal.label}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="onboarding-actions">
+              <button className="onboarding-btn-primary" onClick={() => void finishOnboarding()} disabled={busy}>
+                {busy ? 'Opening Timeline…' : 'Open Timeline'}
+              </button>
+              <button className="onboarding-btn-secondary" onClick={() => void finishOnboarding()} disabled={busy}>
+                Skip this part
+              </button>
+            </div>
+          </div>
+        )}
+
+        {errorMessage && <div className="onboarding-error">{errorMessage}</div>}
       </div>
 
       <style>{`
         .onboarding-root {
           position: fixed;
           inset: 0;
-          background: #1a1a1a;
+          background:
+            radial-gradient(circle at top left, rgba(92, 151, 255, 0.14), transparent 38%),
+            radial-gradient(circle at bottom right, rgba(79, 219, 200, 0.10), transparent 34%),
+            #0b0f16;
           display: flex;
           align-items: center;
           justify-content: center;
-          padding: 32px 24px;
+          padding: 36px 24px;
           -webkit-app-region: drag;
         }
-        .onboarding-container {
-          width: 100%;
-          max-width: 480px;
+        .onboarding-shell {
+          width: min(720px, 100%);
+          border-radius: 28px;
+          border: 1px solid rgba(173, 198, 255, 0.14);
+          background: rgba(9, 13, 20, 0.88);
+          box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+          padding: 34px 34px 28px;
           -webkit-app-region: no-drag;
+          backdrop-filter: blur(22px);
         }
         .onboarding-screen {
-          display: flex;
-          flex-direction: column;
-          gap: 20px;
+          display: grid;
+          gap: 22px;
+        }
+        .onboarding-eyebrow {
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: var(--color-text-tertiary);
         }
         .onboarding-title {
-          font-size: 28px;
-          font-weight: 700;
-          color: #c8dcf4;
-          line-height: 1.2;
-          letter-spacing: -0.5px;
           margin: 0;
+          font-size: 34px;
+          line-height: 1.04;
+          letter-spacing: -0.04em;
+          color: var(--color-text-primary);
         }
         .onboarding-sub {
-          font-size: 14px;
-          color: #5e7a92;
-          line-height: 1.6;
           margin: 0;
+          font-size: 14.5px;
+          line-height: 1.75;
+          color: var(--color-text-secondary);
+          max-width: 62ch;
         }
-        .onboarding-body-block {
+        .onboarding-callout,
+        .onboarding-proof-card {
+          border-radius: 20px;
+          border: 1px solid var(--color-border-ghost);
+          background: rgba(255, 255, 255, 0.02);
+          padding: 18px 18px 16px;
+        }
+        .onboarding-callout-title,
+        .onboarding-summary-label {
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--color-text-tertiary);
+        }
+        .onboarding-callout-body,
+        .onboarding-summary-detail,
+        .onboarding-hint {
+          font-size: 13px;
+          line-height: 1.7;
+          color: var(--color-text-secondary);
+        }
+        .onboarding-actions {
           display: flex;
-          flex-direction: column;
-          gap: 20px;
+          flex-wrap: wrap;
+          gap: 10px;
         }
-        .onboarding-field {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-        .onboarding-label {
-          font-size: 12px;
-          font-weight: 500;
-          color: #5e7a92;
-          letter-spacing: 0.01em;
-        }
-        .onboarding-input {
-          width: 100%;
-          padding: 12px 14px;
-          background: #0d1c2e;
-          border: 1px solid #1c2d3e;
-          border-radius: 10px;
-          font-size: 14px;
-          color: #c8dcf4;
-          outline: none;
-          transition: border-color 200ms;
-          box-sizing: border-box;
-          font-family: inherit;
-        }
-        .onboarding-input::placeholder {
-          color: #3d5568;
-        }
-        .onboarding-input:focus {
-          border-color: #68AEFF;
+        .onboarding-btn-primary,
+        .onboarding-btn-secondary {
+          height: 42px;
+          padding: 0 16px;
+          border-radius: 12px;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: transform 140ms ease, border-color 140ms ease, opacity 140ms ease;
         }
         .onboarding-btn-primary {
-          width: 100%;
-          padding: 13px;
-          background: linear-gradient(180deg, #68AEFF 0%, #003EB7 100%);
           border: none;
-          border-radius: 10px;
-          font-size: 14px;
-          font-weight: 600;
-          color: #fff;
-          cursor: pointer;
-          transition: opacity 200ms;
-          font-family: inherit;
+          background: linear-gradient(135deg, #7bb7ff 0%, #4fd3c6 100%);
+          color: #07131b;
         }
-        .onboarding-btn-primary:hover {
-          opacity: 0.92;
+        .onboarding-btn-secondary {
+          border: 1px solid var(--color-border-ghost);
+          background: transparent;
+          color: var(--color-text-primary);
         }
-        .onboarding-btn-primary:disabled {
-          opacity: 0.35;
-          cursor: not-allowed;
+        .onboarding-btn-primary:disabled,
+        .onboarding-btn-secondary:disabled {
+          opacity: 0.55;
+          cursor: default;
         }
-        .onboarding-btn-skip {
-          background: none;
-          border: none;
-          font-size: 13px;
-          color: #3d5568;
-          cursor: pointer;
-          padding: 4px 0;
-          text-align: center;
-          font-family: inherit;
-          transition: color 200ms;
-        }
-        .onboarding-btn-skip:hover {
-          color: #5e7a92;
-        }
+        .onboarding-summary-grid,
         .onboarding-goals-grid {
           display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 10px;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 12px;
+        }
+        .onboarding-summary-tile,
+        .onboarding-goal-card {
+          border-radius: 18px;
+          border: 1px solid var(--color-border-ghost);
+          background: rgba(255, 255, 255, 0.025);
+          padding: 16px 16px 14px;
+        }
+        .onboarding-summary-value {
+          margin-top: 8px;
+          font-size: 18px;
+          font-weight: 720;
+          color: var(--color-text-primary);
         }
         .onboarding-goal-card {
           display: flex;
-          flex-direction: column;
-          align-items: flex-start;
-          gap: 10px;
-          padding: 14px;
-          border: 1px solid rgba(104,174,255,0.2);
-          border-radius: 10px;
-          background: transparent;
-          cursor: pointer;
-          transition: border-color 180ms, background 180ms, color 180ms;
-          text-align: left;
-          font-family: inherit;
-        }
-        .onboarding-goal-card:hover {
-          border-color: rgba(104,174,255,0.4);
-        }
-        .onboarding-goal-icon {
-          opacity: 0.8;
-        }
-        .onboarding-goal-label {
-          font-size: 13px;
-          font-weight: 500;
-          line-height: 1.3;
-        }
-        .onboarding-hint {
-          font-size: 12px;
-          color: #3d5568;
-          margin: -6px 0;
-        }
-        .onboarding-error {
-          font-size: 12px;
-          color: #fca5a5;
-          margin: -4px 0 0;
-        }
-        .onboarding-external-link {
-          background: none;
-          border: none;
-          padding: 0;
-          font-size: 12px;
-          color: #68AEFF;
-          cursor: pointer;
-          text-align: left;
-          font-family: inherit;
-          transition: opacity 200ms;
-        }
-        .onboarding-external-link:hover {
-          opacity: 0.75;
-        }
-        .onboarding-checkbox-row {
-          display: flex;
           align-items: center;
           gap: 10px;
+          text-align: left;
+          color: var(--color-text-primary);
           cursor: pointer;
         }
-        .onboarding-checkbox {
-          width: 16px;
-          height: 16px;
-          accent-color: #68AEFF;
-          cursor: pointer;
+        .onboarding-goal-dot {
+          width: 9px;
+          height: 9px;
+          border-radius: 50%;
+          background: linear-gradient(135deg, #7bb7ff 0%, #4fd3c6 100%);
           flex-shrink: 0;
         }
-        .onboarding-checkbox-label {
+        .onboarding-proof-pending {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          margin-bottom: 14px;
+        }
+        .onboarding-spinner {
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          border: 2px solid rgba(255, 255, 255, 0.14);
+          border-top-color: #7bb7ff;
+          animation: onboardingSpin 1s linear infinite;
+          flex-shrink: 0;
+        }
+        .onboarding-error {
+          margin-top: 18px;
+          padding: 12px 14px;
+          border-radius: 14px;
+          border: 1px solid rgba(248, 113, 113, 0.26);
+          background: rgba(248, 113, 113, 0.08);
+          color: #fecaca;
           font-size: 13px;
-          color: #5e7a92;
+          line-height: 1.6;
+        }
+        @keyframes onboardingSpin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @media (max-width: 720px) {
+          .onboarding-shell {
+            padding: 24px 20px 20px;
+            border-radius: 24px;
+          }
+          .onboarding-title {
+            font-size: 28px;
+          }
         }
       `}</style>
     </div>

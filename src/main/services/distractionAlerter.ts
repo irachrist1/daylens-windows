@@ -1,8 +1,8 @@
-import { Notification, ipcMain } from 'electron'
+import { BrowserWindow, Notification, ipcMain } from 'electron'
 import type { AppCategory } from '@shared/types'
 import { getActiveFocusSession, recordDistractionEvent } from '../db/queries'
 import { getDb } from './database'
-import { getCurrentSession } from './tracking'
+import { getCurrentSession, onTrackingTick } from './tracking'
 import { getSettings, setSettings } from './settings'
 
 // ─── How distraction detection works in Daylens ───────────────────────────────
@@ -72,6 +72,9 @@ let workStateAccumulatorSeconds = 0
 let lastWorkStateBundleId: string | null = null
 let leisureState: ConsecutiveLeisureState | null = null
 let thresholdMinutes = DEFAULT_THRESHOLD_MINUTES
+let lastCheckAtMs: number | null = null
+let navigationWindow: BrowserWindow | null = null
+let unsubscribeFromTrackingTicks: (() => void) | null = null
 
 function resetLeisureState(): void {
   leisureState = null
@@ -95,15 +98,29 @@ function isOffPlan(appName: string, bundleId: string, plannedApps: string[]): bo
   )
 }
 
+function focusNavigationWindow(route: string): void {
+  if (!navigationWindow || navigationWindow.isDestroyed()) return
+  if (navigationWindow.isMinimized()) navigationWindow.restore()
+  navigationWindow.show()
+  navigationWindow.focus()
+  navigationWindow.webContents.send('navigate', route)
+}
+
 function fireAlert(appName: string, minutes: number, offPlan: boolean): void {
   if (!Notification.isSupported()) return
   const body = offPlan
     ? `${appName} isn't on your focus plan — you've been there ${minutes} minutes.`
     : `You've been on ${appName} for ${minutes} minutes.`
-  new Notification({ title: 'Daylens', body }).show()
+  const notification = new Notification({ title: 'Daylens', body })
+  notification.on('click', () => {
+    focusNavigationWindow('/ai')
+  })
+  notification.show()
 }
 
-function checkDistraction(): void {
+function checkDistraction(nowMs = Date.now()): void {
+  const tickSeconds = lastCheckAtMs ? Math.max(1, Math.round((nowMs - lastCheckAtMs) / 1_000)) : 60
+  lastCheckAtMs = nowMs
   const live = getCurrentSession()
   const db = getDb()
 
@@ -131,11 +148,11 @@ function checkDistraction(): void {
         bundleId: live.bundleId,
         appName: live.appName,
         focusSessionId: activeFocusSession.id,
-        consecutiveSeconds: 60,
+        consecutiveSeconds: tickSeconds,
         hasAlertedForCurrentRun: false,
       }
     } else {
-      leisureState.consecutiveSeconds += 60
+      leisureState.consecutiveSeconds += tickSeconds
     }
 
     const threshold = Math.max(1, thresholdMinutes) * 60
@@ -185,11 +202,11 @@ function checkDistraction(): void {
       bundleId: live.bundleId,
       appName: live.appName,
       focusSessionId: null,
-      consecutiveSeconds: 60,
+      consecutiveSeconds: tickSeconds,
       hasAlertedForCurrentRun: false,
     }
   } else {
-    leisureState.consecutiveSeconds += 60
+    leisureState.consecutiveSeconds += tickSeconds
   }
 
   const threshold = Math.max(1, thresholdMinutes) * 60
@@ -218,19 +235,33 @@ export function registerDistractionAlerterHandlers(): void {
   })
 }
 
+export function setDistractionAlertWindow(window: BrowserWindow | null): void {
+  navigationWindow = window
+}
+
+export function triggerDistractionCheck(): void {
+  try {
+    checkDistraction()
+  } catch (error) {
+    console.warn('[distraction] triggered check failed:', error)
+  }
+}
+
 export function startDistractionAlerter(): void {
   if (distractionTimer) return
 
   thresholdMinutes = Math.max(1, getSettings().distractionAlertThresholdMinutes ?? DEFAULT_THRESHOLD_MINUTES)
   workStateAccumulatorSeconds = 0
   lastWorkStateBundleId = null
+  lastCheckAtMs = null
   resetLeisureState()
-  checkDistraction()
+  if (!unsubscribeFromTrackingTicks) {
+    unsubscribeFromTrackingTicks = onTrackingTick(() => {
+      triggerDistractionCheck()
+    })
+  }
+  triggerDistractionCheck()
   distractionTimer = setInterval(() => {
-    try {
-      checkDistraction()
-    } catch (err) {
-      console.warn('[distraction] alerter check failed:', err)
-    }
+    triggerDistractionCheck()
   }, 60_000)
 }

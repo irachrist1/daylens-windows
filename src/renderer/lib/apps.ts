@@ -18,6 +18,13 @@ const APP_NAME_ALIASES: Record<string, string> = {
   code: 'VS Code',
   visualstudiocode: 'VS Code',
   claude: 'Claude',
+  chatgptatlas: 'ChatGPT',
+  chatgptdesktop: 'ChatGPT',
+  ticktick: 'TickTick',
+  systemsettings: 'System Settings',
+  daylenswindows: 'Daylens',
+  daylens: 'Daylens',
+  comet: 'Comet',
 }
 
 function toTitleCase(value: string): string {

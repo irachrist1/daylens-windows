@@ -59,10 +59,33 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id),
   role            TEXT    NOT NULL CHECK(role IN ('user', 'assistant')),
   content         TEXT    NOT NULL,
-  created_at      INTEGER NOT NULL
+  created_at      INTEGER NOT NULL,
+  metadata_json   TEXT    NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS ai_conversation_state (
+  conversation_id INTEGER PRIMARY KEY REFERENCES ai_conversations(id) ON DELETE CASCADE,
+  state_json      TEXT    NOT NULL DEFAULT '{}',
+  updated_at      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_surface_summaries (
+  scope_type      TEXT NOT NULL,
+  scope_key       TEXT NOT NULL,
+  job_type        TEXT NOT NULL,
+  title           TEXT,
+  summary_text    TEXT NOT NULL,
+  input_signature TEXT NOT NULL,
+  metadata_json   TEXT NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  PRIMARY KEY (scope_type, scope_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_surface_summaries_job
+  ON ai_surface_summaries (job_type, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS ai_usage_events (
   id TEXT PRIMARY KEY,
@@ -226,7 +249,7 @@ CREATE TABLE IF NOT EXISTS artifact_mentions (
 CREATE INDEX IF NOT EXISTS idx_artifact_mentions_source ON artifact_mentions (source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_mentions_artifact ON artifact_mentions (artifact_id, start_time);
 
--- app_profile_cache was removed in migration v14 (per CLAUDE.md). Cache is
+-- app_profile_cache was removed in migration v14. Cache is
 -- recomputed in-memory by workBlocks.ts; no persistent cache is required.
 
 CREATE TABLE IF NOT EXISTS workflow_signatures (

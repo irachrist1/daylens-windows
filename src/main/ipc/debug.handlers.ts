@@ -5,7 +5,9 @@ import { getCurrentSession, lastClassifyMatch, trackingStatus } from '../service
 import { getBrowserStatus } from '../services/browser'
 import { getRecentAppSessions } from '../db/queries'
 import { getDb } from '../services/database'
-import { getUpdateAvailable } from '../services/updater'
+import { getUpdateAvailable, getUpdaterState } from '../services/updater'
+import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
+import { getTrayDiagnostics } from '../tray'
 
 export function registerDebugHandlers(): void {
   ipcMain.handle(IPC.DEBUG.GET_INFO, () => ({
@@ -18,5 +20,8 @@ export function registerDebugHandlers(): void {
     recentSessions:  getRecentAppSessions(getDb(), 5),
     browserStatus:   getBrowserStatus(),
     updateAvailable: getUpdateAvailable(),
+    updater:         getUpdaterState(),
+    tray:            getTrayDiagnostics(),
+    linuxDesktop:    getLinuxDesktopDiagnostics(),
   }))
 }

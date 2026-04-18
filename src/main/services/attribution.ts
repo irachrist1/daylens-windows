@@ -1,4 +1,4 @@
-// Attribution pipeline (CLAUDE.md, "Attribution Pipeline").
+// Attribution pipeline.
 //
 // Reads from the immutable raw layer (app_sessions, website_visits,
 // activity_state_events) plus the new browser_context_events / file_activity
@@ -18,7 +18,7 @@ import type Database from 'better-sqlite3'
 import { getDb } from './database'
 import os from 'node:os'
 
-// ─── Tunables (CLAUDE.md "Attribution Confidence Rules") ─────────────────────
+// ─── Tunables ────────────────────────────────────────────────────────────────
 export const MIN_CONFIDENCE_TO_ATTRIBUTE = 0.75
 export const MAX_MERGE_GAP_MS = 120_000          // 2 minutes
 export const EXCLUDE_IDLE_OVER_MS = 300_000      // 5 minutes

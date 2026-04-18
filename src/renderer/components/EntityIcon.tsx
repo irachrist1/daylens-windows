@@ -1,6 +1,8 @@
 import type { ArtifactRef } from '@shared/types'
+import { useEffect, useState } from 'react'
 import AppIcon from './AppIcon'
 import { normalizeAppNameKey } from '../lib/apps'
+import { useResolvedIcon } from '../hooks/useResolvedIcon'
 
 type TileSpec = {
   label: string
@@ -115,21 +117,57 @@ function tile(spec: TileSpec, size: number, title: string) {
 
 export default function EntityIcon({
   appName,
+  appInstanceId,
   bundleId,
+  canonicalAppId,
   domain,
+  url,
   artifactType,
   title,
   path,
+  ownerBundleId,
+  ownerAppName,
+  ownerAppInstanceId,
   size = 28,
 }: {
   appName?: string | null
+  appInstanceId?: string | null
   bundleId?: string | null
+  canonicalAppId?: string | null
   domain?: string | null
+  url?: string | null
   artifactType?: ArtifactRef['artifactType']
   title?: string | null
   path?: string | null
+  ownerBundleId?: string | null
+  ownerAppName?: string | null
+  ownerAppInstanceId?: string | null
   size?: number
 }) {
+  const [didError, setDidError] = useState(false)
+  const resolvedArtifactIcon = useResolvedIcon(
+    appName
+      ? null
+      : (artifactType || path || domain || canonicalAppId)
+        ? {
+            kind: 'artifact',
+            artifactType,
+            canonicalAppId,
+            ownerBundleId,
+            ownerAppName,
+            ownerAppInstanceId,
+            path,
+            url,
+            host: domain,
+            title,
+          }
+        : null,
+  )
+
+  useEffect(() => {
+    setDidError(false)
+  }, [artifactType, canonicalAppId, domain, ownerAppInstanceId, ownerAppName, ownerBundleId, path, title, url])
+
   if (appName) {
     const key = normalizeAppNameKey(appName)
     const color = key.includes('claude') || key.includes('dia')
@@ -142,7 +180,9 @@ export default function EntityIcon({
 
     return (
       <AppIcon
+        appInstanceId={appInstanceId}
         bundleId={bundleId}
+        canonicalAppId={canonicalAppId}
         appName={appName}
         size={size}
         fontSize={size <= 22 ? 9 : 10}
@@ -151,12 +191,47 @@ export default function EntityIcon({
     )
   }
 
-  if (artifactType || path || domain) {
-    return tile(
+  if (artifactType || path || domain || canonicalAppId) {
+    const fallbackTile = tile(
       artifactTile(artifactType, title, path, domain),
       size,
       title ?? domain ?? 'Artifact',
     )
+    const iconUrl = didError ? null : resolvedArtifactIcon?.dataUrl ?? null
+
+    if (iconUrl) {
+      return (
+        <img
+          src={iconUrl}
+          alt={title ?? domain ?? 'Artifact'}
+          width={size}
+          height={size}
+          style={{
+            width: size,
+            height: size,
+            display: 'block',
+            objectFit: 'cover',
+            borderRadius: Math.max(8, Math.round(size * 0.28)),
+            flexShrink: 0,
+          }}
+          onError={() => {
+            console.warn('[icons] artifact icon failed to render', {
+              artifactType: artifactType ?? null,
+              canonicalAppId: canonicalAppId ?? null,
+              path: path ?? null,
+              domain: domain ?? null,
+              url: url ?? null,
+              title: title ?? null,
+              source: resolvedArtifactIcon?.source ?? 'miss',
+              cacheKey: resolvedArtifactIcon?.cacheKey ?? null,
+            })
+            setDidError(true)
+          }}
+        />
+      )
+    }
+
+    return fallbackTile
   }
 
   return tile({ label: 'DL', background: '#334155', color: '#e2e8f0' }, size, 'Daylens')

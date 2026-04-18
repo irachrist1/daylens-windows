@@ -1,5 +1,6 @@
-import { ipcMain, app } from 'electron'
+import { ipcMain } from 'electron'
 import {
+  clearBlockLabelOverride,
   setBlockLabelOverride,
   getAppCharacter,
   getAppSummariesForRange,
@@ -22,17 +23,21 @@ import {
 } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
 import { getDb } from '../services/database'
-import { getCurrentSession } from '../services/tracking'
+import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
 import { getBlockDetailPayload } from '../services/workBlocks'
 import { scheduleTimelineAIJobs } from '../services/ai'
+import { resolveIcon } from '../services/iconResolver'
+import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC } from '@shared/types'
+import { getTrackingPermissionState, requestScreenTrackingPermission } from '../services/trackingPermissions'
 import type {
   AppSession,
   WorkSessionPayload,
   WorkSessionApp,
   ActivitySegmentPayload,
   ClientDetailPayload,
+  IconRequest,
   ProjectSummary,
   RollupEntry,
   DayWorkSessionsPayload,
@@ -201,15 +206,21 @@ export function registerDbHandlers(): void {
     return getAppSummariesForRange(getDb(), from, todayTo)
   })
 
-  ipcMain.handle('db:set-category-override', (_e, bundleId: string, category: string) => {
+  ipcMain.handle(IPC.DB.SET_CATEGORY_OVERRIDE, (_e, bundleId: string, category: string) => {
     setCategoryOverride(getDb(), bundleId, category as import('@shared/types').AppCategory)
+    invalidateProjectionScope('timeline', 'category_override')
+    invalidateProjectionScope('apps', 'category_override')
+    invalidateProjectionScope('insights', 'category_override')
   })
 
-  ipcMain.handle('db:clear-category-override', (_e, bundleId: string) => {
+  ipcMain.handle(IPC.DB.CLEAR_CATEGORY_OVERRIDE, (_e, bundleId: string) => {
     clearCategoryOverride(getDb(), bundleId)
+    invalidateProjectionScope('timeline', 'category_override')
+    invalidateProjectionScope('apps', 'category_override')
+    invalidateProjectionScope('insights', 'category_override')
   })
 
-  ipcMain.handle('db:get-category-overrides', () => {
+  ipcMain.handle(IPC.DB.GET_CATEGORY_OVERRIDES, () => {
     return getCategoryOverrides(getDb())
   })
 
@@ -266,9 +277,24 @@ export function registerDbHandlers(): void {
     invalidateProjectionScope('insights', 'block_label_override')
   })
 
+  ipcMain.handle(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, (_e, blockId: string) => {
+    clearBlockLabelOverride(getDb(), blockId)
+    invalidateProjectionScope('timeline', 'block_label_override')
+    invalidateProjectionScope('apps', 'block_label_override')
+    invalidateProjectionScope('insights', 'block_label_override')
+  })
+
   // Returns the current in-flight session (not yet flushed to DB) so the renderer
   // can display live totals without waiting for the next app switch.
   ipcMain.handle(IPC.TRACKING.GET_LIVE, () => getCurrentSession())
+  ipcMain.handle(IPC.TRACKING.GET_DIAGNOSTICS, () => ({
+    platform: process.platform,
+    trackingStatus: { ...trackingStatus },
+    linuxTracking: getLinuxTrackingDiagnostics(),
+    linuxDesktop: getLinuxDesktopDiagnostics(),
+  }))
+  ipcMain.handle(IPC.TRACKING.GET_PERMISSION_STATE, () => getTrackingPermissionState())
+  ipcMain.handle(IPC.TRACKING.REQUEST_SCREEN_PERMISSION, async () => requestScreenTrackingPermission())
 
   ipcMain.handle(IPC.TRACKING.GET_PROCESS_METRICS, () => {
     return getLatestSnapshot()
@@ -442,35 +468,8 @@ export function registerDbHandlers(): void {
     invalidateProjectionScope('insights', 'session_reassigned')
   })
 
-  // Returns a base64 PNG data URL for a given bundleId/exe path, or null if unavailable.
-  // On Windows the bundleId is the full exe path — passed directly to getFileIcon.
-  // On macOS the bundleId is a bundle identifier (e.g. 'com.anthropic.claude') — resolved
-  // to the .app path via mdfind before calling getFileIcon.
-  ipcMain.handle('app:get-icon', async (_e, bundleId: string): Promise<string | null> => {
-    try {
-      let filePath = bundleId
-
-      if (process.platform === 'darwin' && !bundleId.startsWith('/')) {
-        const { execFile } = await import('node:child_process')
-        const { promisify } = await import('node:util')
-        const execAsync = promisify(execFile)
-        try {
-          const { stdout } = await execAsync('mdfind', [
-            `kMDItemCFBundleIdentifier == '${bundleId}'`,
-          ])
-          const resolved = stdout.trim().split('\n').find((p) => p.endsWith('.app'))
-          if (!resolved) return null
-          filePath = resolved
-        } catch {
-          return null
-        }
-      }
-
-      const icon = await app.getFileIcon(filePath, { size: 'normal' })
-      return icon.toDataURL()
-    } catch {
-      return null
-    }
+  ipcMain.handle(IPC.ICONS.RESOLVE, async (_e, payload: IconRequest) => {
+    return resolveIcon(payload)
   })
 }
 

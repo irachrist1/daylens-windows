@@ -6,8 +6,8 @@ import type { ForgeConfig } from '@electron-forge/shared-types'
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    // App name shown in taskbar and window title on Windows
-    name: 'DaylensWindows',
+    // App name shown in the packaged shell on macOS and Windows.
+    name: 'Daylens',
     executableName: 'daylens',
     icon: './build/icon',
     appCopyright: `Copyright © ${new Date().getFullYear()} Daylens`,

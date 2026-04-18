@@ -1,18 +1,43 @@
 import { ipcMain } from 'electron'
+import { updateAIMessageFeedback } from '../db/queries'
+import { getDb } from '../services/database'
 import {
   clearAIHistory,
   detectCLITools,
+  getAppNarrative,
+  generateDaySummary,
   generateWorkBlockInsight,
   getAIHistory,
+  getWeekReview,
   sendMessage,
   suggestAppCategory,
   testCLITool,
 } from '../services/ai'
-import { IPC, type WorkContextBlock } from '@shared/types'
+import { IPC, type AIChatSendRequest, type WorkContextBlock } from '@shared/types'
 
 export function registerAIHandlers(): void {
-  ipcMain.handle(IPC.AI.SEND_MESSAGE, async (_e, message: string) => {
-    return sendMessage(message)
+  ipcMain.handle(IPC.AI.SEND_MESSAGE, async (event, payload: AIChatSendRequest) => {
+    return sendMessage(payload, {
+      onStreamEvent: (streamEvent) => {
+        event.sender.send(IPC.AI.STREAM_EVENT, streamEvent)
+      },
+    })
+  })
+
+  ipcMain.handle(IPC.AI.SET_MESSAGE_FEEDBACK, (_e, payload: { messageId: number; rating: 'up' | 'down' | null }) => {
+    return updateAIMessageFeedback(getDb(), payload.messageId, payload.rating)
+  })
+
+  ipcMain.handle(IPC.AI.GENERATE_DAY_SUMMARY, async (_e, date: string) => {
+    return generateDaySummary(date)
+  })
+
+  ipcMain.handle(IPC.AI.GET_WEEK_REVIEW, async (_e, payload: { weekStart: string }) => {
+    return getWeekReview(payload.weekStart)
+  })
+
+  ipcMain.handle(IPC.AI.GET_APP_NARRATIVE, async (_e, payload: { canonicalAppId: string; days?: number }) => {
+    return getAppNarrative(payload.canonicalAppId, payload.days ?? 7)
   })
 
   ipcMain.handle(IPC.AI.GET_HISTORY, () => {

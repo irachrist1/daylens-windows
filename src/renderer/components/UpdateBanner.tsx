@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { ANALYTICS_EVENT } from '@shared/analytics'
 import { ipc } from '../lib/ipc'
+import { track } from '../lib/analytics'
 import type { UpdaterStatusInfo } from '../../preload/index'
 import { extractReleaseHighlights } from '../lib/releaseNotes'
 
@@ -153,7 +155,14 @@ export default function UpdateBanner() {
         </span>
       )}
       <button
-        onClick={() => void ipc.updater.install()}
+        onClick={() => {
+          track(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
+            surface: 'banner',
+            trigger: 'banner',
+            version: update.version ?? undefined,
+          })
+          void ipc.updater.install()
+        }}
         style={{
           padding: '6px 12px',
           borderRadius: 999,
