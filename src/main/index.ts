@@ -43,7 +43,7 @@ process.on('unhandledRejection', (reason) => {
   } catch { /* analytics may not be ready */ }
 })
 
-import { BrowserWindow, app, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -71,30 +71,23 @@ import { startProcessMonitor, stopProcessMonitor } from './services/processMonit
 import { reconcileOnboardingState } from './services/onboarding'
 import { shouldStartTrackingForSettings } from './lib/onboardingState'
 import { IPC } from '@shared/types'
+import {
+  APP_DISPLAY_NAME,
+  chooseUserDataPath,
+  createBackupManifest,
+  isHealthyUserDataState,
+  selectLatestRestorableBackup,
+} from './services/userData'
 
-const APP_DISPLAY_NAME = 'Daylens'
 const APP_USER_MODEL_ID = 'com.daylens.desktop'
-const USER_DATA_DIR = process.platform === 'darwin' ? 'Daylens Desktop' : APP_DISPLAY_NAME
-const LEGACY_USER_DATA_DIR = 'DaylensWindows'
 const SMOKE_TEST = process.env.DAYLENS_SMOKE_TEST === '1'
 const SMOKE_REPORT_PATH = process.env.DAYLENS_SMOKE_REPORT_PATH?.trim() || path.join(os.tmpdir(), 'daylens-smoke-report.json')
 
 function configureUserDataPath(): void {
   const appDataPath = app.getPath('appData')
-  const preferredPath = path.join(appDataPath, USER_DATA_DIR)
-  const legacyPath = path.join(appDataPath, LEGACY_USER_DATA_DIR)
-
-  if (fs.existsSync(preferredPath)) {
-    app.setPath('userData', preferredPath)
-    return
-  }
-
-  if (fs.existsSync(legacyPath)) {
-    app.setPath('userData', legacyPath)
-    return
-  }
-
-  app.setPath('userData', preferredPath)
+  const selectedPath = chooseUserDataPath(appDataPath, process.platform)
+  app.setPath('userData', selectedPath)
+  console.log('[app] using userData path', selectedPath)
 }
 
 app.setName(APP_DISPLAY_NAME)
@@ -132,6 +125,88 @@ let isQuitting = false
 let backgroundServicesStarted = false
 // Set to latest version string when a newer release is detected
 export let updateAvailable: string | null = null
+
+function navigateMainWindow(route?: string): void {
+  if (!mainWindow || mainWindow.isDestroyed() || !route) return
+
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.send('navigate', route)
+    })
+    return
+  }
+
+  mainWindow.webContents.send('navigate', route)
+}
+
+function showMainWindow(route?: string): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  navigateMainWindow(route)
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  if (!mainWindow.isVisible()) {
+    mainWindow.show()
+  }
+
+  mainWindow.focus()
+}
+
+function hideMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!mainWindow.isVisible()) return
+  mainWindow.hide()
+}
+
+function installApplicationMenu(): void {
+  if (process.platform !== 'darwin') return
+
+  const menu = Menu.buildFromTemplate([
+    {
+      label: APP_DISPLAY_NAME,
+      submenu: [
+        { role: 'about', label: `About ${APP_DISPLAY_NAME}` },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide', label: `Hide ${APP_DISPLAY_NAME}` },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { label: `Quit ${APP_DISPLAY_NAME}`, accelerator: 'Command+Q', click: () => { app.quit() } },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { label: `Show ${APP_DISPLAY_NAME}`, click: () => showMainWindow() },
+        { label: `Hide ${APP_DISPLAY_NAME}`, click: () => hideMainWindow() },
+        { type: 'separator' },
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        { role: 'front' },
+      ],
+    },
+  ])
+
+  Menu.setApplicationMenu(menu)
+}
 
 function writeSmokeReport(report: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(SMOKE_REPORT_PATH), { recursive: true })
@@ -222,7 +297,13 @@ function shouldUseTrayBehavior(): boolean {
 
 function ensureTray(): void {
   if (mainWindow && shouldUseTrayBehavior()) {
-    createTray(mainWindow)
+    createTray({
+      mainWindow,
+      isWindowVisible: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()),
+      showMainWindow: (route?: string) => showMainWindow(route),
+      hideMainWindow: () => hideMainWindow(),
+      quitApp: () => { app.quit() },
+    })
   }
 }
 
@@ -286,6 +367,9 @@ async function backupUserDataForUpdate(): Promise<void> {
       fs.rmSync(path.join(backupRoot, oldest), { recursive: true, force: true })
     }
 
+    const manifest = createBackupManifest(userDataPath, app.getVersion())
+    fs.writeFileSync(path.join(backupDir, 'backup-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+
     console.log('[update] backed up user data to', backupDir)
   } catch (err) {
     console.warn('[update] backup failed:', err)
@@ -313,37 +397,17 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
   // Only recover if this is a first launch after a version change
   if (!lastVersion || lastVersion === currentVersion) return
 
-  // Check whether config.json exists and has completed-onboarding data
-  const configPath = path.join(userDataPath, 'config.json')
-  let onboardingComplete = false
-  try {
-    const raw = fs.readFileSync(configPath, 'utf8')
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    onboardingComplete = !!parsed.onboardingComplete
-  } catch { /* config missing or unreadable — treat as blank */ }
-
-  if (onboardingComplete) return  // data survived the update, nothing to do
+  if (isHealthyUserDataState(userDataPath)) return
 
   // Settings look blank after an update. Restore from the most recent valid backup.
   const backupRoot = path.join(userDataPath, 'pre-update-backups')
   try {
-    const entries = fs.readdirSync(backupRoot).sort().reverse()
-    for (const entry of entries) {
-      const backupDir = path.join(backupRoot, entry)
-      const backupConfigPath = path.join(backupDir, 'config.json')
-      if (!fs.existsSync(backupConfigPath)) continue
-
-      let backupConfig: Record<string, unknown>
-      try {
-        backupConfig = JSON.parse(fs.readFileSync(backupConfigPath, 'utf8')) as Record<string, unknown>
-      } catch { continue }
-
-      if (!backupConfig.onboardingComplete) continue
-
-      // Valid backup found — restore all files from it
-      console.log('[update] restoring user data from backup after upgrade:', entry)
+    const backupDir = selectLatestRestorableBackup(backupRoot)
+    if (backupDir) {
+      console.log('[update] restoring user data from backup after upgrade:', path.basename(backupDir))
       for (const file of fs.readdirSync(backupDir)) {
-        if (file === 'pre-update-backups') continue  // never restore nested backups
+        if (file === 'pre-update-backups') continue
+        if (file === 'backup-manifest.json') continue
         try {
           fs.cpSync(path.join(backupDir, file), path.join(userDataPath, file), {
             recursive: true,
@@ -551,7 +615,15 @@ function createWindow(): BrowserWindow {
   win.on('close', (e) => {
     if (!isQuitting && shouldUseTrayBehavior() && hasTray()) {
       e.preventDefault()
-      win.hide()
+      hideMainWindow()
+    }
+  })
+
+  win.on('closed', () => {
+    if (mainWindow === win) {
+      mainWindow = null
+      setDailySummaryNotificationWindow(null)
+      setDistractionAlertWindow(null)
     }
   })
 
@@ -584,7 +656,7 @@ ipcMain.on('window:maximize', () => {
 ipcMain.on('window:close', () => {
   if (!mainWindow) return
   if (!isQuitting && shouldUseTrayBehavior() && hasTray()) {
-    mainWindow.hide()
+    hideMainWindow()
     return
   }
   mainWindow.close()
@@ -631,6 +703,7 @@ app.whenReady()
     await initSettings()
     const reconciledSettings = await reconcileOnboardingState()
     await initAnalytics()
+    installApplicationMenu()
     if (app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
       await syncLinuxLaunchOnLogin(getSettings().launchOnLogin)
@@ -667,6 +740,7 @@ app.whenReady()
 
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
+    setDistractionAlertWindow(mainWindow)
     ensureTray()
     initUpdater(mainWindow)
     registerUpdaterShutdown(async () => {
@@ -686,7 +760,7 @@ app.whenReady()
   })
 
 app.on('window-all-closed', () => {
-  if (!shouldUseTrayBehavior()) {
+  if (!shouldUseTrayBehavior() || (process.platform !== 'darwin' && !hasTray())) {
     isQuitting = true
     void (async () => {
       await shutdownApp({ awaitFinalSync: false })
@@ -699,18 +773,15 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
+    setDistractionAlertWindow(mainWindow)
     ensureTray()
     startBackgroundServices()
   } else {
-    mainWindow?.show()
+    showMainWindow()
   }
 })
 
 // Focus the existing window if a second instance tries to open
 app.on('second-instance', () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
-  }
+  showMainWindow()
 })

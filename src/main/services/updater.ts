@@ -52,7 +52,7 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
   if (process.platform === 'win32') {
     return {
       supported: true,
-      message: null,
+      message: 'Packaged Windows installs can download updates in place. Unsigned installers may still trigger SmartScreen until Daylens ships with a trusted code-signing certificate and reputation.',
       packageType: null,
     }
   }
@@ -64,7 +64,7 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
     // download + download-progress + downloaded states still flow here.
     return {
       supported: true,
-      message: null,
+      message: 'Automatic updates are intended for signed Daylens release builds. Local ad-hoc packages can still surface update metadata, but they are not treated as end-to-end updater proof.',
       packageType: null,
     }
   }

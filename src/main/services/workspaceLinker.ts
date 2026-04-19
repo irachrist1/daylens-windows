@@ -16,6 +16,7 @@ import {
   clearAllCredentials,
 } from './credentials'
 import { BIP39_ENGLISH } from './bip39wordlist'
+import { getWorkspaceDeviceLabel } from '@shared/platformExpectations'
 
 // Validate BIP39 wordlist integrity at module load time
 if (BIP39_ENGLISH.length !== 2048) {
@@ -73,7 +74,7 @@ export async function createWorkspace(): Promise<WorkspaceResult> {
   const body = {
     recoveryKeyHash,
     deviceId,
-    displayName: os.hostname() || 'This PC',
+    displayName: getWorkspaceDeviceLabel(os.hostname()),
     platform: currentSyncPlatform(),
   }
 
@@ -128,7 +129,7 @@ export async function recoverWorkspace(mnemonic: string): Promise<string> {
   const body = {
     recoveryKeyHash,
     deviceId,
-    displayName: os.hostname() || 'This PC',
+    displayName: getWorkspaceDeviceLabel(os.hostname()),
     platform: currentSyncPlatform(),
   }
 

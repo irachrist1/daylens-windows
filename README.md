@@ -19,7 +19,7 @@ This repository is historically named `daylens-windows`, but the Electron deskto
 - `Onboarding` for first-run tracking setup and proof of capture
 - `Timeline` for reconstructed work blocks, prior days, week view, and artifact evidence
 - `Apps` for app-level context, paired tools, and the work happening inside them
-- `AI` for grounded summaries, follow-up questions, freeform work-history queries, and report/export generation
+- `AI` for grounded summaries, daily/weekly/monthly recap experiences, follow-up questions, freeform work-history queries, and report/export generation
 - `Settings` for tracking, providers, notifications, privacy, updates, and appearance
 
 Current implementation gaps and near-term product backlog live in [docs/ISSUES.md](docs/ISSUES.md). Keep feature status there instead of duplicating it across other docs.
@@ -30,10 +30,11 @@ Current implementation gaps and near-term product backlog live in [docs/ISSUES.m
 - Cross-platform foreground-window tracking, including Linux compositor-aware fallbacks and desktop-entry cleanup upon review
 - Browser history ingestion for Chromium browsers on both platforms, plus Firefox on Windows
 - Cross-platform icon resolution for apps, sites, files, and artifacts
-- Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, AI-generated report/export artifacts, and week/app summaries implemented pending verification
+- Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, deterministic daily/weekly/monthly recap cards, AI-generated report/export artifacts, and week/app summaries implemented pending verification
 - Persistent AI chat threads and artifact library inside the AI surface (thread switcher, artifacts strip with preview / open / export) implemented pending verification
 - Evidence-grounded focus score (coherence + deep-work density + artifact progress + demoted context-switching penalty) implemented pending verification
-- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, explicit Anthropic / OpenAI model overrides, and sparse app category overrides implemented pending verification
+- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, truthful platform-specific launch / quick-access / install expectations, explicit Anthropic / OpenAI model overrides, and sparse app category overrides implemented pending verification
+- macOS shell / release hardening for menu bar UX, legacy `userData` preservation, and signed package configuration implemented pending verification
 - Packaged macOS, Windows, and Linux build pipelines upon review
 
 Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md](docs/ISSUES.md), including what was manually validated on macOS versus what still remains implemented pending verification on Windows and Linux.

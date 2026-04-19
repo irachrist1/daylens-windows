@@ -48,6 +48,7 @@ const DEFAULTS: AppSettings = {
   dailySummaryEnabled: true,
   morningNudgeEnabled: true,
   distractionAlertThresholdMinutes: 10,
+  distractionAlertsEnabled: false,
 }
 
 export function getSettings(): AppSettings {
@@ -87,6 +88,7 @@ export function getSettings(): AppSettings {
     dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
+    distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', false) as boolean),
   }
 }
 
@@ -116,7 +118,7 @@ export async function initSettings(): Promise<void> {
 // ─── AI provider API keys — stored in OS credential vault, never in plain-text ─
 
 const KEYTAR_SERVICE = 'Daylens Desktop'
-const LEGACY_KEYTAR_SERVICES = ['DaylensWindows']
+const LEGACY_KEYTAR_SERVICES = ['Daylens', 'DaylensWindows']
 const KEYTAR_ACCOUNTS: Record<'anthropic' | 'openai' | 'google', string> = {
   anthropic: 'anthropic-api-key',
   openai: 'openai-api-key',

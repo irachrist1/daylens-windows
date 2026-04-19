@@ -14,6 +14,8 @@ const mac = {
   icon: 'build/icon.icns',
   category: 'public.app-category.productivity',
   artifactName: 'Daylens-${version}-${arch}.${ext}',
+  hardenedRuntime: true,
+  gatekeeperAssess: false,
 }
 
 const linux = {

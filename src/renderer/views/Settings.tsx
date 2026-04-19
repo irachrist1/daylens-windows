@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
+import {
+  getInstallUpdateExpectation,
+  getLaunchOnLoginDescription,
+  getQuickAccessExpectation,
+} from '@shared/platformExpectations'
 import type {
   AIProvider,
   AIProviderMode,
@@ -392,12 +397,16 @@ function UpdatesSection() {
   const [status, setStatus] = useState<UpdaterStatusInfo | null>(null)
   const [checking, setChecking] = useState(false)
   const [currentVersion, setCurrentVersion] = useState<string | null>(null)
+  const [platform, setPlatform] = useState<NodeJS.Platform | null>(null)
 
   useEffect(() => {
     void ipc.updater.getStatus().then((info) => {
       setStatus(info)
       if (info.version) setCurrentVersion((prev) => prev ?? info.version)
     })
+    void ipc.tracking.getDiagnostics()
+      .then((diagnostics) => setPlatform((diagnostics as TrackingDiagnosticsPayload | null)?.platform ?? null))
+      .catch(() => null)
     const cleanup = ipc.updater.onStatus((info) => setStatus(info))
     return cleanup
   }, [])
@@ -418,6 +427,7 @@ function UpdatesSection() {
 
   const isDownloaded = status?.status === 'downloaded'
   const isBusy = checking || status?.status === 'checking' || status?.status === 'downloading' || status?.status === 'installing'
+  const installCopy = getInstallUpdateExpectation(platform)
 
   return (
     <SettingsSection
@@ -479,6 +489,21 @@ function UpdatesSection() {
             </div>
           }
         />
+        {status?.supportMessage && (
+          <div style={infoPanelStyle}>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+              {status.supportMessage}
+            </div>
+          </div>
+        )}
+        <div style={infoPanelStyle}>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+            {installCopy.title}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+            {installCopy.body}
+          </div>
+        </div>
       </div>
     </SettingsSection>
   )
@@ -708,6 +733,9 @@ export default function Settings() {
   const linuxBackendLabel = trackingDiagnostics?.trackingStatus.lastResolvedWindow?.backend
     ?? trackingDiagnostics?.trackingStatus.moduleSource
     ?? null
+  const currentPlatform = trackingDiagnostics?.platform ?? null
+  const quickAccessCopy = getQuickAccessExpectation(currentPlatform)
+  const launchOnLoginDescription = getLaunchOnLoginDescription(currentPlatform)
 
   return (
     <div style={{ padding: '30px 32px 48px', maxWidth: 1080 }}>
@@ -732,9 +760,17 @@ export default function Settings() {
             />
             <SettingsRow
               title="Launch on login"
-              description="Start Daylens on boot so tracking survives restarts."
+              description={launchOnLoginDescription}
               control={<Toggle checked={settings.launchOnLogin} onChange={(value) => void persist({ launchOnLogin: value })} />}
             />
+            <div style={infoPanelStyle}>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                {quickAccessCopy.title}
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+                {quickAccessCopy.body}
+              </div>
+            </div>
             {trackingDiagnostics?.platform === 'linux' && linuxTracking && (
               <div style={infoPanelStyle}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
@@ -1173,6 +1209,13 @@ export default function Settings() {
                 />
               }
             />
+            {trackingDiagnostics?.platform === 'linux' && linuxDesktop && !linuxDesktop.notificationSupported && (
+              <div style={infoPanelStyle}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+                  Desktop notifications are unavailable in this Linux session right now, so Daylens can keep tracking but distraction alerts and recaps may not surface as native notifications until the session notification service is available.
+                </div>
+              </div>
+            )}
           </div>
         </SettingsSection>
 

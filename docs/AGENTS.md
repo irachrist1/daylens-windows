@@ -50,6 +50,22 @@ Always build in this order:
 
 If tracking or persistence is broken, stop and fix that before polishing secondary UI.
 
+## Cross-Platform Parity
+
+Daylens ships as one desktop product across macOS, Windows, and Linux.
+
+Hard rule:
+
+- shared functionality should ship with cross-platform parity, not as a macOS-only idea that gets backfilled later
+- truly platform-native surfaces may differ in implementation, but should still preserve parity of intent and user value
+- when work is intentionally platform-specific, contributors must document what the equivalent Windows and Linux behavior is, or explicitly note that parity is still pending in `docs/ISSUES.md`
+- do not mark a shared capability as done if it only feels finished on one platform
+
+Examples:
+
+- a DMG drag-to-Applications flow can be macOS-specific, but Windows and Linux still need equally intentional install/update expectations for their own packaging surfaces
+- a macOS menu bar extra does not require identical Windows/Linux UI, but those platforms should still get the equivalent quick-access or tray utility if that capability is meant to be product-critical
+
 ## Navigation Contract
 
 Top-level navigation stays minimal and universal:

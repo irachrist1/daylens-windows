@@ -1,41 +1,91 @@
 <svg width="1320" height="840" viewBox="0 0 1320 840" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="bg" x1="160" y1="80" x2="1180" y2="780" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#111A27"/>
-      <stop offset="1" stop-color="#091017"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1320" y2="840" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10191F"/>
+      <stop offset="0.55" stop-color="#0A121A"/>
+      <stop offset="1" stop-color="#06090F"/>
     </linearGradient>
-    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(280 180) rotate(39.8) scale(420 310)">
-      <stop stop-color="#4FDCC8" stop-opacity="0.28"/>
+
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(360 420) scale(420 380)">
+      <stop stop-color="#4FDCC8" stop-opacity="0.20"/>
+      <stop offset="0.6" stop-color="#4FDCC8" stop-opacity="0.035"/>
       <stop offset="1" stop-color="#4FDCC8" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1020 660) rotate(139.4) scale(420 320)">
-      <stop stop-color="#7DBFFF" stop-opacity="0.30"/>
+
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 420) scale(420 380)">
+      <stop stop-color="#7DBFFF" stop-opacity="0.18"/>
+      <stop offset="0.6" stop-color="#7DBFFF" stop-opacity="0.035"/>
       <stop offset="1" stop-color="#7DBFFF" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="line" x1="410" y1="420" x2="910" y2="420" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7DBFFF" stop-opacity="0.12"/>
-      <stop offset="0.5" stop-color="#D6E5FF" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#4FDCC8" stop-opacity="0.12"/>
+
+    <linearGradient id="track" x1="470" y1="720" x2="860" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7DBFFF" stop-opacity="0.05"/>
+      <stop offset="0.35" stop-color="#D6E5FF" stop-opacity="0.55"/>
+      <stop offset="0.75" stop-color="#A7E8DC" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#4FDCC8" stop-opacity="0.95"/>
     </linearGradient>
+
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.018 0"/>
+      <feComposite in2="SourceGraphic" operator="in"/>
+    </filter>
   </defs>
 
-  <rect width="1320" height="840" rx="44" fill="url(#bg)"/>
-  <rect width="1320" height="840" rx="44" fill="url(#glowA)"/>
-  <rect width="1320" height="840" rx="44" fill="url(#glowB)"/>
+  <!-- Base canvas -->
+  <rect width="1320" height="840" fill="url(#bg)"/>
+  <rect width="1320" height="840" fill="url(#glowA)"/>
+  <rect width="1320" height="840" fill="url(#glowB)"/>
+  <rect width="1320" height="840" fill="#ffffff" opacity="0.014" filter="url(#grain)"/>
 
-  <g opacity="0.9">
-    <text x="140" y="170" fill="#EAF3FF" font-family="SF Pro Display, Inter, sans-serif" font-size="74" font-weight="700" letter-spacing="-2.2">
-      Daylens
-    </text>
-    <text x="140" y="236" fill="#9EB6CC" font-family="SF Pro Display, Inter, sans-serif" font-size="28" font-weight="450">
-      Drag Daylens into Applications to install
-    </text>
-    <text x="140" y="292" fill="#70859A" font-family="SF Pro Text, Inter, sans-serif" font-size="22" font-weight="400">
-      Local-first work intelligence for your desktop
-    </text>
+  <!-- Header: wordmark + quiet tagline, centered -->
+  <g text-anchor="middle">
+    <text x="660" y="148"
+          fill="#EEF4FC"
+          font-family="SF Pro Display, -apple-system, Inter, sans-serif"
+          font-size="62"
+          font-weight="620"
+          letter-spacing="-1.8">Daylens</text>
+    <text x="660" y="196"
+          fill="#8EA2B8"
+          font-family="SF Pro Text, -apple-system, Inter, sans-serif"
+          font-size="20"
+          font-weight="440"
+          letter-spacing="0.2">A calmer record of how you actually work.</text>
   </g>
 
-  <rect x="120" y="330" width="1080" height="360" rx="34" fill="rgba(255,255,255,0.015)" stroke="rgba(173,198,255,0.10)"/>
-  <path d="M435 510H885" stroke="url(#line)" stroke-width="8" stroke-linecap="round"/>
-  <path d="M830 468L898 510L830 552" stroke="#D6E5FF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  <!-- Drag track, placed below the Finder icon row so it never collides with Daylens.app / Applications -->
+  <g opacity="0.94">
+    <line x1="470" y1="720" x2="830" y2="720"
+          stroke="url(#track)"
+          stroke-width="2.4"
+          stroke-linecap="round"
+          stroke-dasharray="2 9"/>
+    <path d="M820 706L852 720L820 734"
+          stroke="#E6F2FF"
+          stroke-width="2.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          opacity="0.95"/>
+  </g>
+
+  <text x="660" y="758"
+        text-anchor="middle"
+        fill="#6D8499"
+        font-family="SF Pro Text, -apple-system, Inter, sans-serif"
+        font-size="12.5"
+        font-weight="520"
+        letter-spacing="2.8"
+        text-transform="uppercase">DRAG DAYLENS · INTO APPLICATIONS</text>
+
+  <!-- Understated bottom signature -->
+  <g opacity="0.55">
+    <circle cx="648" cy="800" r="2.6" fill="#4FDCC8"/>
+    <text x="660" y="804"
+          fill="#55687C"
+          font-family="SF Pro Text, -apple-system, Inter, sans-serif"
+          font-size="10.5"
+          font-weight="500"
+          letter-spacing="1.8">LOCAL-FIRST · PRIVATE BY DEFAULT</text>
+  </g>
 </svg>

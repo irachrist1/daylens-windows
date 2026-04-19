@@ -13,6 +13,7 @@
 - Scheduled or recurring evidence packs on top of the wired core reports/export flow
 - Richer artifact kinds in the AI surface (drafts, outline threads, pinned summaries) on top of the V1 thread + artifact persistence
 - Automatic titling / summarization for AI threads once multi-turn usage stabilises
+- Richer seasonal recap storytelling and shareable recap packs on top of the shipped daily / weekly / monthly AI recap surface
 - Stronger meeting and collaboration detection
 
 ## Intelligence

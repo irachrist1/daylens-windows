@@ -119,6 +119,14 @@ function fireAlert(appName: string, minutes: number, offPlan: boolean): void {
 }
 
 function checkDistraction(nowMs = Date.now()): void {
+  if (!(getSettings().distractionAlertsEnabled ?? false)) {
+    workStateAccumulatorSeconds = 0
+    lastWorkStateBundleId = null
+    lastCheckAtMs = nowMs
+    resetLeisureState()
+    return
+  }
+
   const tickSeconds = lastCheckAtMs ? Math.max(1, Math.round((nowMs - lastCheckAtMs) / 1_000)) : 60
   lastCheckAtMs = nowMs
   const live = getCurrentSession()

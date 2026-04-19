@@ -5,7 +5,7 @@
 import { ensureSecureStore, getSecureStore } from './secureStore'
 
 const SERVICE = 'Daylens Desktop'
-const LEGACY_SERVICES = ['DaylensWindows']
+const LEGACY_SERVICES = ['Daylens', 'DaylensWindows']
 
 // Key names stored in the OS credential vault
 const KEY_WORKSPACE_ID = 'workspaceId'

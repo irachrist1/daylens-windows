@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { ANALYTICS_EVENT, blockCountBucket, classifyAIOutputIntent, trackedTimeBucket } from '@shared/analytics'
 import type {
@@ -17,6 +17,7 @@ import { track } from '../lib/analytics'
 import { ipc } from '../lib/ipc'
 import { formatDuration, todayString } from '../lib/format'
 import { AI_PROVIDER_META, getSelectedModel } from '../lib/aiProvider'
+import { buildRecapSummaries, recapDateWindow, type RecapChapter, type RecapPeriod, type RecapSummary } from '../lib/recap'
 import ConnectAI from '../components/ConnectAI'
 
 type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
@@ -135,6 +136,520 @@ function MarkdownMessage({ content }: { content: string }) {
   return (
     <div className="flex flex-col gap-2.5">
       {blocks.map((block, index) => <MarkdownBlock key={index} text={block} blockKey={index} />)}
+    </div>
+  )
+}
+
+function RecapMetricCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: string
+  detail: string
+}) {
+  return (
+    <div style={{
+      borderRadius: 16,
+      border: '1px solid var(--color-border-ghost)',
+      background: 'rgba(255, 255, 255, 0.03)',
+      padding: '14px 14px 12px',
+      minHeight: 96,
+    }}>
+      <div style={{
+        fontSize: 10.5,
+        fontWeight: 800,
+        letterSpacing: '0.10em',
+        textTransform: 'uppercase',
+        color: 'var(--color-text-tertiary)',
+      }}>
+        {label}
+      </div>
+      <div style={{
+        fontSize: 22,
+        fontWeight: 760,
+        letterSpacing: '-0.03em',
+        color: 'var(--color-text-primary)',
+        marginTop: 10,
+      }}>
+        {value}
+      </div>
+      <div style={{
+        fontSize: 12.5,
+        lineHeight: 1.55,
+        color: 'var(--color-text-secondary)',
+        marginTop: 6,
+      }}>
+        {detail}
+      </div>
+    </div>
+  )
+}
+
+function RecapList({
+  title,
+  items,
+  emptyLabel,
+}: {
+  title: string
+  items: RecapSummary['topWorkstreams']
+  emptyLabel: string
+}) {
+  return (
+    <div style={{
+      borderRadius: 16,
+      border: '1px solid var(--color-border-ghost)',
+      background: 'rgba(255, 255, 255, 0.03)',
+      padding: '14px 14px 12px',
+    }}>
+      <div style={{
+        fontSize: 10.5,
+        fontWeight: 800,
+        letterSpacing: '0.10em',
+        textTransform: 'uppercase',
+        color: 'var(--color-text-tertiary)',
+        marginBottom: 12,
+      }}>
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <div style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)' }}>
+          {emptyLabel}
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 10 }}>
+          {items.map((item) => (
+            <div
+              key={`${title}:${item.label}`}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) auto',
+                gap: 10,
+                alignItems: 'start',
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{
+                  fontSize: 13,
+                  fontWeight: 650,
+                  color: 'var(--color-text-primary)',
+                  lineHeight: 1.4,
+                }}>
+                  {item.label}
+                </div>
+                <div style={{
+                  fontSize: 11.5,
+                  color: 'var(--color-text-tertiary)',
+                  marginTop: 3,
+                }}>
+                  {item.detail}
+                </div>
+              </div>
+              <div style={{
+                fontSize: 12.5,
+                fontWeight: 700,
+                color: 'var(--color-text-secondary)',
+                whiteSpace: 'nowrap',
+              }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RecapTrend({
+  points,
+}: {
+  points: RecapSummary['trend']
+}) {
+  if (points.length <= 1) return null
+
+  const maxTracked = Math.max(...points.map((point) => point.trackedSeconds), 1)
+
+  return (
+    <div style={{
+      borderRadius: 16,
+      border: '1px solid var(--color-border-ghost)',
+      background: 'rgba(255, 255, 255, 0.03)',
+      padding: '14px 14px 12px',
+    }}>
+      <div style={{
+        fontSize: 10.5,
+        fontWeight: 800,
+        letterSpacing: '0.10em',
+        textTransform: 'uppercase',
+        color: 'var(--color-text-tertiary)',
+        marginBottom: 12,
+      }}>
+        Day By Day
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${points.length}, minmax(0, 1fr))`,
+        gap: 8,
+        alignItems: 'end',
+        minHeight: 132,
+      }}>
+        {points.map((point) => {
+          const trackedHeight = point.trackedSeconds > 0 ? Math.max(12, (point.trackedSeconds / maxTracked) * 92) : 4
+          const focusHeight = point.trackedSeconds > 0
+            ? Math.max(6, trackedHeight * (point.focusSeconds / Math.max(point.trackedSeconds, 1)))
+            : 0
+          return (
+            <div key={point.date} style={{ display: 'grid', gap: 8, justifyItems: 'center' }}>
+              <div style={{
+                width: '100%',
+                maxWidth: 42,
+                height: 96,
+                display: 'flex',
+                alignItems: 'end',
+                justifyContent: 'center',
+              }}>
+                <div style={{
+                  width: '100%',
+                  borderRadius: 14,
+                  border: '1px solid rgba(173, 198, 255, 0.18)',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  overflow: 'hidden',
+                  height: trackedHeight,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'end',
+                }}>
+                  {focusHeight > 0 && (
+                    <div style={{
+                      height: focusHeight,
+                      background: 'linear-gradient(180deg, rgba(114, 234, 210, 0.95), rgba(56, 189, 248, 0.86))',
+                    }} />
+                  )}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--color-text-secondary)' }}>
+                  {point.shortLabel}
+                </div>
+                <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                  {point.trackedSeconds > 0 ? formatDuration(point.trackedSeconds) : '0m'}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function RecapChapterBlock({
+  chapter,
+  index,
+  total,
+}: {
+  chapter: RecapChapter
+  index: number
+  total: number
+}) {
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '44px 1fr',
+      gap: 16,
+      alignItems: 'start',
+      padding: '16px 22px',
+      borderBottom: index < total - 1 ? '1px solid rgba(173, 198, 255, 0.08)' : 'none',
+    }}>
+      <div style={{
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        paddingTop: 2,
+      }}>
+        <div style={{
+          width: 28,
+          height: 28,
+          borderRadius: 999,
+          border: '1px solid rgba(173, 198, 255, 0.28)',
+          background: 'rgba(173, 198, 255, 0.06)',
+          color: 'rgba(221, 235, 255, 0.88)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: '0.02em',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          {String(index + 1).padStart(2, '0')}
+        </div>
+        {index < total - 1 && (
+          <div style={{
+            flex: 1,
+            width: 1,
+            marginTop: 8,
+            minHeight: 24,
+            background: 'linear-gradient(180deg, rgba(173, 198, 255, 0.22), rgba(173, 198, 255, 0))',
+          }} />
+        )}
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{
+          fontSize: 10.5,
+          fontWeight: 800,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'rgba(221, 235, 255, 0.54)',
+        }}>
+          {chapter.eyebrow}
+        </div>
+        <div style={{
+          fontSize: 16,
+          fontWeight: 740,
+          letterSpacing: '-0.02em',
+          color: '#f8fbff',
+          marginTop: 6,
+          lineHeight: 1.35,
+        }}>
+          {chapter.title}
+        </div>
+        <div style={{
+          fontSize: 13.5,
+          lineHeight: 1.7,
+          color: 'rgba(229, 238, 255, 0.82)',
+          marginTop: 8,
+          maxWidth: 680,
+        }}>
+          {chapter.body}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RecapPanel({
+  recap,
+  activePeriod,
+  onSelectPeriod,
+  hasProviderAccess,
+  onPromptClick,
+}: {
+  recap: Record<RecapPeriod, RecapSummary>
+  activePeriod: RecapPeriod
+  onSelectPeriod: (period: RecapPeriod) => void
+  hasProviderAccess: boolean
+  onPromptClick: (prompt: string, source: string) => void
+}) {
+  const active = recap[activePeriod]
+  const coverageLine = active.hasData && active.coverage.coverageNote
+
+  return (
+    <div style={{
+      borderRadius: 24,
+      border: '1px solid rgba(173, 198, 255, 0.18)',
+      background: 'linear-gradient(180deg, rgba(14, 24, 43, 0.92), rgba(11, 20, 35, 0.88))',
+      boxShadow: '0 28px 64px rgba(6, 12, 24, 0.24)',
+      overflow: 'hidden',
+      marginBottom: 20,
+    }}>
+      <div style={{
+        padding: '22px 22px 20px',
+        borderBottom: '1px solid rgba(173, 198, 255, 0.12)',
+        background: 'radial-gradient(circle at top right, rgba(125, 193, 255, 0.18), transparent 48%)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{
+              fontSize: 10.5,
+              fontWeight: 800,
+              letterSpacing: '0.10em',
+              textTransform: 'uppercase',
+              color: 'rgba(221, 235, 255, 0.72)',
+              marginBottom: 10,
+            }}>
+              Work recap
+            </div>
+            <div style={{ fontSize: 28, fontWeight: 780, letterSpacing: '-0.04em', color: '#f8fbff' }}>
+              {active.title}
+            </div>
+            <div style={{ fontSize: 13, color: 'rgba(221, 235, 255, 0.72)', marginTop: 6 }}>
+              {active.subtitle}
+            </div>
+          </div>
+
+          <div style={{
+            display: 'inline-flex',
+            gap: 4,
+            padding: 4,
+            borderRadius: 999,
+            border: '1px solid rgba(173, 198, 255, 0.14)',
+            background: 'rgba(255, 255, 255, 0.03)',
+          }}>
+            {(['day', 'week', 'month'] as RecapPeriod[]).map((period) => (
+              <button
+                key={period}
+                type="button"
+                onClick={() => onSelectPeriod(period)}
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 999,
+                  border: 'none',
+                  background: activePeriod === period ? 'var(--gradient-primary)' : 'transparent',
+                  color: activePeriod === period ? 'var(--color-primary-contrast)' : 'rgba(221, 235, 255, 0.74)',
+                  fontSize: 12,
+                  fontWeight: 750,
+                  cursor: 'pointer',
+                }}
+              >
+                {period === 'day' ? 'Daily' : period === 'week' ? 'Weekly' : 'Monthly'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{
+          marginTop: 18,
+          fontSize: 15,
+          lineHeight: 1.7,
+          color: '#f8fbff',
+          maxWidth: 760,
+          fontWeight: 560,
+          letterSpacing: '-0.005em',
+        }}>
+          {active.headline}
+        </div>
+        {coverageLine && (
+          <div style={{
+            marginTop: 10,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '5px 10px',
+            borderRadius: 999,
+            border: '1px solid rgba(244, 200, 130, 0.24)',
+            background: 'rgba(244, 200, 130, 0.08)',
+            fontSize: 11.5,
+            color: 'rgba(252, 226, 179, 0.92)',
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: 999,
+              background: 'rgba(244, 200, 130, 0.85)',
+            }} />
+            {active.coverage.attributedPct}% of tracked time has a named workstream
+          </div>
+        )}
+      </div>
+
+      {active.hasData && active.chapters.length > 0 && (
+        <div style={{ paddingTop: 4 }}>
+          {active.chapters.map((chapter, index) => (
+            <RecapChapterBlock
+              key={`${active.period}:${chapter.id}`}
+              chapter={chapter}
+              index={index}
+              total={active.chapters.length}
+            />
+          ))}
+        </div>
+      )}
+
+      {!active.hasData && (
+        <div style={{
+          padding: '22px 22px 24px',
+          fontSize: 13.5,
+          lineHeight: 1.75,
+          color: 'rgba(229, 238, 255, 0.78)',
+          maxWidth: 720,
+        }}>
+          {active.summary}
+        </div>
+      )}
+
+      <div style={{
+        padding: '20px 22px 22px',
+        display: 'grid',
+        gap: 16,
+        borderTop: '1px solid rgba(173, 198, 255, 0.12)',
+        background: 'rgba(6, 12, 24, 0.22)',
+      }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+          gap: 12,
+        }}>
+          {active.metrics.map((metric) => (
+            <RecapMetricCard
+              key={`${active.period}:${metric.label}`}
+              label={metric.label}
+              value={metric.value}
+              detail={metric.detail}
+            />
+          ))}
+        </div>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          gap: 12,
+        }}>
+          <RecapList
+            title="Top workstreams"
+            items={active.topWorkstreams}
+            emptyLabel="No clear workstream labels yet."
+          />
+          <RecapList
+            title="Standout artifacts"
+            items={active.standoutArtifacts}
+            emptyLabel="No named artifacts stood out yet."
+          />
+        </div>
+
+        <RecapTrend points={active.trend} />
+
+        <div>
+          <div style={{
+            fontSize: 10.5,
+            fontWeight: 800,
+            letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+            color: 'var(--color-text-tertiary)',
+            marginBottom: 10,
+          }}>
+            Ask Daylens from here
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {active.promptChips.map((prompt) => (
+              <button
+                key={`${active.period}:${prompt}`}
+                type="button"
+                disabled={!hasProviderAccess}
+                onClick={() => onPromptClick(prompt, `recap_${active.period}`)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 999,
+                  border: '1px solid rgba(173, 198, 255, 0.18)',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  color: 'rgba(241, 247, 255, 0.86)',
+                  fontSize: 12.5,
+                  cursor: hasProviderAccess ? 'pointer' : 'default',
+                  opacity: hasProviderAccess ? 1 : 0.6,
+                }}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+          {!hasProviderAccess && (
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+              Connect a provider to turn this recap into chat, reports, and exports.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -319,6 +834,7 @@ export default function Insights() {
   const [messages, setMessages] = useState<ThreadMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [activeRecapPeriod, setActiveRecapPeriod] = useState<RecapPeriod>('day')
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
   const [messageActionState, setMessageActionState] = useState<Record<string, { busy: boolean; error: string | null; successLabel: string | null }>>({})
   const [focusReviewDrafts, setFocusReviewDrafts] = useState<Record<string, string>>({})
@@ -343,6 +859,7 @@ export default function Insights() {
   const suggestionImpressionsRef = useRef<Record<string, boolean>>({})
   const aiScreenTrackedRef = useRef(false)
   loadingRef.current = loading
+  const currentDate = todayString()
 
   const insightsResource = useProjectionResource<{
     history: AIThreadMessage[]
@@ -386,6 +903,17 @@ export default function Insights() {
         today: today as DayTimelinePayload | null,
         activeFocusSession: activeFocusSession as FocusSession | null,
       }
+    },
+  })
+
+  const recapResource = useProjectionResource<DayTimelinePayload[]>({
+    scope: 'timeline',
+    dependencies: [currentDate],
+    intervalMs: 30_000,
+    load: async () => {
+      const dates = recapDateWindow(currentDate)
+      const payloads = await Promise.all(dates.map((date) => ipc.db.getTimelineDay(date).catch(() => null)))
+      return payloads.filter((payload): payload is DayTimelinePayload => Boolean(payload))
     },
   })
 
@@ -465,6 +993,10 @@ export default function Insights() {
 
   const today = insightsResource.data?.today ?? null
   const activeFocusSession = insightsResource.data?.activeFocusSession ?? null
+  const recapSummaries = useMemo(
+    () => buildRecapSummaries(recapResource.data ?? [], currentDate),
+    [currentDate, recapResource.data],
+  )
   const activeProvider = settings ? (settings.aiChatProvider ?? settings.aiProvider) : null
   const activeModel = settings && activeProvider
     ? getSelectedModel({
@@ -790,6 +1322,15 @@ export default function Insights() {
   const heroSummaryIsStale = Boolean(heroSummarySignature && heroSummarySignature !== daySummarySignature)
   const canGenerateHeroSummary = Boolean(today && hasApiKey && today.totalSeconds > 0)
 
+  function handlePromptChipClick(prompt: string, source: string) {
+    if (!hasApiKey) return
+    track(ANALYTICS_EVENT.AI_SUGGESTED_QUESTION_CLICKED, analyticsContext({
+      source,
+      trigger: 'suggested',
+    }))
+    void handleSend(prompt, { trigger: 'suggested' })
+  }
+
   async function handleGenerateHeroSummary() {
     if (!today || !hasApiKey || today.totalSeconds === 0) {
       setHeroSummary(defaultSummary)
@@ -965,6 +1506,16 @@ export default function Insights() {
             </div>
           </div>
 
+          {messages.length === 0 && (
+            <RecapPanel
+              recap={recapSummaries}
+              activePeriod={activeRecapPeriod}
+              onSelectPeriod={setActiveRecapPeriod}
+              hasProviderAccess={hasApiKey}
+              onPromptClick={handlePromptChipClick}
+            />
+          )}
+
           {!hasApiKey && (
             <div style={{ marginBottom: 20 }}>
               <ConnectAI
@@ -1047,13 +1598,7 @@ export default function Insights() {
                       {promptChips.map((chip) => (
                         <button
                           key={chip}
-                          onClick={() => {
-                            track(ANALYTICS_EVENT.AI_SUGGESTED_QUESTION_CLICKED, analyticsContext({
-                              source: heroQuestions.length > 0 && heroQuestions.includes(chip) ? 'summary_card' : 'default_chip',
-                              trigger: 'suggested',
-                            }))
-                            void handleSend(chip, { trigger: 'suggested' })
-                          }}
+                          onClick={() => handlePromptChipClick(chip, heroQuestions.length > 0 && heroQuestions.includes(chip) ? 'summary_card' : 'default_chip')}
                           style={{
                             padding: '8px 14px',
                             borderRadius: 999,
