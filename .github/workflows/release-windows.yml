@@ -156,7 +156,7 @@ jobs:
             echo
             echo "### Release assets"
             echo "This shared version release is populated by the macOS, Windows, and Linux workflows."
-            echo "Updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) lives on this same release so packaged apps across platforms resolve one version tag."
+            echo 'Updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) lives on this same release so packaged apps across platforms resolve one version tag.'
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
