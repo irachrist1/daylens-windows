@@ -18,6 +18,7 @@ import { getDb } from './database'
 import type { AIArtifactContent, AIArtifactKind, AIArtifactRecord } from '@shared/types'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, byteSizeBucket, type AnalyticsEventName } from '@shared/analytics'
+import { DEFAULT_THREAD_TITLE, normalizeThreadTitle } from '../lib/threadTitles'
 
 const INLINE_LIMIT_BYTES = 32 * 1024
 
@@ -327,7 +328,7 @@ function emitThreadEvent(event: AnalyticsEventName, threadId: number): void {
 export function createThread(title?: string | null): ThreadRowLite {
   const db = getDb()
   const now = Date.now()
-  const finalTitle = (title && title.trim()) || 'New chat'
+  const finalTitle = normalizeThreadTitle(title, DEFAULT_THREAD_TITLE)
   const result = db
     .prepare(`
       INSERT INTO ai_threads (title, created_at, updated_at, last_message_at, archived, metadata_json)
@@ -350,8 +351,8 @@ export function createThread(title?: string | null): ThreadRowLite {
 
 export function renameThread(threadId: number, title: string): void {
   const db = getDb()
-  const trimmed = (title ?? '').trim() || 'Untitled chat'
-  db.prepare(`UPDATE ai_threads SET title = ?, updated_at = ? WHERE id = ?`).run(trimmed, Date.now(), threadId)
+  const nextTitle = normalizeThreadTitle(title, 'Untitled chat')
+  db.prepare(`UPDATE ai_threads SET title = ?, updated_at = ? WHERE id = ?`).run(nextTitle, Date.now(), threadId)
 }
 
 export function archiveThread(threadId: number, archived: boolean): void {
@@ -388,13 +389,6 @@ export function ensureDefaultThread(conversationId: number): number {
     `)
     .get(conversationId) as { threadId: number | null } | undefined
   if (existing?.threadId) return existing.threadId
-  const fresh = createThread('New chat')
+  const fresh = createThread(DEFAULT_THREAD_TITLE)
   return fresh.id
-}
-
-export function deriveTitleFromMessage(message: string): string {
-  const normalized = (message || '').trim().replace(/\s+/g, ' ')
-  if (!normalized) return 'New chat'
-  if (normalized.length <= 60) return normalized
-  return normalized.slice(0, 57).trimEnd() + '…'
 }

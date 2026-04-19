@@ -22,7 +22,7 @@ test('sanitizeAnalyticsProperties keeps coarse analytics fields and strips unsaf
     surface: 'ai',
     tracked_time_bucket: '1_3h',
     trigger: 'freeform',
-    version: '1.0.26',
+    version: '1.0.27',
   })
 
   assert.deepEqual(sanitized, {
@@ -35,7 +35,7 @@ test('sanitizeAnalyticsProperties keeps coarse analytics fields and strips unsaf
     surface: 'ai',
     tracked_time_bucket: '1_3h',
     trigger: 'freeform',
-    version: '1.0.26',
+    version: '1.0.27',
   })
 })
 

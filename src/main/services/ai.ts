@@ -52,12 +52,13 @@ import {
   resolveProjectQuery,
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
+import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
 import { getDb } from './database'
 import {
   createArtifact,
   createThread,
-  deriveTitleFromMessage,
   getThread,
+  renameThread,
   touchThreadLastMessage,
 } from './artifacts'
 import { capture } from './analytics'
@@ -2209,6 +2210,7 @@ function persistChatTurn(
   conversationTemporalContext.set(conversationId, envelope.resolvedTemporalContext)
   if (threadId != null) {
     touchThreadLastMessage(db, threadId, Date.now())
+    queueWeakThreadTitleUpgrade(threadId, userMessage, envelope)
     // Also persist AIMessageArtifact entries into the durable ai_artifacts table.
     if (envelope.artifacts && envelope.artifacts.length > 0) {
       void persistMessageArtifacts(threadId, assistantEntry.id, envelope.artifacts)
@@ -2218,6 +2220,35 @@ function persistChatTurn(
     assistantMessage: assistantEntry,
     conversationState: envelope.conversationState,
   }
+}
+
+function threadTitleContextFromEnvelope(envelope: AnswerEnvelope): ThreadTitleContext {
+  return {
+    answerKind: envelope.answerKind,
+    entityName: envelope.resolvedTemporalContext?.entity?.entityName ?? null,
+    entityIntent: envelope.resolvedTemporalContext?.entity?.intent ?? null,
+    weeklyBriefIntent: envelope.resolvedTemporalContext?.weeklyBrief?.intent ?? null,
+  }
+}
+
+function maybeRenameWeakThread(
+  threadId: number,
+  currentTitle: string | null | undefined,
+  userMessage: string,
+  context?: ThreadTitleContext,
+): void {
+  if (!isWeakThreadTitle(currentTitle)) return
+  const candidate = deriveTitleFromMessage(userMessage, context)
+  if (candidate === currentTitle || isWeakThreadTitle(candidate)) return
+  renameThread(threadId, candidate)
+}
+
+function queueWeakThreadTitleUpgrade(threadId: number, userMessage: string, envelope: AnswerEnvelope): void {
+  const context = threadTitleContextFromEnvelope(envelope)
+  setTimeout(() => {
+    const currentTitle = getThread(threadId)?.title ?? null
+    maybeRenameWeakThread(threadId, currentTitle, userMessage, context)
+  }, 0)
 }
 
 function mapMessageArtifactKind(
@@ -3583,6 +3614,8 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     if (!existing) {
       const created = createThread(deriveTitleFromMessage(userMessage))
       threadId = created.id
+    } else {
+      maybeRenameWeakThread(threadId, existing.title, userMessage)
     }
   }
   const history = getConversationMessages(db, conversationId)

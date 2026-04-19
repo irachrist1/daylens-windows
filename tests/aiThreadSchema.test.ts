@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { ensureAIThreadSchema } from '../src/main/db/aiThreadSchema.ts'
+import { deriveTitleFromMessage, isWeakThreadTitle } from '../src/main/lib/threadTitles.ts'
 
 test('ensureAIThreadSchema repairs legacy ai_messages tables missing thread_id', () => {
   const db = new Database(':memory:')
@@ -60,4 +61,27 @@ test('ensureAIThreadSchema repairs legacy ai_messages tables missing thread_id',
   assert.ok(rows.every((row) => row.thread_id === threads[0].id))
 
   db.close()
+})
+
+test('thread titles prefer concise deterministic intent labels over prompt snippets', () => {
+  assert.equal(
+    deriveTitleFromMessage('Give me a short report I could share about what I did this week'),
+    'Weekly Report',
+  )
+  assert.equal(
+    deriveTitleFromMessage('Show me everything I touched for Project Atlas this week.'),
+    'Project Atlas',
+  )
+})
+
+test('weak titles stay detectable so they can be upgraded later without churning good ones', () => {
+  assert.equal(isWeakThreadTitle('New chat'), true)
+  assert.equal(isWeakThreadTitle('Give me a sho…'), true)
+  assert.equal(isWeakThreadTitle('Weekly Report'), false)
+  assert.equal(
+    deriveTitleFromMessage('What did I read this week?', {
+      weeklyBriefIntent: 'weekly_browsing_reading_brief',
+    }),
+    'Weekly Reading Recap',
+  )
 })

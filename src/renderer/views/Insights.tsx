@@ -997,6 +997,13 @@ export default function Insights() {
     () => buildRecapSummaries(recapResource.data ?? [], currentDate),
     [currentDate, recapResource.data],
   )
+  const activeThread = useMemo(
+    () => threads.find((thread) => thread.id === activeThreadId) ?? null,
+    [threads, activeThreadId],
+  )
+  const activeThreadLabel = activeThread && activeThread.title.trim() && activeThread.title !== 'New chat'
+    ? activeThread.title
+    : null
   const activeProvider = settings ? (settings.aiChatProvider ?? settings.aiProvider) : null
   const activeModel = settings && activeProvider
     ? getSelectedModel({
@@ -1135,17 +1142,17 @@ export default function Insights() {
         clientRequestId: requestId,
         threadId: activeThreadId,
       }) as AIChatTurnResult
-      if (activeThreadId == null) {
-        // sendMessage silently auto-creates a thread server-side when none is
-        // passed; refresh the list and adopt the newest row as the current
-        // thread so follow-up turns stay linked.
-        try {
-          const refreshed = await ipc.ai.listThreads({ includeArchived: false })
-          setThreads(refreshed)
+      try {
+        const refreshed = await ipc.ai.listThreads({ includeArchived: false })
+        setThreads(refreshed)
+        if (activeThreadId == null) {
+          // sendMessage silently auto-creates a thread server-side when none is
+          // passed; refresh the list and adopt the newest row as the current
+          // thread so follow-up turns stay linked.
           const newest = refreshed[0]
           if (newest) setActiveThreadId(newest.id)
-        } catch { /* best-effort */ }
-      }
+        }
+      } catch { /* best-effort */ }
       setMessages((current) => current.map((message) => {
         if (message.id !== assistantId) return message
         return { ...response.assistantMessage, state: 'complete' }
@@ -1396,6 +1403,11 @@ export default function Insights() {
               <p style={{ fontSize: 13.5, color: 'var(--color-text-secondary)', margin: '6px 0 0' }}>
                 {todayLabel}
               </p>
+              {activeThreadLabel && (
+                <p style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
+                  In <span style={{ color: 'var(--color-text-secondary)' }}>{activeThreadLabel}</span>
+                </p>
+              )}
             </div>
             <div style={{ position: 'relative', display: 'flex', gap: 8 }}>
               {threads.length > 0 && (
@@ -1412,12 +1424,11 @@ export default function Insights() {
                     fontWeight: 700,
                     cursor: 'pointer',
                   }}
+                  title={activeThreadLabel ?? 'Browse recent chats'}
                   aria-haspopup="listbox"
                   aria-expanded={threadPickerOpen}
                 >
-                  {activeThreadId
-                    ? (threads.find((t) => t.id === activeThreadId)?.title ?? 'Thread')
-                    : 'Recent chats'}
+                  Chats
                 </button>
               )}
               <button

@@ -13,71 +13,26 @@ import {
 import fs from 'node:fs'
 import path from 'node:path'
 import { localDateString, localDayBounds } from '../lib/localDate'
-import { computeFocusScoreV2, isCategoryFocused } from '../lib/focusScore'
-import { getTimelineDayPayload } from './workBlocks'
-
-// ─── Types matching DaySnapshot v1 contract ──────────────────────────────────
-
-interface AppSummaryOut {
-  appKey: string
-  bundleID?: string
-  displayName: string
-  category: string
-  totalSeconds: number
-  sessionCount: number
-  iconBase64?: string
-}
-
-interface CategoryTotal {
-  category: string
-  totalSeconds: number
-}
-
-interface TimelineEntry {
-  appKey: string
-  startAt: string
-  endAt: string
-}
-
-interface TopDomain {
-  domain: string
-  seconds: number
-  category: string
-  topPages: TopPage[]
-}
-
-interface TopPage {
-  url: string
-  title?: string | null
-  seconds: number
-}
-
-interface FocusSessionOut {
-  sourceId: string
-  startAt: string
-  endAt: string
-  actualDurationSec: number
-  targetMinutes: number
-  status: 'completed' | 'cancelled' | 'active'
-}
-
-interface DaySnapshot {
-  schemaVersion: 1
-  deviceId: string
-  platform: 'windows' | 'macos' | 'linux'
-  date: string
-  generatedAt: string
-  isPartialDay: boolean
-  focusScore: number
-  focusSeconds: number
-  appSummaries: AppSummaryOut[]
-  categoryTotals: CategoryTotal[]
-  timeline: TimelineEntry[]
-  topDomains: TopDomain[]
-  categoryOverrides: Record<string, string>
-  aiSummary: string | null
-  focusSessions: FocusSessionOut[]
-}
+import { computeFocusScore, computeFocusScoreV2, isCategoryFocused } from '../lib/focusScore'
+import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
+import { buildRecapSummaries, recapDateWindow } from '../../renderer/lib/recap'
+import type {
+  AppSummary as AppSummaryOut,
+  ArtifactKind,
+  ArtifactRollup,
+  Category,
+  CategoryTotal,
+  DaySnapshotV2,
+  EntityRollup,
+  FocusSession as FocusSessionOut,
+  RecapSummaryLite,
+  TimelineEntry,
+  TopDomain,
+  WorkBlockSummary,
+  WorkstreamRollup,
+} from '@shared/snapshot'
+import { SNAPSHOT_SCHEMA_VERSION, type Platform } from '@shared/snapshot'
+import type { ArtifactRef, DayTimelinePayload, WorkContextBlock } from '@shared/types'
 
 // ─── Normalization map ───────────────────────────────────────────────────────
 
@@ -86,9 +41,11 @@ interface NormalizationMap {
   catalog: Record<string, { displayName: string; defaultCategory: string }>
 }
 
+const UNTITLED_WORKSTREAM_LABEL = 'Untitled work block'
+
 let _normMap: NormalizationMap | null = null
 
-function currentSnapshotPlatform(): DaySnapshot['platform'] {
+function currentSnapshotPlatform(): Platform {
   if (process.platform === 'win32') return 'windows'
   if (process.platform === 'darwin') return 'macos'
   return 'linux'
@@ -122,7 +79,7 @@ function getNormMap(): NormalizationMap {
   return _normMap
 }
 
-function normalize(bundleId: string, appName: string): { appKey: string; displayName: string; category: string } {
+function normalize(bundleId: string, appName: string): { appKey: string; displayName: string; category: Category } {
   const map = getNormMap()
 
   // Try exact and normalized bundle IDs first, then just the executable filename.
@@ -137,7 +94,7 @@ function normalize(bundleId: string, appName: string): { appKey: string; display
     return {
       appKey,
       displayName: catalogEntry.displayName,
-      category: catalogEntry.defaultCategory,
+      category: catalogEntry.defaultCategory as Category,
     }
   }
 
@@ -177,9 +134,213 @@ function toISOWithOffset(ms: number): string {
   return `${yr}-${mo}-${dy}T${hr}:${min}:${sec}.${ms3}${sign}${oh}:${om}`
 }
 
+function normalizeText(value: string | null | undefined): string {
+  return (value ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function blockDurationSeconds(block: Pick<WorkContextBlock, 'startTime' | 'endTime'>): number {
+  return Math.max(1, Math.round((block.endTime - block.startTime) / 1000))
+}
+
+function snapshotBlockLabel(block: WorkContextBlock): string {
+  return normalizeText(block.label.current) || normalizeText(block.label.override) || UNTITLED_WORKSTREAM_LABEL
+}
+
+function snapshotLabelSource(block: WorkContextBlock): WorkBlockSummary['labelSource'] {
+  if (block.label.source === 'user') return 'user'
+  if (block.label.source === 'ai') return 'ai'
+  return 'rule'
+}
+
+function artifactKindFor(ref: ArtifactRef): ArtifactKind {
+  const target = (ref.path ?? ref.openTarget.value ?? '').toLowerCase()
+  if (target.endsWith('.csv')) return 'csv'
+  if (target.endsWith('.json')) return 'json_table'
+  if (target.endsWith('.html') || target.endsWith('.htm')) return 'html_chart'
+  if (target.endsWith('.md') || target.endsWith('.markdown')) return 'markdown'
+  return 'report'
+}
+
+function artifactByteSize(ref: ArtifactRef): number {
+  const metaSize = ref.metadata?.byteSize
+  if (typeof metaSize === 'number' && Number.isFinite(metaSize) && metaSize >= 0) {
+    return metaSize
+  }
+  return 0
+}
+
+function toRecapLite(summary: ReturnType<typeof buildRecapSummaries>['day']): RecapSummaryLite {
+  return {
+    headline: summary.headline,
+    chapters: summary.chapters.map((chapter) => ({
+      id: chapter.id,
+      eyebrow: chapter.eyebrow,
+      title: chapter.title,
+      body: chapter.body,
+    })),
+    metrics: summary.metrics.map((metric) => ({
+      label: metric.label,
+      value: metric.value,
+      detail: metric.detail,
+    })),
+    changeSummary: summary.changeSummary,
+    promptChips: [...summary.promptChips],
+    hasData: summary.hasData,
+  }
+}
+
+function summarizeWorkBlocks(blocks: WorkContextBlock[]): WorkBlockSummary[] {
+  return blocks
+    .filter((block) => !block.isLive)
+    .map((block) => ({
+      id: block.id,
+      startAt: toISOWithOffset(block.startTime),
+      endAt: toISOWithOffset(block.endTime),
+      label: userVisibleLabelForBlock(block),
+      labelSource: snapshotLabelSource(block),
+      dominantCategory: block.dominantCategory,
+      focusSeconds: block.focusOverlap.totalSeconds,
+      switchCount: block.switchCount,
+      confidence: block.confidence,
+      topApps: block.topApps.slice(0, 3).map((app) => ({
+        appKey: normalize(app.bundleId, app.appName).appKey,
+        seconds: app.totalSeconds,
+      })),
+      topPages: block.pageRefs.slice(0, 3).map((page) => ({
+        domain: page.domain,
+        title: page.pageTitle ?? null,
+        seconds: page.totalSeconds,
+      })),
+      artifactIds: block.topArtifacts.slice(0, 5).map((artifact) => artifact.id),
+    }))
+}
+
+function buildWorkstreamRollups(blocks: WorkContextBlock[]): WorkstreamRollup[] {
+  const workstreams = new Map<string, WorkstreamRollup>()
+
+  for (const block of blocks) {
+    if (block.isLive) continue
+    const label = snapshotBlockLabel(block)
+    const existing = workstreams.get(label) ?? {
+      label,
+      seconds: 0,
+      blockCount: 0,
+      isUntitled: label === UNTITLED_WORKSTREAM_LABEL,
+    }
+    existing.seconds += blockDurationSeconds(block)
+    existing.blockCount += 1
+    workstreams.set(label, existing)
+  }
+
+  return [...workstreams.values()].sort((left, right) => right.seconds - left.seconds).slice(0, 8)
+}
+
+function buildArtifactRollups(blocks: WorkContextBlock[]): ArtifactRollup[] {
+  const artifacts = new Map<string, ArtifactRollup>()
+
+  for (const block of blocks) {
+    if (block.isLive) continue
+    for (const artifact of block.topArtifacts) {
+      const existing = artifacts.get(artifact.id)
+      if (existing) continue
+      artifacts.set(artifact.id, {
+        id: artifact.id,
+        kind: artifactKindFor(artifact),
+        title: artifact.displayTitle,
+        byteSize: artifactByteSize(artifact),
+        generatedAt: toISOWithOffset(block.endTime),
+        threadId: null,
+      })
+    }
+  }
+
+  return [...artifacts.values()].slice(0, 8)
+}
+
+function buildRecapPayload(db: ReturnType<typeof getDb>, dateStr: string) {
+  const payloads: DayTimelinePayload[] = recapDateWindow(dateStr).map((date) => {
+    try {
+      return getTimelineDayPayload(db, date)
+    } catch {
+      return emptyTimelinePayload(date)
+    }
+  })
+  const recap = buildRecapSummaries(payloads, dateStr)
+  return {
+    recap: {
+      day: toRecapLite(recap.day),
+      week: recap.week.hasData ? toRecapLite(recap.week) : null,
+      month: recap.month.hasData ? toRecapLite(recap.month) : null,
+    },
+    coverage: recap.day.coverage,
+  }
+}
+
+function loadEntityRollups(db: ReturnType<typeof getDb>, dateStr: string): EntityRollup[] {
+  const rows = db.prepare(`
+    SELECT
+      'client' AS kind,
+      c.id AS id,
+      c.name AS label,
+      SUM(der.attributed_ms + der.ambiguous_ms) AS total_ms,
+      SUM(der.session_count) AS session_count
+    FROM daily_entity_rollups der
+    JOIN clients c ON c.id = der.client_id
+    WHERE der.day_local = ?
+    GROUP BY c.id, c.name
+
+    UNION ALL
+
+    SELECT
+      'project' AS kind,
+      p.id AS id,
+      p.name AS label,
+      SUM(der.attributed_ms + der.ambiguous_ms) AS total_ms,
+      SUM(der.session_count) AS session_count
+    FROM daily_entity_rollups der
+    JOIN projects p ON p.id = der.project_id
+    WHERE der.day_local = ?
+    GROUP BY p.id, p.name
+
+    ORDER BY total_ms DESC, label ASC
+  `).all(dateStr, dateStr) as Array<{
+    kind: 'client' | 'project'
+    id: string
+    label: string
+    total_ms: number
+    session_count: number
+  }>
+
+  return rows.map((row) => ({
+    id: row.id,
+    label: row.label,
+    kind: row.kind,
+    secondsToday: Math.max(0, Math.round(row.total_ms / 1000)),
+    blockCount: row.session_count,
+  }))
+}
+
+function emptyTimelinePayload(dateStr: string): DayTimelinePayload {
+  return {
+    date: dateStr,
+    sessions: [],
+    websites: [],
+    blocks: [],
+    segments: [],
+    focusSessions: [],
+    computedAt: Date.now(),
+    version: 'snapshot-exporter-fallback',
+    totalSeconds: 0,
+    focusSeconds: 0,
+    focusPct: 0,
+    appCount: 0,
+    siteCount: 0,
+  }
+}
+
 // ─── Export ──────────────────────────────────────────────────────────────────
 
-export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
+export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshotV2 {
   const [fromMs, toMs] = dayBounds(dateStr)
   const db = getDb()
 
@@ -218,7 +379,7 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   appSummaries.sort((a, b) => b.totalSeconds - a.totalSeconds)
 
   // Category totals
-  const catMap = new Map<string, number>()
+  const catMap = new Map<Category, number>()
   for (const app of appSummaries) {
     catMap.set(app.category, (catMap.get(app.category) ?? 0) + app.totalSeconds)
   }
@@ -249,10 +410,11 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   // blocks from the timeline payload so the score reflects real work
   // boundaries rather than raw focused-app ratios.
   let blocksForScore: { durationSeconds: number; activeSeconds: number }[] = []
+  let timelinePayload: DayTimelinePayload | null = null
   let uniqueArtifactCount: number | undefined
   let uniqueWindowTitleCount: number | undefined
   try {
-    const timelinePayload = getTimelineDayPayload(db, dateStr)
+    timelinePayload = getTimelineDayPayload(db, dateStr)
     blocksForScore = timelinePayload.blocks.map((block) => {
       const span = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
       const active = block.sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
@@ -295,7 +457,13 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
     uniqueArtifactCount,
     uniqueWindowTitleCount,
   })
-  const focusScore = focusBreakdown.score
+  const focusScore = computeFocusScore({
+    focusedSeconds: focusSeconds,
+    totalSeconds: totalTrackedSeconds,
+    switchesPerHour,
+  })
+  const safeTimelinePayload = timelinePayload ?? emptyTimelinePayload(dateStr)
+  const { recap, coverage } = buildRecapPayload(db, dateStr)
 
   // Timeline — raw sessions mapped to normalized appKeys
   const timeline: TimelineEntry[] = rawSessions.map((s) => {
@@ -331,10 +499,10 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   const overrideRows = db
     .prepare('SELECT bundle_id, category FROM category_overrides')
     .all() as { bundle_id: string; category: string }[]
-  const categoryOverrides: Record<string, string> = {}
+  const categoryOverrides: Record<string, Category> = {}
   for (const row of overrideRows) {
     const { appKey } = normalize(row.bundle_id, '')
-    categoryOverrides[appKey] = row.category
+    categoryOverrides[appKey] = row.category as Category
   }
 
   // Focus sessions
@@ -351,7 +519,7 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
     }))
 
   return {
-    schemaVersion: 1,
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     deviceId,
     platform: currentSnapshotPlatform(),
     date: dateStr,
@@ -366,5 +534,19 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
     categoryOverrides,
     aiSummary: null,
     focusSessions,
+    focusScoreV2: {
+      score: focusBreakdown.score,
+      coherence: focusBreakdown.coherence,
+      deepWorkDensity: focusBreakdown.deepWork,
+      artifactProgress: focusBreakdown.artifactProgress,
+      switchPenalty: focusBreakdown.switchPenalty,
+    },
+    workBlocks: summarizeWorkBlocks(safeTimelinePayload.blocks),
+    recap,
+    coverage,
+    topWorkstreams: buildWorkstreamRollups(safeTimelinePayload.blocks),
+    standoutArtifacts: buildArtifactRollups(safeTimelinePayload.blocks),
+    entities: loadEntityRollups(db, dateStr),
+    hiddenByPreferences: false,
   }
 }

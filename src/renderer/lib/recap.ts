@@ -274,15 +274,19 @@ function buildMonthRange(currentDate: string): RecapRangeDefinition {
   const previousMonthDate = new Date(year, month - 2, 1)
   const previousMonthStart = toDateKey(previousMonthDate)
   const previousMonthDays = new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth() + 1, 0).getDate()
-  const comparisonDays = Math.min(dayCount, previousMonthDays)
-  const comparisonDates = Array.from({ length: comparisonDays }, (_, index) => shiftDate(previousMonthStart, index))
+  // Clip both windows to the same length so "the same point last month" is a
+  // day-for-day comparison on 31-vs-30 and Mar-vs-Feb boundaries.
+  const effectiveDays = Math.min(dayCount, previousMonthDays)
+  const currentDates = Array.from({ length: effectiveDays }, (_, index) => shiftDate(monthStart, index))
+  const comparisonDates = Array.from({ length: effectiveDays }, (_, index) => shiftDate(previousMonthStart, index))
+  const windowsAreClipped = effectiveDays < dayCount
 
   return {
     title: 'Monthly recap',
-    subtitle: 'This month so far',
-    currentDates: Array.from({ length: dayCount }, (_, index) => shiftDate(monthStart, index)),
+    subtitle: windowsAreClipped ? `First ${effectiveDays} days of this month` : 'This month so far',
+    currentDates,
     comparisonDates,
-    comparisonLabel: 'the same point last month',
+    comparisonLabel: windowsAreClipped ? `the first ${effectiveDays} days of last month` : 'the same point last month',
   }
 }
 
@@ -516,17 +520,25 @@ function buildRhythmBody(stats: AggregatedRecapStats): string | null {
   }
 
   if (stats.focusSessionCount > 0) {
-    parts.push(`${stats.focusSessionCount} focus session${stats.focusSessionCount === 1 ? '' : 's'} were captured.`)
+    parts.push(
+      stats.focusSessionCount === 1
+        ? '1 focus session was captured.'
+        : `${stats.focusSessionCount} focus sessions were captured.`,
+    )
   }
 
   if (parts.length === 0) return null
   return parts.join(' ')
 }
 
+// Shared between buildChangeTitle and buildChangeSummary so the chapter title
+// and body never disagree about whether tracked time changed.
+const TRACKED_STEADY_THRESHOLD_SECONDS = 60
+
 function buildChangeTitle(current: AggregatedRecapStats, comparison: AggregatedRecapStats): string {
   const trackedDiff = current.totalSeconds - comparison.totalSeconds
-  if (trackedDiff > 60 * 10) return 'Heavier than before'
-  if (trackedDiff < -60 * 10) return 'Lighter than before'
+  if (trackedDiff >= TRACKED_STEADY_THRESHOLD_SECONDS) return 'Heavier than before'
+  if (trackedDiff <= -TRACKED_STEADY_THRESHOLD_SECONDS) return 'Lighter than before'
   return 'A similar shape'
 }
 
@@ -546,7 +558,7 @@ function buildChangeSummary(
 
   const trackedDiff = current.totalSeconds - comparison.totalSeconds
   const focusDiff = current.focusPct - comparison.focusPct
-  const trackedPart = Math.abs(trackedDiff) < 60
+  const trackedPart = Math.abs(trackedDiff) < TRACKED_STEADY_THRESHOLD_SECONDS
     ? `Tracked time held steady versus ${comparisonLabel}`
     : `Tracked time ${trackedDiff > 0 ? 'rose' : 'fell'} by ${formatDuration(Math.abs(trackedDiff))} versus ${comparisonLabel}`
   const focusPart = Math.abs(focusDiff) < 2
@@ -639,16 +651,7 @@ function buildMetrics(period: RecapPeriod, stats: AggregatedRecapStats): RecapMe
 }
 
 function buildWorkstreamList(stats: AggregatedRecapStats): RecapListItem[] {
-  // Prefer named workstreams in the top three, but still surface untitled time
-  // cleanly when it dominates so the UI does not pretend attribution is full.
-  const named = stats.topWorkstreams.filter((workstream) => !workstream.isUntitled).slice(0, 3)
-  const untitled = stats.topWorkstreams.find((workstream) => workstream.isUntitled)
-  const shouldSurfaceUntitled = untitled && (named.length < 3 || untitled.seconds > (named[0]?.seconds ?? 0) / 2)
-  const entries = shouldSurfaceUntitled && named.length < 3
-    ? [...named, untitled]
-    : named
-
-  return entries.slice(0, 3).map((item) => ({
+  return stats.topWorkstreams.slice(0, 3).map((item) => ({
     label: item.isUntitled ? 'Unnamed work blocks' : item.label,
     value: formatDuration(item.seconds),
     detail: `${item.blockCount} block${item.blockCount === 1 ? '' : 's'}`,

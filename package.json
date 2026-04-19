@@ -1,7 +1,7 @@
 {
   "name": "daylens-windows",
   "productName": "Daylens",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "description": "Cross-platform activity tracker that turns your laptop history into a searchable, AI-ready work timeline.",
   "main": ".vite/build/main.js",
   "scripts": {

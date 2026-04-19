@@ -200,6 +200,7 @@ export default function Onboarding({
   const [settingsHandoff, setSettingsHandoff] = useState(false)
   const onboardingTrackedRef = useRef(false)
   const proofTrackedRef = useRef(false)
+  const onboardingStateRef = useRef(settings.onboardingState)
 
   const platform = settings.onboardingState.platform
   const stage = settings.onboardingState.stage
@@ -222,6 +223,10 @@ export default function Onboarding({
       trigger: 'navigation',
     })
   }, [stage])
+
+  useEffect(() => {
+    onboardingStateRef.current = settings.onboardingState
+  }, [settings.onboardingState])
 
   async function persistOnboarding(
     nextStage: OnboardingStage,
@@ -340,9 +345,10 @@ export default function Onboarding({
         setProof({ liveSession, timeline, ready })
 
         const nextProofState: ProofState = ready ? 'ready' : 'collecting'
-        if (settings.onboardingState.proofState !== nextProofState || settings.onboardingState.stage !== 'proof') {
+        const currentOnboardingState = onboardingStateRef.current
+        if (currentOnboardingState.proofState !== nextProofState || currentOnboardingState.stage !== 'proof') {
           const nextState = {
-            ...settings.onboardingState,
+            ...currentOnboardingState,
             stage: 'proof' as const,
             proofState: nextProofState,
           }
@@ -362,7 +368,7 @@ export default function Onboarding({
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [settings, stage])
+  }, [stage])
 
   useEffect(() => {
     if (!proof.ready || proofTrackedRef.current) return

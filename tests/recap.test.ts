@@ -262,3 +262,56 @@ test('weekly recap surfaces rhythm chapter with peak day and quiet days', () => 
   assert.match(rhythm!.body, /Busiest day/)
   assert.match(rhythm!.body, /no captured activity|had no captured/)
 })
+
+test('monthly recap clips long months to a truthful matched window', () => {
+  const today = '2026-05-31'
+  const monthStart = getMonthStart(today)
+  const previousMonthStart = shiftDate(monthStart, -30)
+
+  const payloads = [
+    ...Array.from({ length: 31 }, (_, index) => {
+      const date = shiftDate(monthStart, index)
+      return makeDay(date, {
+        totalSeconds: 60 * 60,
+        focusSeconds: 45 * 60,
+        blocks: [makeBlock('Monthly recap work', new Date(`${date}T09:00:00`).getTime(), 60 * 60)],
+      })
+    }),
+    ...Array.from({ length: 30 }, (_, index) => {
+      const date = shiftDate(previousMonthStart, index)
+      return makeDay(date, {
+        totalSeconds: 30 * 60,
+        focusSeconds: 15 * 60,
+        blocks: [makeBlock('Previous month work', new Date(`${date}T09:00:00`).getTime(), 30 * 60)],
+      })
+    }),
+  ]
+
+  const recap = buildRecapSummaries(payloads, today)
+
+  assert.equal(recap.month.subtitle, 'First 30 days of this month')
+  assert.match(recap.month.changeSummary, /the first 30 days of last month/)
+  assert.equal(recap.month.trend.length, 30)
+  assert.equal(recap.month.trend.at(-1)?.date, '2026-05-30')
+})
+
+test('workstream list keeps dominant unnamed work visible when it belongs in the top three', () => {
+  const today = '2026-04-19'
+  const blocks = [
+    makeBlock('Client A', new Date('2026-04-19T09:00:00').getTime(), 120 * 60),
+    makeBlock('', new Date('2026-04-19T11:30:00').getTime(), 110 * 60),
+    makeBlock('Client B', new Date('2026-04-19T13:30:00').getTime(), 100 * 60),
+    makeBlock('Client C', new Date('2026-04-19T15:30:00').getTime(), 90 * 60),
+  ]
+
+  const recap = buildRecapSummaries([
+    makeDay(today, {
+      totalSeconds: 420 * 60,
+      focusSeconds: 300 * 60,
+      blocks,
+    }),
+  ], today)
+
+  const labels = recap.day.topWorkstreams.map((item) => item.label)
+  assert.deepEqual(labels, ['Client A', 'Unnamed work blocks', 'Client B'])
+})
