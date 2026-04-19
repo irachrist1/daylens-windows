@@ -43,6 +43,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -262,6 +263,13 @@ jobs:
               echo
               echo "Compare changes: $COMPARE_URL"
             fi
+            echo
+            echo "### Downloads"
+            echo "- Windows installer: \`Daylens-${VERSION}-Setup.exe\`"
+            echo "- macOS installer: \`Daylens-${VERSION}-arm64.dmg\`"
+            echo "- macOS archive: \`Daylens-${VERSION}-arm64.zip\`"
+            echo "- Linux AppImage: \`Daylens-${VERSION}.AppImage\`"
+            echo "- Linux packages: \`Daylens-${VERSION}.deb\`, \`Daylens-${VERSION}.rpm\`, and \`Daylens-${VERSION}.tar.gz\`"
             echo
             echo "### Release assets"
             echo "This shared version release is populated by the macOS, Windows, and Linux workflows."

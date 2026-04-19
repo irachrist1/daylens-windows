@@ -48,6 +48,7 @@ Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md]
 - `npm run dist:win` builds the Windows installer and update metadata into `dist-release/`
 - `npm run dist:mac` builds the macOS archive and DMG into `dist-release/`
 - `npm run dist:linux` builds the Linux release artifacts into `dist-release/`
+- published downloads should live together on the shared GitHub release tag (`vX.Y.Z`) so Windows, macOS, and Linux assets ship from one release page
 
 ## Canonical docs
 
