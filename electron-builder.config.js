@@ -120,11 +120,12 @@ module.exports = {
     iconSize: 128,
     window: {
       width: 660,
-      height: 420,
+      height: 480,
     },
     contents: [
       { x: 180, y: 225, type: 'file' },
       { x: 480, y: 225, type: 'link', path: '/Applications' },
+      { x: 330, y: 400, type: 'file', path: 'build/dmg-README.txt', name: 'If Daylens is "damaged" - READ ME.txt' },
     ],
   },
   asar: true,

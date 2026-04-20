@@ -14,6 +14,15 @@ Daylens captures local evidence from the tools you use - apps, windows, browser 
 
 This repository is historically named `daylens-windows`, but the Electron desktop app in this repo is the cross-platform Daylens source of truth for macOS, Windows, and Linux. Platform-specific validation status still lives in [docs/ISSUES.md](docs/ISSUES.md), and the broader product direction includes editor-facing integrations so tools such as Claude Code, Cursor, and other MCP-style clients can pull in Daylens context while you build, debug, and investigate.
 
+## Install
+
+Grab the latest build from the [releases page](https://github.com/irachrist1/daylens/releases/latest). Full instructions, platform-by-platform fixes, and a Homebrew path live in [docs/INSTALL.md](docs/INSTALL.md).
+
+- **macOS (recommended):** `brew install --cask irachrist1/daylens/daylens`
+- **macOS (manual DMG):** download, drag to Applications, then run `xattr -cr /Applications/Daylens.app` if macOS says *"Daylens is damaged"* — see [docs/INSTALL.md](docs/INSTALL.md#why-macos-shows-daylens-is-damaged) for why and for the no-Terminal "Open Anyway" path.
+- **Windows:** download `Daylens-<version>-Setup.exe` and run it. On SmartScreen, click **More info → Run anyway**.
+- **Linux:** AppImage, deb, rpm, and tar.gz are all published on each release.
+
 ## Current product surfaces
 
 - `Onboarding` for first-run tracking setup and proof of capture
@@ -53,6 +62,7 @@ Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md]
 
 ## Canonical docs
 
+- [docs/INSTALL.md](docs/INSTALL.md) for platform install instructions and the macOS "damaged" fixes
 - [docs/CLAUDE.md](docs/CLAUDE.md) for a lightweight session guide
 - [docs/ABOUT.md](docs/ABOUT.md) for reusable product copy
 - [docs/AGENTS.md](docs/AGENTS.md) for the product and build contract
