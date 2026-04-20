@@ -39,6 +39,44 @@ export interface AppUsageSummary {
 
 export type BlockConfidence = 'high' | 'medium' | 'low'
 
+export type WorkIntentRole =
+  | 'execution'
+  | 'research'
+  | 'communication'
+  | 'review'
+  | 'coordination'
+  | 'ambient'
+  | 'ambiguous'
+
+export type WorkIntentPageKind =
+  | 'feed'
+  | 'thread'
+  | 'search'
+  | 'article'
+  | 'repo'
+  | 'pull_request'
+  | 'issue'
+  | 'doc'
+  | 'sheet'
+  | 'slide'
+  | 'chat'
+  | 'video'
+  | 'mailbox'
+  | 'calendar'
+  | 'meeting'
+  | 'design'
+  | 'website'
+  | 'unknown'
+
+export interface WorkIntentSummary {
+  role: WorkIntentRole
+  subject: string | null
+  confidence: number
+  summary: string
+  rationale: string[]
+  pageKinds: WorkIntentPageKind[]
+}
+
 export interface FocusScoreBreakdown {
   coherence: number          // [0,1] — weighted mean block duration vs 45 min target
   deepWork: number           // [0,1] — seconds in ≥25 min blocks / total active seconds
@@ -746,7 +784,11 @@ export interface BrowserLinkResult {
 export interface SyncStatus {
   isLinked: boolean
   workspaceId: string | null
-  lastSyncAt: number | null
+  lastHeartbeatAt: number | null
+  lastSuccessfulSyncAt: number | null
+  state: 'local_only' | 'linked' | 'pending_first_sync' | 'healthy' | 'stale' | 'failed'
+  lastFailureAt?: number | null
+  lastFailureMessage?: string | null
 }
 
 export interface AppSettings {

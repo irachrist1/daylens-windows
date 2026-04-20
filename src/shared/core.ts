@@ -5,6 +5,7 @@ import type {
   DayTimelinePayload,
   FocusSession,
   WebsiteSummary,
+  WorkIntentSummary,
   WorkflowPattern,
 } from '@shared/types'
 
@@ -38,6 +39,7 @@ export interface AssistantEvidenceBlock {
   startTime: number
   endTime: number
   dominantCategory: AppCategory
+  workIntent: WorkIntentSummary
   topApps: string[]
   topSites: string[]
   topArtifacts: string[]

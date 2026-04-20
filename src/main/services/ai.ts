@@ -117,6 +117,7 @@ import {
   type WeeklyBriefEvidencePack,
 } from '../lib/weeklyBrief'
 import { buildCLIProcessPayload, buildCLIProcessSpec } from './cliLaunch'
+import { inferWorkIntent } from '../../shared/workIntent'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
@@ -1461,6 +1462,7 @@ function buildTodayBlocksContext(): string {
     const lines = blocks.slice(0, 12).map((block) => {
       const minutes = Math.max(1, Math.round((block.endTime - block.startTime) / 60_000))
       const label = userVisibleLabelForBlock(block)
+      const intent = inferWorkIntent(block)
       const timeRange = `${formatClock(block.startTime)}-${formatClock(block.endTime)}`
       const topApps = block.topApps
         .filter((app) => app.category !== 'system')
@@ -1478,6 +1480,7 @@ function buildTodayBlocksContext(): string {
 
       const parts = [
         `${timeRange} (${minutes}m) — ${label}`,
+        `intent: ${intent.summary}`,
       ]
       if (topApps.length > 0) parts.push(`apps: ${topApps.join(', ')}`)
       if (topSites.length > 0) parts.push(`sites: ${topSites.join(', ')}`)
@@ -2057,6 +2060,7 @@ function buildDayContext(): string {
       'Data notes:',
       '- App totals come from tracked foreground-window sessions — reliable.',
       '- Work blocks are segmented by the local heuristic; labels may be rule-based or AI-generated.',
+      '- Each block includes a deterministic workIntent guess; prefer that over generic home/feed titles when inferring what the person was trying to do.',
       '- Website timing comes from local browser evidence and may undercount background tabs.',
       '- Focus score weights focused categories (development, writing, design, etc.); browser work may be productive but read as unfocused.',
     ]
@@ -2088,6 +2092,95 @@ function fillQuestionSuggestions(
   fallback: string[],
 ): string[] {
   return fillDaySummaryQuestionSuggestions(suggestions, fallback)
+}
+
+function blockDurationSeconds(block: Pick<WorkContextBlock, 'startTime' | 'endTime'>): number {
+  return Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
+}
+
+function uniqueStrings(values: Array<string | null | undefined>, limit = values.length): string[] {
+  const unique: string[] = []
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (!trimmed || unique.includes(trimmed)) continue
+    unique.push(trimmed)
+    if (unique.length >= limit) break
+  }
+  return unique
+}
+
+function namedEvidenceForSummary(block: WorkContextBlock): string[] {
+  return uniqueStrings([
+    ...block.topArtifacts.map((artifact) => artifact.displayTitle),
+    ...block.pageRefs.map((page) => page.pageTitle ?? page.displayTitle),
+    ...block.topApps
+      .filter((app) => !app.isBrowser && app.category !== 'system' && app.category !== 'uncategorized')
+      .map((app) => app.appName),
+  ], 3)
+}
+
+function leadSentenceForIntent(block: WorkContextBlock): string {
+  const duration = formatDuration(blockDurationSeconds(block))
+  const intent = inferWorkIntent(block)
+
+  switch (intent.role) {
+    case 'execution':
+      return intent.subject
+        ? `The clearest execution block was ${intent.subject} for ${duration}.`
+        : `The clearest block was execution work for ${duration}.`
+    case 'research':
+      return intent.subject
+        ? `A large share of today went into research/context gathering around ${intent.subject} for ${duration}.`
+        : `A large share of today went into research/context gathering for ${duration}.`
+    case 'review':
+      return intent.subject
+        ? `A large share of today went into reviewing ${intent.subject} for ${duration}.`
+        : `A large share of today went into review work for ${duration}.`
+    case 'communication':
+      return intent.subject
+        ? `A large share of today went into communication around ${intent.subject} for ${duration}.`
+        : `A large share of today went into communication work for ${duration}.`
+    case 'coordination':
+      return intent.subject
+        ? `A large share of today went into coordination around ${intent.subject} for ${duration}.`
+        : `A large share of today went into coordination work for ${duration}.`
+    case 'ambient':
+      return intent.subject
+        ? `A meaningful chunk of today was ambient browsing on ${intent.subject} for ${duration}.`
+        : `A meaningful chunk of today was ambient browsing for ${duration}.`
+    case 'ambiguous':
+    default:
+      return intent.subject
+        ? `The day mixed together work touching ${intent.subject} for ${duration}.`
+        : `The day mixed together several threads over ${duration}.`
+  }
+}
+
+function supportingIntentSentence(primary: WorkContextBlock, rankedBlocks: WorkContextBlock[]): string | null {
+  const primaryIntent = inferWorkIntent(primary)
+  const supporting = rankedBlocks
+    .slice(1)
+    .map((block) => ({ block, intent: inferWorkIntent(block) }))
+    .find(({ intent }) => intent.role !== primaryIntent.role)
+
+  if (!supporting) return null
+
+  if (primaryIntent.role === 'execution' && (supporting.intent.role === 'research' || supporting.intent.role === 'ambient')) {
+    return `${supporting.intent.summary} looked more like supporting context than the main deliverable.`
+  }
+
+  if ((primaryIntent.role === 'research' || primaryIntent.role === 'ambient') && supporting.intent.role === 'execution') {
+    return `The clearer delivery evidence showed up in ${supporting.intent.summary.toLowerCase()}.`
+  }
+
+  return null
+}
+
+function focusSentence(payload: DayTimelinePayload): string {
+  if (payload.focusPct >= 70) {
+    return `Focus held for ${formatDuration(payload.focusSeconds)} (${payload.focusPct}% of tracked time).`
+  }
+  return `Focus was more fragmented, with ${formatDuration(payload.focusSeconds)} counted as focused time (${payload.focusPct}%).`
 }
 
 function inferFollowUpAffordances(answerKind: AIAnswerKind): AIConversationState['followUpAffordances'] {
@@ -2307,22 +2400,18 @@ function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
     }
   }
 
-  const leadBlocks = payload.blocks
+  const rankedBlocks = [...payload.blocks]
+    .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
     .slice(0, 3)
-    .map((block) => block.label.current)
-    .filter(Boolean)
-
-  const leadArtifacts = payload.blocks
-    .flatMap((block) => block.topArtifacts)
-    .slice(0, 3)
-    .map((artifact) => artifact.displayTitle)
-    .filter(Boolean)
+  const primary = rankedBlocks[0]
+  const evidence = primary ? namedEvidenceForSummary(primary) : []
 
   const summaryParts = [
     `You tracked ${formatDuration(payload.totalSeconds)} across ${payload.blocks.length} block${payload.blocks.length === 1 ? '' : 's'} today.`,
-    leadBlocks.length > 0 ? `The main threads were ${leadBlocks.join(', ')}.` : null,
-    leadArtifacts.length > 0 ? `Named artifacts included ${leadArtifacts.join(', ')}.` : null,
-    `Focus time was ${formatDuration(payload.focusSeconds)} (${payload.focusPct}%).`,
+    primary ? leadSentenceForIntent(primary) : null,
+    evidence.length > 0 ? `Strongest evidence included ${evidence.join(', ')}.` : null,
+    primary ? supportingIntentSentence(primary, rankedBlocks) : null,
+    focusSentence(payload),
   ]
 
   return {
@@ -2349,6 +2438,12 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
       startTime: block.startTime,
       endTime: block.endTime,
       dominantCategory: block.dominantCategory,
+      topApps: block.topApps.slice(0, 3).map((app) => ({
+        appName: app.appName,
+        category: app.category,
+        isBrowser: app.isBrowser,
+      })),
+      domains: block.websites.slice(0, 3).map((site) => site.domain),
       artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle),
       pages: block.pageRefs.slice(0, 2).map((page) => page.displayTitle),
       workflows: block.workflowRefs.slice(0, 2).map((workflow) => workflow.label),
@@ -2357,8 +2452,19 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
 }
 
 function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
+  const dominantBlocks = [...payload.blocks]
+    .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
+    .slice(0, 4)
+    .map((block) => ({
+      label: block.label.current,
+      timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
+      duration: formatDuration(blockDurationSeconds(block)),
+      workIntent: inferWorkIntent(block),
+      supportingEvidence: namedEvidenceForSummary(block),
+    }))
+
   const topCategories = Array.from(payload.blocks.reduce<Map<string, number>>((map, block) => {
-    const durationSeconds = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
+    const durationSeconds = blockDurationSeconds(block)
     map.set(block.dominantCategory, (map.get(block.dominantCategory) ?? 0) + durationSeconds)
     return map
   }, new Map()).entries())
@@ -2370,9 +2476,10 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     label: block.label.current,
     narrative: block.label.narrative,
     timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
-    duration: formatDuration(Math.max(0, Math.round((block.endTime - block.startTime) / 1000))),
+    duration: formatDuration(blockDurationSeconds(block)),
     dominantCategory: block.dominantCategory,
     confidence: block.confidence,
+    workIntent: inferWorkIntent(block),
     topApps: block.topApps.slice(0, 3).map((app) => ({
       appName: app.appName,
       duration: formatDuration(app.totalSeconds),
@@ -2405,6 +2512,7 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
       siteCount: payload.siteCount,
     },
     topCategories,
+    dominantBlocks,
     blocks,
     focusSessions,
   }, null, 2)
@@ -2457,6 +2565,10 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     'You are Daylens, writing the opening daily briefing for a desktop work-intelligence app.',
     'Turn deterministic local work evidence into a concise, useful summary.',
     'Focus on what the person was actually working on, what moved forward, and what deserves follow-up.',
+    'Prefer the structured workIntent signal over raw homepage, feed, or generic tab labels when they conflict.',
+    'Treat generic feed/home usage as context unless the evidence clearly says it was the main task.',
+    'Treat X.com, twitter.com, Twitter, and X as the same product; when that evidence appears, refer to it as "X (Twitter)" unless a more specific page or thread title is available.',
+    'Ignore badge-count prefixes like "(4)" when interpreting page or tab titles.',
     'Mention exact file, document, page, repo, or artifact names only when they appear verbatim in the evidence.',
     'Do not write like a dashboard, analytics panel, or generic AI recap.',
     'Avoid filler like "based on the provided data", "top apps", or "productive/unproductive".',

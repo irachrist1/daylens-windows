@@ -17,6 +17,8 @@ import {
 } from './credentials'
 import { BIP39_ENGLISH } from './bip39wordlist'
 import { getWorkspaceDeviceLabel } from '@shared/platformExpectations'
+import type { SyncRuntimeState } from './syncUploader'
+import { deriveSyncState } from './syncState'
 
 // Validate BIP39 wordlist integrity at module load time
 if (BIP39_ENGLISH.length !== 2048) {
@@ -50,7 +52,11 @@ export interface BrowserLinkResult {
 export interface SyncStatus {
   isLinked: boolean
   workspaceId: string | null
-  lastSyncAt: number | null
+  lastHeartbeatAt: number | null
+  lastSuccessfulSyncAt: number | null
+  state: 'local_only' | 'linked' | 'pending_first_sync' | 'healthy' | 'stale' | 'failed'
+  lastFailureAt?: number | null
+  lastFailureMessage?: string | null
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -174,14 +180,20 @@ export async function disconnect(): Promise<void> {
 /**
  * Returns the current sync status.
  */
-export async function getSyncStatus(lastSyncAt: number | null): Promise<SyncStatus> {
+export async function getSyncStatus(runtime: SyncRuntimeState): Promise<SyncStatus> {
   const workspaceId = await getWorkspaceId()
   const token = await getWorkspaceToken()
+  const isLinked = Boolean(workspaceId && token)
+  const state = deriveSyncState(runtime, isLinked)
 
   return {
-    isLinked: Boolean(workspaceId && token),
+    isLinked,
     workspaceId,
-    lastSyncAt,
+    lastHeartbeatAt: runtime.lastHeartbeatAt,
+    lastSuccessfulSyncAt: runtime.lastSuccessfulDaySyncAt,
+    state,
+    lastFailureAt: runtime.lastDaySyncFailureAt,
+    lastFailureMessage: runtime.lastDaySyncFailureMessage,
   }
 }
 

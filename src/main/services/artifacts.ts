@@ -14,6 +14,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import type Database from 'better-sqlite3'
+import { createWorkspaceThreadId } from '@daylens/remote-contract'
 import { getDb } from './database'
 import type { AIArtifactContent, AIArtifactKind, AIArtifactRecord } from '@shared/types'
 import { capture } from './analytics'
@@ -329,12 +330,15 @@ export function createThread(title?: string | null): ThreadRowLite {
   const db = getDb()
   const now = Date.now()
   const finalTitle = normalizeThreadTitle(title, DEFAULT_THREAD_TITLE)
+  const metadataJson = JSON.stringify({
+    workspaceThreadId: createWorkspaceThreadId(),
+  })
   const result = db
     .prepare(`
       INSERT INTO ai_threads (title, created_at, updated_at, last_message_at, archived, metadata_json)
-      VALUES (?, ?, ?, ?, 0, '{}')
+      VALUES (?, ?, ?, ?, 0, ?)
     `)
-    .run(finalTitle, now, now, now)
+    .run(finalTitle, now, now, now, metadataJson)
   const id = result.lastInsertRowid as number
   emitThreadEvent(ANALYTICS_EVENT.AI_THREAD_CREATED, id)
   return {

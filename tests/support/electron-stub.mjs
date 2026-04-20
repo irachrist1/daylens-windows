@@ -39,3 +39,12 @@ export const BrowserWindow = {
     return []
   },
 }
+
+export class Notification {
+  show() {}
+}
+
+export const powerMonitor = {
+  on() {},
+  removeListener() {},
+}

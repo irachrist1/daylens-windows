@@ -21,6 +21,7 @@ import type {
   LiveSession,
   TrackingModuleSource,
 } from '@shared/types'
+import type { WorkspacePresenceState } from '@daylens/remote-contract'
 import { isCategoryFocused } from '../lib/focusScore'
 import { resolveCanonicalApp } from '../lib/appIdentity'
 import { localDateString } from '../lib/localDate'
@@ -952,6 +953,8 @@ function isOsNoise(bundleId: string, appName: string, winPath?: string): boolean
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let currentSession: InFlightSession | null = null
 let lastSnapshotPersistAt = 0
+let lastMeaningfulCaptureAt = 0
+let lastPresenceOverride: WorkspacePresenceState | null = null
 type IdleState = 'active' | 'provisional_idle' | 'away'
 let idleState: IdleState = 'active'
 let provisionalIdleStart: number | null = null
@@ -1074,6 +1077,8 @@ function handleLockScreen(): void {
     console.log('[tracking] screen locked — session flushed')
   }
   recordActivityEvent('lock_screen')
+  lastMeaningfulCaptureAt = Date.now()
+  lastPresenceOverride = 'sleeping'
   idleState = 'away'
   provisionalIdleStart = null
 }
@@ -1084,6 +1089,8 @@ function handleSuspend(): void {
     console.log('[tracking] system suspended — session flushed')
   }
   recordActivityEvent('suspend')
+  lastMeaningfulCaptureAt = Date.now()
+  lastPresenceOverride = 'sleeping'
   idleState = 'away'
   provisionalIdleStart = null
 }
@@ -1157,6 +1164,23 @@ export function getCurrentSession(): LiveSession | null {
   return currentSession
 }
 
+export function getCurrentPresenceState(): WorkspacePresenceState {
+  if (currentSession) {
+    return currentSession.category === 'meetings' ? 'meeting' : 'active'
+  }
+  if (lastPresenceOverride === 'sleeping') {
+    return 'sleeping'
+  }
+  if (idleState !== 'active') {
+    return 'idle'
+  }
+  return lastPresenceOverride ?? 'offline'
+}
+
+export function getLastMeaningfulCaptureAt(): number | null {
+  return lastMeaningfulCaptureAt > 0 ? lastMeaningfulCaptureAt : null
+}
+
 // ─── Poll ─────────────────────────────────────────────────────────────────────
 
 async function poll(): Promise<void> {
@@ -1171,7 +1195,9 @@ async function poll(): Promise<void> {
         }
         flushCurrent(idleStartMs, 'away')
         console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
+        lastMeaningfulCaptureAt = idleStartMs
       }
+      lastPresenceOverride = 'idle'
       idleState = 'away'
       provisionalIdleStart = null
       return
@@ -1182,6 +1208,7 @@ async function poll(): Promise<void> {
         recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec) })
         console.log(`[tracking] provisional idle at ${Math.round(idleSec)}s — session held open`)
       }
+      lastPresenceOverride = 'idle'
     } else {
       if (idleState === 'away' || idleState === 'provisional_idle') {
         // Returning from provisional_idle: the session was intentionally held open
@@ -1193,6 +1220,7 @@ async function poll(): Promise<void> {
       }
       idleState = 'active'
       provisionalIdleStart = null
+      lastPresenceOverride = currentSession?.category === 'meetings' ? 'meeting' : 'active'
     }
 
     // ── Active window ────────────────────────────────────────────────────────
@@ -1326,6 +1354,8 @@ async function poll(): Promise<void> {
         startTime: startedAt,
         category,
       }
+      lastMeaningfulCaptureAt = startedAt
+      lastPresenceOverride = category === 'meetings' ? 'meeting' : 'active'
       upsertAppIdentityObservation(getDb(), {
         bundleId,
         rawAppName: appName,
@@ -1341,6 +1371,8 @@ async function poll(): Promise<void> {
       persistLiveSnapshot(true)
     } else {
       currentSession.windowTitle = resolvedWin.title?.trim() || null
+      lastMeaningfulCaptureAt = Date.now()
+      lastPresenceOverride = currentSession.category === 'meetings' ? 'meeting' : 'active'
       persistLiveSnapshot()
     }
   } catch (err) {
@@ -1429,6 +1461,11 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
   }
 
   clearPersistedLiveSnapshot()
+  if (endedReason === 'away') {
+    lastPresenceOverride = 'idle'
+  } else if (endedReason === 'lock_screen' || endedReason === 'suspend') {
+    lastPresenceOverride = 'sleeping'
+  }
   currentSession = null
 }
 

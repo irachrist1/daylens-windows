@@ -9,11 +9,11 @@ import {
   getSyncStatus,
   getStoredMnemonic,
 } from '../services/workspaceLinker'
-import { getLastSyncAt, startSync, stopSync } from '../services/syncUploader'
+import { getSyncRuntimeState, startSync, stopSync } from '../services/syncUploader'
 
 export function registerSyncHandlers(): void {
   ipcMain.handle(IPC.SYNC.GET_STATUS, async () => {
-    return getSyncStatus(getLastSyncAt())
+    return getSyncStatus(getSyncRuntimeState())
   })
 
   ipcMain.handle(IPC.SYNC.LINK, async () => {

@@ -13,6 +13,7 @@ export default defineConfig({
     alias: {
       // Use path.resolve so this works regardless of cwd at build time
       '@shared': path.resolve(__dirname, 'src/shared'),
+      '@daylens/remote-contract': path.resolve(__dirname, 'packages/remote-contract/index.ts'),
     },
   },
   build: {

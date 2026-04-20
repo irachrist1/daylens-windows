@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@shared': path.resolve(__dirname, 'src/shared'),
+      '@daylens/remote-contract': path.resolve(__dirname, 'packages/remote-contract/index.ts'),
     },
   },
   build: {

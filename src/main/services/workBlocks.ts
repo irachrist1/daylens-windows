@@ -33,7 +33,13 @@ import type {
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import { localDayBounds } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
-import { normalizeUrlForStorage, resolveCanonicalApp, titleLooksUseful } from '../lib/appIdentity'
+import {
+  normalizeUrlForStorage,
+  normalizeWebsiteTitleForDisplay,
+  resolveCanonicalApp,
+  titleLooksUseful,
+  websiteDisplayLabel,
+} from '../lib/appIdentity'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -603,38 +609,7 @@ function websiteAwareLabel(block: WorkContextBlock): string {
 }
 
 function shortDomainLabel(domain: string): string {
-  const mapping: Record<string, string> = {
-    'x.com': 'X.com',
-    'twitter.com': 'X.com',
-    'youtube.com': 'YouTube',
-    'github.com': 'GitHub',
-    'mail.google.com': 'Gmail',
-    'gmail.com': 'Gmail',
-    'docs.google.com': 'Google Docs',
-    'meet.google.com': 'Google Meet',
-    'calendar.google.com': 'Google Calendar',
-    'drive.google.com': 'Google Drive',
-    'reddit.com': 'Reddit',
-    'stackoverflow.com': 'Stack Overflow',
-    'linkedin.com': 'LinkedIn',
-    'facebook.com': 'Facebook',
-    'instagram.com': 'Instagram',
-    'slack.com': 'Slack',
-    'notion.so': 'Notion',
-    'figma.com': 'Figma',
-    'chatgpt.com': 'ChatGPT',
-    'chat.openai.com': 'ChatGPT',
-    'claude.ai': 'Claude',
-    'discord.com': 'Discord',
-  }
-
-  if (mapping[domain]) return mapping[domain]
-  const suffixMatch = Object.entries(mapping).find(([key]) => domain.endsWith(`.${key}`))
-  if (suffixMatch) return suffixMatch[1]
-
-  const stripped = domain.startsWith('www.') ? domain.slice(4) : domain
-  const base = stripped.split('.')[0] ?? stripped
-  return base ? `${base[0].toUpperCase()}${base.slice(1)}` : domain
+  return websiteDisplayLabel(domain)
 }
 
 function workflowRefsByBlockId(
@@ -868,8 +843,8 @@ function buildPageCandidates(
   for (const visit of getWebsiteVisitsForRange(db, startTime, endTime)) {
     const canonicalKey = visit.normalizedUrl ?? normalizeUrlForStorage(visit.url) ?? `domain:${visit.domain}`
     const existing = grouped.get(canonicalKey)
-    const pageTitle = visit.pageTitle?.trim() || null
-    const displayTitle = pageTitle || visit.domain
+    const pageTitle = normalizeWebsiteTitleForDisplay(visit.domain, visit.pageTitle)
+    const displayTitle = pageTitle || websiteDisplayLabel(visit.domain)
 
     if (existing) {
       existing.totalSeconds += visit.durationSec

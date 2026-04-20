@@ -66,6 +66,13 @@ export async function resolve(specifier, context, defaultResolve) {
     }
   }
 
+  if (specifier === '@daylens/remote-contract') {
+    return {
+      url: pathToFileURL(path.resolve(projectRoot, 'packages/remote-contract/index.ts')).href,
+      shortCircuit: true,
+    }
+  }
+
   try {
     return await defaultResolve(specifier, context, defaultResolve)
   } catch (error) {

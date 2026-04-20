@@ -12,6 +12,31 @@ interface NormalizationMap {
   catalog: Record<string, NormalizationEntry>
 }
 
+const WEBSITE_DOMAIN_LABELS: Record<string, string> = {
+  'x.com': 'X (Twitter)',
+  'twitter.com': 'X (Twitter)',
+  'youtube.com': 'YouTube',
+  'github.com': 'GitHub',
+  'mail.google.com': 'Gmail',
+  'gmail.com': 'Gmail',
+  'docs.google.com': 'Google Docs',
+  'meet.google.com': 'Google Meet',
+  'calendar.google.com': 'Google Calendar',
+  'drive.google.com': 'Google Drive',
+  'reddit.com': 'Reddit',
+  'stackoverflow.com': 'Stack Overflow',
+  'linkedin.com': 'LinkedIn',
+  'facebook.com': 'Facebook',
+  'instagram.com': 'Instagram',
+  'slack.com': 'Slack',
+  'notion.so': 'Notion',
+  'figma.com': 'Figma',
+  'chatgpt.com': 'ChatGPT',
+  'chat.openai.com': 'ChatGPT',
+  'claude.ai': 'Claude',
+  'discord.com': 'Discord',
+}
+
 export interface CanonicalAppIdentity {
   canonicalAppId: string | null
   appInstanceId: string
@@ -147,6 +172,65 @@ export function pageKeyForUrl(rawUrl: string | null | undefined): string | null 
   } catch {
     return normalizedUrl
   }
+}
+
+function normalizedDomainForDisplay(domain: string | null | undefined): string {
+  return (domain ?? '').trim().toLowerCase().replace(/^www\./, '')
+}
+
+function compactWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+export function websiteDisplayLabel(domain: string): string {
+  const normalizedDomain = normalizedDomainForDisplay(domain)
+  if (!normalizedDomain) return domain
+
+  if (WEBSITE_DOMAIN_LABELS[normalizedDomain]) return WEBSITE_DOMAIN_LABELS[normalizedDomain]
+  const suffixMatch = Object.entries(WEBSITE_DOMAIN_LABELS).find(([key]) => normalizedDomain.endsWith(`.${key}`))
+  if (suffixMatch) return suffixMatch[1]
+
+  const base = normalizedDomain.split('.')[0] ?? normalizedDomain
+  return base ? `${base[0].toUpperCase()}${base.slice(1)}` : domain
+}
+
+function stripNotificationBadgePrefix(title: string): string {
+  return compactWhitespace(title.replace(/^\(\d+\)\s*/, ''))
+}
+
+export function normalizeWebsiteTitleForDisplay(
+  domain: string,
+  rawTitle: string | null | undefined,
+): string | null {
+  if (!rawTitle) return null
+
+  const normalizedDomain = normalizedDomainForDisplay(domain)
+  const domainLabel = websiteDisplayLabel(normalizedDomain)
+  const cleaned = stripNotificationBadgePrefix(rawTitle)
+  if (!cleaned) return null
+
+  const lower = cleaned.toLowerCase()
+  const simplifiedDomain = normalizedDomain.replace(/\.(com|org|io|net|ai|dev|app|so)$/g, '')
+
+  if (normalizedDomain === 'x.com' || normalizedDomain === 'twitter.com') {
+    if (/^(x|x\.com|twitter|home(?:\s*\/\s*x)?)$/i.test(cleaned)) return domainLabel
+    if (/^notifications?(?:\s*\/\s*x)?$/i.test(cleaned)) return `${domainLabel} notifications`
+    if (/^messages?(?:\s*\/\s*x)?$/i.test(cleaned)) return `${domainLabel} messages`
+    if (/^explore(?:\s*\/\s*x)?$/i.test(cleaned)) return `${domainLabel} explore`
+    if (/^bookmarks?(?:\s*\/\s*x)?$/i.test(cleaned)) return `${domainLabel} bookmarks`
+    if (/^home$/i.test(cleaned)) return domainLabel
+  }
+
+  if (
+    /^(home|start page|dashboard)$/i.test(cleaned)
+    || lower === normalizedDomain
+    || lower === simplifiedDomain
+    || lower === domainLabel.toLowerCase()
+  ) {
+    return domainLabel
+  }
+
+  return cleaned
 }
 
 export function titleLooksUseful(rawTitle: string | null | undefined): rawTitle is string {

@@ -208,7 +208,7 @@ function summarizeWorkBlocks(blocks: WorkContextBlock[]): WorkBlockSummary[] {
       })),
       topPages: block.pageRefs.slice(0, 3).map((page) => ({
         domain: page.domain,
-        title: page.pageTitle ?? null,
+        label: page.domain,
         seconds: page.totalSeconds,
       })),
       artifactIds: block.topArtifacts.slice(0, 5).map((artifact) => artifact.id),
@@ -489,8 +489,8 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshotV2
     seconds: d.totalSeconds,
     category: 'browsing',
     topPages: (topPagesByDomain[d.domain] ?? []).map((page) => ({
-      url: page.url,
-      title: page.title,
+      domain: d.domain,
+      label: d.domain,
       seconds: page.totalSeconds,
     })),
   }))
@@ -547,6 +547,6 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshotV2
     topWorkstreams: buildWorkstreamRollups(safeTimelinePayload.blocks),
     standoutArtifacts: buildArtifactRollups(safeTimelinePayload.blocks),
     entities: loadEntityRollups(db, dateStr),
-    hiddenByPreferences: false,
+    privacyFiltered: false,
   }
 }

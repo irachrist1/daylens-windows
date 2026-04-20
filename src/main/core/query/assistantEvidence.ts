@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import type { AssistantEvidenceBlock, AssistantEvidencePack } from '@shared/core'
+import { inferWorkIntent } from '../../../shared/workIntent'
 import { getAppSummariesForRange, getFocusSessionsForDateRange, getWebsiteSummariesForRange } from '../../db/queries'
 import { localDayBounds } from '../../lib/localDate'
 import { getAppDetailPayload, getTimelineDayPayload, getWorkflowSummaries, userVisibleLabelForBlock } from '../../services/workBlocks'
@@ -11,6 +12,7 @@ function blockEvidence(block: ReturnType<typeof getTimelineDayPayload>['blocks']
     startTime: block.startTime,
     endTime: block.endTime,
     dominantCategory: block.dominantCategory,
+    workIntent: inferWorkIntent(block),
     topApps: block.topApps.slice(0, 4).map((app) => app.appName),
     topSites: block.websites.slice(0, 4).map((site) => site.domain),
     topArtifacts: block.topArtifacts.slice(0, 4).map((artifact) => artifact.displayTitle),
