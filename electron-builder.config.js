@@ -140,6 +140,6 @@ module.exports = {
   publish: {
     provider: 'github',
     owner: 'irachrist1',
-    repo: 'daylens-windows',
+    repo: 'daylens',
   },
 }

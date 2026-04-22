@@ -3148,12 +3148,14 @@ async function maybeGenerateRequestedOutput(params: {
 
   const range = resolveOutputRange(params.question, params.restoredState, params.previousContext)
   const directEntity: DirectReportEntity | null = params.routedContext?.entity
+    && (params.routedContext.entity.entityType === 'client' || params.routedContext.entity.entityType === 'project')
     ? {
       entityType: params.routedContext.entity.entityType,
       id: params.routedContext.entity.entityId,
       name: params.routedContext.entity.entityName,
     }
     : params.previousContext?.entity
+      && (params.previousContext.entity.entityType === 'client' || params.previousContext.entity.entityType === 'project')
       ? {
         entityType: params.previousContext.entity.entityType,
         id: params.previousContext.entity.entityId,

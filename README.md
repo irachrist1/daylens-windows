@@ -16,11 +16,11 @@ This repository is historically named `daylens-windows`, but the Electron deskto
 
 ## Install
 
-Direct downloads for v1.0.29 (click = download starts immediately):
+Public download routes (kept versionless so they follow the newest real asset instead of guessing):
 
-- **[macOS (Apple Silicon) — Daylens-1.0.29-arm64.dmg](https://github.com/irachrist1/daylens/releases/download/v1.0.29/Daylens-1.0.29-arm64.dmg)**
-- **[Windows — Daylens-1.0.27-Setup.exe](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27-Setup.exe)**
-- **[Linux AppImage — Daylens-1.0.27.AppImage](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.AppImage)**  •  [.deb](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.deb)  •  [.rpm](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.rpm)  •  [.tar.gz](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.tar.gz)
+- **[macOS download](https://daylens-web-irachrist1s-projects.vercel.app/daylens/api/download/mac)**
+- **[Windows download](https://daylens-web-irachrist1s-projects.vercel.app/daylens/api/download/windows)**
+- **[Linux status](https://daylens-web-irachrist1s-projects.vercel.app/daylens/linux)**  •  **[all GitHub releases](https://github.com/irachrist1/daylens/releases)**
 
 Prefer a package manager on macOS (zero prompts, zero clicks):
 

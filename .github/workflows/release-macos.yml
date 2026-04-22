@@ -162,15 +162,14 @@ jobs:
             fi
             echo
             echo "### Downloads"
-            echo "- Windows installer: \`Daylens-${VERSION}-Setup.exe\`"
             echo "- macOS installer: \`Daylens-${VERSION}-arm64.dmg\`"
             echo "- macOS archive: \`Daylens-${VERSION}-arm64.zip\`"
-            echo "- Linux AppImage: \`Daylens-${VERSION}.AppImage\`"
-            echo "- Linux packages: \`Daylens-${VERSION}.deb\`, \`Daylens-${VERSION}.rpm\`, and \`Daylens-${VERSION}.tar.gz\`"
+            echo "- macOS updater metadata: \`latest-mac.yml\`"
             echo
             echo "### Release assets"
-            echo "This shared version release is populated by the macOS, Windows, and Linux workflows."
-            echo 'Updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) lives on this same release so packaged apps across platforms resolve one version tag.'
+            echo "This shared version release can be populated by the macOS, Windows, and Linux workflows."
+            echo 'This macOS workflow uploads the DMG, ZIP, and `latest-mac.yml`.'
+            echo 'Windows and Linux assets only appear on this release when their matching workflows run for the same version.'
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 

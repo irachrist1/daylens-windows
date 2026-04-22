@@ -7,15 +7,15 @@ Pick your platform — each one works in under a minute.
 - [Linux](#linux) — AppImage, deb, rpm, or tar.gz
 - [Troubleshooting](#troubleshooting) — older DMGs, "damaged" dialog, source builds
 
-## Direct downloads (v1.0.29)
+## Public download routes
 
-Clicking a link starts the download.
+These links stay versionless on purpose, so they follow the newest real release asset instead of assuming every latest tag contains every platform package.
 
-- **macOS (Apple Silicon):** [Daylens-1.0.29-arm64.dmg](https://github.com/irachrist1/daylens/releases/download/v1.0.29/Daylens-1.0.29-arm64.dmg)
-- **Windows:** [Daylens-1.0.27-Setup.exe](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27-Setup.exe)
-- **Linux:** [AppImage](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.AppImage) · [deb](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.deb) · [rpm](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.rpm) · [tar.gz](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.tar.gz)
+- **macOS (Apple Silicon):** [download now](https://daylens-web-irachrist1s-projects.vercel.app/daylens/api/download/mac)
+- **Windows:** [download now](https://daylens-web-irachrist1s-projects.vercel.app/daylens/api/download/windows)
+- **Linux:** [status page](https://daylens-web-irachrist1s-projects.vercel.app/daylens/linux)
 
-Need a different version? Browse the [full releases page](https://github.com/irachrist1/daylens/releases/latest).
+Need a different version? Browse the [full releases page](https://github.com/irachrist1/daylens/releases).
 
 ---
 
@@ -31,7 +31,7 @@ Homebrew handles the one-time macOS approval step for you. To upgrade later: `br
 
 ### Option B — Drag-and-drop DMG
 
-1. Download `Daylens-1.0.29-arm64.dmg` from the link above
+1. Download the current macOS DMG from the link above
 2. Double-click the DMG to open it
 3. Drag the **Daylens** icon onto the **Applications** folder on the right
 4. Eject the DMG
@@ -68,7 +68,7 @@ Daylens currently ships arm64 builds only. Intel Macs are not supported by the p
 
 ## Windows
 
-1. Download `Daylens-1.0.27-Setup.exe` from the link above
+1. Download the current Windows installer from the link above
 2. Run it. It installs per-user (no admin prompt) and launches automatically.
 3. On first run, SmartScreen may show a blue *"Windows protected your PC"* banner. Click **More info** → **Run anyway**. This is the Windows equivalent of the macOS first-launch approval — ad-hoc signed builds are unknown to Microsoft's reputation service.
 

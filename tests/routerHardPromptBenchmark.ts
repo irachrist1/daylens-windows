@@ -260,6 +260,102 @@ function seedWorkSession(
   }
 }
 
+function seedUnattributedWorkSession(
+  db: Database.Database,
+  payload: {
+    title: string
+    bundleId: string
+    startTime: number
+    endTime: number
+    evidence: Array<{ type: string; value: string; weight: number }>
+  },
+): void {
+  const sessionId = randomUUID()
+  const segmentId = randomUUID()
+  const createdAt = payload.startTime
+  const durationMs = payload.endTime - payload.startTime
+
+  db.prepare(`
+    INSERT INTO activity_segments (
+      id,
+      device_id,
+      started_at,
+      ended_at,
+      duration_ms,
+      primary_bundle_id,
+      window_title,
+      domain,
+      file_path,
+      input_score,
+      attention_score,
+      idle_ratio,
+      class,
+      raw_session_ids_json,
+      created_at
+    ) VALUES (?, 'device-1', ?, ?, ?, ?, ?, NULL, NULL, 0.8, 0.9, 0.0, 'active', '[]', ?)
+  `).run(
+    segmentId,
+    payload.startTime,
+    payload.endTime,
+    durationMs,
+    payload.bundleId,
+    payload.title,
+    createdAt,
+  )
+
+  db.prepare(`
+    INSERT INTO work_sessions (
+      id,
+      device_id,
+      started_at,
+      ended_at,
+      duration_ms,
+      active_ms,
+      idle_ms,
+      client_id,
+      project_id,
+      attribution_status,
+      attribution_confidence,
+      title,
+      primary_bundle_id,
+      app_bundle_ids_json,
+      created_at,
+      updated_at
+    ) VALUES (?, 'device-1', ?, ?, ?, ?, 0, NULL, NULL, 'unattributed', NULL, ?, ?, ?, ?, ?)
+  `).run(
+    sessionId,
+    payload.startTime,
+    payload.endTime,
+    durationMs,
+    durationMs,
+    payload.title,
+    payload.bundleId,
+    JSON.stringify([payload.bundleId]),
+    createdAt,
+    createdAt,
+  )
+
+  db.prepare(`
+    INSERT INTO work_session_segments (work_session_id, segment_id, role, contribution_ms)
+    VALUES (?, ?, 'primary', ?)
+  `).run(sessionId, segmentId, durationMs)
+
+  const insertEvidence = db.prepare(`
+    INSERT INTO work_session_evidence (
+      id,
+      work_session_id,
+      evidence_type,
+      evidence_value,
+      weight,
+      source_segment_id,
+      created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  for (const item of payload.evidence) {
+    insertEvidence.run(randomUUID(), sessionId, item.type, item.value, item.weight, segmentId, createdAt)
+  }
+}
+
 function buildFixtureDb(): Database.Database {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
@@ -450,6 +546,56 @@ function buildFixtureDb(): Database.Database {
   return db
 }
 
+function buildEvidenceBackedFixtureDb(): Database.Database {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  seedCatalog(db)
+
+  const workbookStart = localMs(2026, 4, 9, 9, 28)
+  const workbookEnd = localMs(2026, 4, 9, 10, 32)
+  insertAppSession(db, {
+    bundleId: 'com.microsoft.Excel',
+    appName: 'Excel',
+    startTime: workbookStart,
+    endTime: workbookEnd,
+    category: 'productivity',
+    windowTitle: 'ASYV 2M Immediate FY2027.xlsx - Excel',
+  })
+  seedUnattributedWorkSession(db, {
+    title: 'ASYV 2M Immediate FY2027 spreadsheet',
+    bundleId: 'com.microsoft.Excel',
+    startTime: workbookStart,
+    endTime: workbookEnd,
+    evidence: [
+      { type: 'file', value: 'ASYV 2M Immediate FY2027.xlsx', weight: 0.95 },
+      { type: 'window_title', value: 'ASYV 2M Immediate FY2027.xlsx - Excel', weight: 0.9 },
+    ],
+  })
+
+  const mailStart = localMs(2026, 4, 9, 10, 32)
+  const mailEnd = localMs(2026, 4, 9, 11, 0)
+  insertAppSession(db, {
+    bundleId: 'com.microsoft.Outlook',
+    appName: 'Outlook',
+    startTime: mailStart,
+    endTime: mailEnd,
+    category: 'email',
+    windowTitle: 'ASYV renewal thread - Outlook',
+  })
+  seedUnattributedWorkSession(db, {
+    title: 'Spreadsheet and email coordination',
+    bundleId: 'com.microsoft.Outlook',
+    startTime: mailStart,
+    endTime: mailEnd,
+    evidence: [
+      { type: 'email_subject', value: 'ASYV renewal thread', weight: 0.9 },
+      { type: 'window_title', value: 'ASYV renewal thread - Outlook', weight: 0.82 },
+    ],
+  })
+
+  return db
+}
+
 type BenchmarkCase = {
   name: string
   question: string
@@ -466,6 +612,17 @@ const CASES: BenchmarkCase[] = [
       if (!/ASYV/i.test(answer)) return 'answer should mention ASYV'
       if (!/attributed/i.test(answer)) return 'answer should summarize attributed time'
       return null
+    },
+  },
+  {
+    name: 'Monthly ASYV work breakdown',
+    question: 'What have I been doing for ASYV this month and how much time have I spent on each, and in total?',
+    shouldRoute: true,
+    assert: (answer) => {
+      if (!/ASYV/i.test(answer)) return 'answer should mention ASYV'
+      if (!/this month/i.test(answer)) return 'answer should preserve the month range'
+      if (!/ASYV renewal export flow|Forecast\.xlsx|renewal thread|client portal/i.test(answer)) return 'answer should mention concrete ASYV work items'
+      return /attributed/i.test(answer) ? null : 'answer should summarize attributed time'
     },
   },
   {
@@ -641,6 +798,35 @@ test('Windows entity routing reuses prior project context for follow-ups', async
   assert.match(second.answer, /Renewal by app/i)
   assert.match(second.answer, /Visual Studio Code|Excel|Outlook|Google Chrome/i)
   assert.doesNotMatch(second.answer, /Microsoft Word/i)
+
+  db.close()
+})
+
+test('Windows entity routing falls back to evidence-backed month answers when explicit attribution is missing', async () => {
+  const db = buildEvidenceBackedFixtureDb()
+  const result = await ask(db, 'What have I been doing for ASYV this month and how much time have I spent on each, and in total?')
+
+  assert.ok(result && result.kind === 'answer')
+  assert.match(result.answer, /ASYV in this month \(evidence-backed\):/i)
+  assert.match(result.answer, /ASYV 2M Immediate FY2027|Spreadsheet and email coordination/i)
+  assert.match(result.answer, /Excel|Outlook/i)
+  assert.match(result.answer, /Structured client\/project attribution was missing/i)
+  assert.equal(result.resolvedContext.entity?.entityType, 'evidence')
+  assert.equal(result.resolvedContext.entity?.entityName, 'ASYV')
+
+  db.close()
+})
+
+test('Windows entity routing reuses prior evidence-backed context for follow-ups', async () => {
+  const db = buildEvidenceBackedFixtureDb()
+  const first = await ask(db, 'What have I been doing for ASYV this month and how much time have I spent on each, and in total?')
+  assert.ok(first && first.kind === 'answer')
+  assert.equal(first.resolvedContext.entity?.entityType, 'evidence')
+
+  const second = await ask(db, 'break it down by app', first.resolvedContext)
+  assert.ok(second && second.kind === 'answer')
+  assert.match(second.answer, /ASYV \(evidence-backed\) by app in this month/i)
+  assert.match(second.answer, /Excel|Outlook/i)
 
   db.close()
 })

@@ -260,7 +260,7 @@ export interface AIWeeklyBriefStateSnapshot {
 export interface AIEntityStateSnapshot {
   entityId: string
   entityName: string
-  entityType: 'client' | 'project'
+  entityType: 'client' | 'project' | 'evidence'
   rangeStartMs: number
   rangeEndMs: number
   rangeLabel: string

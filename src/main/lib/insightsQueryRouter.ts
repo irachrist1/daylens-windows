@@ -17,6 +17,9 @@ import {
   resolveClientAmbiguitiesForRange,
   resolveClientAppBreakdownForRange,
   resolveClientEvidenceForRange,
+  resolveEvidenceBackedAppBreakdownForRange,
+  resolveEvidenceBackedQuery,
+  resolveEvidenceBackedTimelineForRange,
   resolveClientQuery,
   resolveClientTimelineForRange,
   resolveProjectAppBreakdownForRange,
@@ -45,7 +48,7 @@ export type EntityIntent =
 export interface EntityContext {
   entityId: string
   entityName: string
-  entityType: 'client' | 'project'
+  entityType: 'client' | 'project' | 'evidence'
   rangeStartMs: number
   rangeEndMs: number
   rangeLabel: string
@@ -85,6 +88,29 @@ function dayBounds(date: Date): [number, number] {
   const end = new Date(start)
   end.setDate(end.getDate() + 1)
   return [start.getTime(), end.getTime()]
+}
+
+function startOfDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function startOfMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1)
+}
+
+function startOfQuarter(date: Date): Date {
+  const quarterMonth = Math.floor(date.getMonth() / 3) * 3
+  return new Date(date.getFullYear(), quarterMonth, 1)
+}
+
+function startOfYear(date: Date): Date {
+  return new Date(date.getFullYear(), 0, 1)
+}
+
+function nextDay(date: Date): Date {
+  const next = new Date(date)
+  next.setDate(next.getDate() + 1)
+  return next
 }
 
 function formatDuration(seconds: number): string {
@@ -804,6 +830,11 @@ type ResolvedEntity =
     clientId: string
     clientName: string
   }
+  | {
+    entityType: 'evidence'
+    id: string
+    name: string
+  }
 
 const SINGLE_ENTITY_PATTERNS = [
   /(?:how (?:many|much) (?:hours?|time))\s+(?:did i|have i|i)\s+(?:spend|spent|log(?:ged)?|work(?:ed)?)\s+(?:on|for|with|at)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\s*\?|$)/i,
@@ -868,6 +899,63 @@ function resolveQuestionRange(
     }
   }
 
+  if (normalized.includes('last month')) {
+    const currentMonthStart = startOfMonth(context.date)
+    const previousMonthStart = new Date(currentMonthStart.getFullYear(), currentMonthStart.getMonth() - 1, 1)
+    return {
+      startMs: previousMonthStart.getTime(),
+      endMs: currentMonthStart.getTime(),
+      label: 'last month',
+    }
+  }
+
+  if (normalized.includes('this month')) {
+    const currentMonthStart = startOfMonth(context.date)
+    return {
+      startMs: currentMonthStart.getTime(),
+      endMs: nextDay(startOfDay(context.date)).getTime(),
+      label: 'this month',
+    }
+  }
+
+  if (normalized.includes('last quarter')) {
+    const currentQuarterStart = startOfQuarter(context.date)
+    const previousQuarterStart = new Date(currentQuarterStart.getFullYear(), currentQuarterStart.getMonth() - 3, 1)
+    return {
+      startMs: previousQuarterStart.getTime(),
+      endMs: currentQuarterStart.getTime(),
+      label: 'last quarter',
+    }
+  }
+
+  if (normalized.includes('this quarter')) {
+    const currentQuarterStart = startOfQuarter(context.date)
+    return {
+      startMs: currentQuarterStart.getTime(),
+      endMs: nextDay(startOfDay(context.date)).getTime(),
+      label: 'this quarter',
+    }
+  }
+
+  if (normalized.includes('last year')) {
+    const currentYearStart = startOfYear(context.date)
+    const previousYearStart = new Date(currentYearStart.getFullYear() - 1, 0, 1)
+    return {
+      startMs: previousYearStart.getTime(),
+      endMs: currentYearStart.getTime(),
+      label: 'last year',
+    }
+  }
+
+  if (normalized.includes('this year')) {
+    const currentYearStart = startOfYear(context.date)
+    return {
+      startMs: currentYearStart.getTime(),
+      endMs: nextDay(startOfDay(context.date)).getTime(),
+      label: 'this year',
+    }
+  }
+
   const [startMs, endMs] = dayBounds(context.date)
   return {
     startMs,
@@ -877,12 +965,12 @@ function resolveQuestionRange(
 }
 
 function timePhraseRegex(): RegExp {
-  return /\b(this week|last week|today|yesterday|all time|all-time|across all|all tracked|since tracking|historically)\b/i
+  return /\b(this week|last week|this month|last month|this quarter|last quarter|this year|last year|today|yesterday|all time|all-time|across all|all tracked|since tracking|historically)\b/i
 }
 
 function cleanEntityName(raw: string): string {
   return raw
-    .replace(/\b(this week|last week|today|yesterday|all time|all-time|across all|all tracked|since tracking|historically)\b/gi, '')
+    .replace(/\b(this week|last week|this month|last month|this quarter|last quarter|this year|last year|today|yesterday|all time|all-time|across all|all tracked|since tracking|historically)\b/gi, '')
     .replace(/[?.!,:]+$/g, '')
     .trim()
 }
@@ -1043,6 +1131,100 @@ function isEntityTimeQuestion(normalized: string): boolean {
     || normalized.includes('how long')
     || normalized.includes('time spent')
     || normalized.includes('hours on')
+    || normalized.includes('what have i been doing')
+    || normalized.includes('what was i doing')
+}
+
+function workItemDayLabel(isoDate: string): string {
+  return new Date(isoDate).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function buildWorkItemLines<
+  T extends {
+    start: string
+    active_ms: number
+    title: string | null
+    project_name: string | null
+    apps: Array<{ app_name: string }>
+    evidence: Array<{ value: string }>
+  },
+>(sessions: T[], fallbackLabel: string): string[] {
+  const grouped = new Map<string, {
+    label: string
+    durationMs: number
+    appNames: Set<string>
+    evidenceLabels: Set<string>
+    dayLabels: Set<string>
+  }>()
+
+  for (const session of sessions) {
+    const label = session.title?.trim() || session.project_name || fallbackLabel
+    const key = label.toLowerCase()
+    const existing = grouped.get(key) ?? {
+      label,
+      durationMs: 0,
+      appNames: new Set<string>(),
+      evidenceLabels: new Set<string>(),
+      dayLabels: new Set<string>(),
+    }
+    existing.durationMs += session.active_ms
+    existing.dayLabels.add(workItemDayLabel(session.start))
+    for (const app of session.apps.slice(0, 3)) {
+      if (app.app_name.trim()) existing.appNames.add(app.app_name.trim())
+    }
+    for (const item of session.evidence.slice(0, 3)) {
+      if (item.value.trim()) existing.evidenceLabels.add(item.value.trim())
+    }
+    grouped.set(key, existing)
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => right.durationMs - left.durationMs)
+    .slice(0, 5)
+    .map((item) => {
+      const apps = [...item.appNames].slice(0, 3)
+      const evidence = [...item.evidenceLabels].slice(0, 2)
+      const days = [...item.dayLabels]
+      const daySummary = days.length > 1 ? ` across ${days.length} days` : days[0] ? ` on ${days[0]}` : ''
+      const appSummary = apps.length > 0 ? ` via ${humanList(apps)}` : ''
+      const evidenceSummary = evidence.length > 0 ? `. Evidence: ${humanList(evidence)}` : ''
+      return `- ${item.label} — ${formatDurationMs(item.durationMs)}${daySummary}${appSummary}${evidenceSummary}`
+    })
+}
+
+function buildAppBreakdownFromSessions<
+  T extends {
+    apps: Array<{ app_name: string; duration_ms: number; role: string }>
+  },
+>(sessions: T[]): Array<{ app_name: string; duration_ms: number; session_count: number; roles: string[] }> {
+  const apps = new Map<string, { app_name: string; duration_ms: number; session_count: number; roles: Set<string> }>()
+
+  for (const session of sessions) {
+    for (const app of session.apps) {
+      const existing = apps.get(app.app_name) ?? {
+        app_name: app.app_name,
+        duration_ms: 0,
+        session_count: 0,
+        roles: new Set<string>(),
+      }
+      existing.duration_ms += app.duration_ms
+      existing.session_count += 1
+      existing.roles.add(app.role)
+      apps.set(app.app_name, existing)
+    }
+  }
+
+  return [...apps.values()]
+    .sort((left, right) => right.duration_ms - left.duration_ms)
+    .map((entry) => ({
+      app_name: entry.app_name,
+      duration_ms: entry.duration_ms,
+      session_count: entry.session_count,
+      roles: [...entry.roles],
+    }))
 }
 
 function buildEntityContext(
@@ -1068,45 +1250,35 @@ function topEvidenceLabels(items: ClientEvidenceItem[], limit = 3): string[] {
     .slice(0, limit)
 }
 
-function buildClientTimeAnswer(payload: ClientQueryPayload): string {
+function buildClientTimeAnswer(payload: ClientQueryPayload, rangeLabel: string): string {
   const { totals } = payload
   if (totals.session_count === 0) {
-    return `No tracked work sessions for ${payload.target.client_name} in that period.`
+    return `No tracked work sessions for ${payload.target.client_name} in ${rangeLabel}.`
   }
 
-  const sessionDetails = payload.sessions.slice(0, 5).map((session) => {
-    const start = new Date(session.start)
-    const apps = session.apps.slice(0, 3).map((app) => app.app_name).join(', ')
-    const conf = session.confidence ? ` (${Math.round(session.confidence * 100)}%)` : ''
-    const lead = session.title?.trim() || session.project_name || payload.target.client_name
-    return `- ${formatTime(start.getTime())}: ${lead} — ${apps}${conf}`
-  })
+  const activeDayCount = new Set(payload.sessions.map((session) => workItemDayLabel(session.start))).size
+  const workItems = buildWorkItemLines(payload.sessions, payload.target.client_name)
 
   return [
-    `${formatDurationMs(totals.attributed_ms)} attributed to ${payload.target.client_name}${totals.ambiguous_ms > 0 ? `, plus ${formatDurationMs(totals.ambiguous_ms)} ambiguous` : ''}, across ${totals.session_count} session${totals.session_count === 1 ? '' : 's'}.`,
-    sessionDetails.length > 0 ? 'Sessions:' : null,
-    ...sessionDetails,
+    `${payload.target.client_name} in ${rangeLabel}: ${formatDurationMs(totals.attributed_ms)} attributed${totals.ambiguous_ms > 0 ? `, plus ${formatDurationMs(totals.ambiguous_ms)} ambiguous` : ''}, across ${totals.session_count} session${totals.session_count === 1 ? '' : 's'} on ${activeDayCount} active day${activeDayCount === 1 ? '' : 's'}.`,
+    workItems.length > 0 ? 'Main work:' : null,
+    ...workItems,
   ].filter(Boolean).join('\n')
 }
 
-function buildProjectTimeAnswer(payload: ProjectQueryPayload): string {
+function buildProjectTimeAnswer(payload: ProjectQueryPayload, rangeLabel: string): string {
   const { totals } = payload
   if (totals.session_count === 0) {
-    return `No tracked work sessions for ${payload.target.project_name} in that period.`
+    return `No tracked work sessions for ${payload.target.project_name} in ${rangeLabel}.`
   }
 
-  const sessionDetails = payload.sessions.slice(0, 5).map((session) => {
-    const start = new Date(session.start)
-    const apps = session.apps.slice(0, 3).map((app) => app.app_name).join(', ')
-    const conf = session.confidence ? ` (${Math.round(session.confidence * 100)}%)` : ''
-    const lead = session.title?.trim() || payload.target.project_name
-    return `- ${formatTime(start.getTime())}: ${lead} — ${apps}${conf}`
-  })
+  const activeDayCount = new Set(payload.sessions.map((session) => workItemDayLabel(session.start))).size
+  const workItems = buildWorkItemLines(payload.sessions, payload.target.project_name)
 
   return [
-    `${formatDurationMs(totals.attributed_ms)} attributed to ${payload.target.project_name}${payload.target.client_name ? ` for ${payload.target.client_name}` : ''}${totals.ambiguous_ms > 0 ? `, plus ${formatDurationMs(totals.ambiguous_ms)} ambiguous` : ''}, across ${totals.session_count} session${totals.session_count === 1 ? '' : 's'}.`,
-    sessionDetails.length > 0 ? 'Sessions:' : null,
-    ...sessionDetails,
+    `${payload.target.project_name} in ${rangeLabel}: ${formatDurationMs(totals.attributed_ms)} attributed${payload.target.client_name ? ` for ${payload.target.client_name}` : ''}${totals.ambiguous_ms > 0 ? `, plus ${formatDurationMs(totals.ambiguous_ms)} ambiguous` : ''}, across ${totals.session_count} session${totals.session_count === 1 ? '' : 's'} on ${activeDayCount} active day${activeDayCount === 1 ? '' : 's'}.`,
+    workItems.length > 0 ? 'Main work:' : null,
+    ...workItems,
   ].filter(Boolean).join('\n')
 }
 
@@ -1274,6 +1446,68 @@ function buildProjectAmbiguityAnswer(
   ].join('\n')
 }
 
+const EVIDENCE_ENTITY_PATTERNS = [
+  /\bwhat have i been doing\s+(?:for|on|with)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+  /\bwhat was i (?:doing|working on)\s+(?:for|on|with)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+  /\bhow much time.*?(?:for|on|with)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
+  /\bbreak\s+(.+?)\s+down\s+by\s+app\b/i,
+  /\bshow\s+(?:the\s+)?(.+?)\s+timeline\b/i,
+]
+
+const EVIDENCE_PLACEHOLDER_TERMS = new Set(['it', 'that', 'this', 'them', 'those', 'these'])
+
+function extractEvidenceEntity(question: string, previousContext: TemporalContext | null): string | null {
+  for (const pattern of EVIDENCE_ENTITY_PATTERNS) {
+    const match = question.match(pattern)
+    if (!match?.[1]) continue
+    const candidate = cleanEntityName(match[1])
+    if (candidate && !EVIDENCE_PLACEHOLDER_TERMS.has(candidate.toLowerCase())) return candidate
+  }
+
+  if (previousContext?.entity?.entityType === 'evidence') {
+    return previousContext.entity.entityName
+  }
+
+  return null
+}
+
+function buildEvidenceBackedTimeAnswer(
+  payload: NonNullable<ReturnType<typeof resolveEvidenceBackedQuery>>,
+  rangeLabel: string,
+): string {
+  const workItems = buildWorkItemLines(payload.sessions, payload.target.label)
+  const topApps = buildAppBreakdownFromSessions(payload.sessions)
+
+  return [
+    `${payload.target.label} in ${rangeLabel} (evidence-backed): ${formatDurationMs(payload.totals.matched_ms)} matched across ${payload.totals.session_count} session${payload.totals.session_count === 1 ? '' : 's'}.`,
+    workItems.length > 0 ? 'Main work:' : null,
+    ...workItems,
+    topApps.length > 0 ? `Top apps: ${topApps.slice(0, 4).map((app) => `${app.app_name} (${formatDurationMs(app.duration_ms)})`).join(', ')}.` : null,
+    payload.totals.ambiguous_ms > 0 ? `Ambiguous time inside the match: ${formatDurationMs(payload.totals.ambiguous_ms)}.` : null,
+    payload.totals.structured_ms > 0
+      ? `This answer mixes first-class attribution with evidence-matched sessions where Daylens only had titles, files, emails, or tabs for ${payload.target.label}.`
+      : `Structured client/project attribution was missing here, so this answer is grounded in titles, files, emails, and tab evidence mentioning ${payload.target.label}.`,
+  ].filter(Boolean).join('\n')
+}
+
+function buildEvidenceBackedTimelineAnswer(
+  label: string,
+  rangeLabel: string,
+  sessions: NonNullable<ReturnType<typeof resolveEvidenceBackedTimelineForRange>>['sessions'],
+): string | null {
+  if (sessions.length === 0) return null
+  return [
+    `${label} timeline for ${rangeLabel} (evidence-backed):`,
+    ...sessions.slice(0, 8).map((session) => {
+      const start = new Date(session.start)
+      const end = new Date(session.end)
+      const lead = session.title?.trim() || session.project_name || label
+      const apps = session.apps.slice(0, 2).map((app) => app.app_name).join(', ')
+      return `- ${formatTime(start.getTime())}-${formatTime(end.getTime())}: ${lead}${apps ? ` — ${apps}` : ''}`
+    }),
+  ].join('\n')
+}
+
 function tryRouteEntityQuestion(
   normalized: string,
   question: string,
@@ -1325,17 +1559,17 @@ function tryRouteEntityQuestion(
     if (isEntityEvidenceQuestion(normalized)) {
       const evidence = resolveProjectEvidenceForRange(project.id, range.startMs, range.endMs, question, db)
       const answer = evidence ? buildClientEvidenceAnswer(project.name, range.label, evidence.items, normalized) : null
-      return answer
-        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'evidence') }
-        : null
+      if (answer) {
+        return { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'evidence') }
+      }
     }
 
     if (isEntityTimelineQuestion(normalized)) {
       const timeline = resolveProjectTimelineForRange(project.id, range.startMs, range.endMs, question, db)
       const answer = timeline ? buildClientTimelineAnswer(project.name, range.label, timeline.sessions) : null
-      return answer
-        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'timeline') }
-        : null
+      if (answer) {
+        return { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'timeline') }
+      }
     }
 
     if (isEntityAppBreakdownQuestion(normalized)) {
@@ -1344,9 +1578,9 @@ function tryRouteEntityQuestion(
       const answer = breakdown && payload
         ? buildClientAppBreakdownAnswer(project.name, range.label, breakdown.apps, payload.totals.ambiguous_ms)
         : null
-      return answer
-        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'appBreakdown') }
-        : null
+      if (answer) {
+        return { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'appBreakdown') }
+      }
     }
 
     if (isEntityInvoiceQuestion(normalized)) {
@@ -1360,52 +1594,51 @@ function tryRouteEntityQuestion(
     if (isEntityAmbiguityQuestion(normalized)) {
       const payload = resolveProjectQuery(project.id, range.startMs, range.endMs, question, db)
       const answer = payload ? buildProjectAmbiguityAnswer(payload, range.label) : null
-      return answer
-        ? { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'ambiguity') }
-        : null
+      if (answer) {
+        return { answer, entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'ambiguity') }
+      }
     }
 
     if (isEntityTimeQuestion(normalized)) {
       const payload = resolveProjectQuery(project.id, range.startMs, range.endMs, question, db)
-      if (!payload) return null
-      return {
-        answer: buildProjectTimeAnswer(payload),
-        entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'time'),
+      if (payload?.totals.session_count) {
+        return {
+          answer: buildProjectTimeAnswer(payload, range.label),
+          entityContext: buildEntityContext({ ...project, entityType: 'project' }, range, 'time'),
+        }
       }
     }
   }
 
   const client = extractSingleClient(question, previousContext, db)
-  if (!client) return null
-
-  if (isEntityEvidenceQuestion(normalized)) {
+  if (client && isEntityEvidenceQuestion(normalized)) {
     const evidence = resolveClientEvidenceForRange(client.id, range.startMs, range.endMs, question, db)
     const answer = evidence ? buildClientEvidenceAnswer(client.name, range.label, evidence.items, normalized) : null
-    return answer
-      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'evidence') }
-      : null
+    if (answer) {
+      return { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'evidence') }
+    }
   }
 
-  if (isEntityTimelineQuestion(normalized)) {
+  if (client && isEntityTimelineQuestion(normalized)) {
     const timeline = resolveClientTimelineForRange(client.id, range.startMs, range.endMs, question, db)
     const answer = timeline ? buildClientTimelineAnswer(client.name, range.label, timeline.sessions) : null
-    return answer
-      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'timeline') }
-      : null
+    if (answer) {
+      return { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'timeline') }
+    }
   }
 
-  if (isEntityAppBreakdownQuestion(normalized)) {
+  if (client && isEntityAppBreakdownQuestion(normalized)) {
     const breakdown = resolveClientAppBreakdownForRange(client.id, range.startMs, range.endMs, question, db)
     const payload = resolveClientQuery(client.id, range.startMs, range.endMs, question, db)
     const answer = breakdown && payload
       ? buildClientAppBreakdownAnswer(client.name, range.label, breakdown.apps, payload.totals.ambiguous_ms)
       : null
-    return answer
-      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'appBreakdown') }
-      : null
+    if (answer) {
+      return { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'appBreakdown') }
+    }
   }
 
-  if (isEntityInvoiceQuestion(normalized)) {
+  if (client && isEntityInvoiceQuestion(normalized)) {
     const invoice = buildClientInvoiceNarrativeForRange(client.id, range.startMs, range.endMs, question, db)
     const answer = invoice ? buildClientInvoiceAnswer(invoice, range.label) : null
     return answer
@@ -1413,20 +1646,51 @@ function tryRouteEntityQuestion(
       : null
   }
 
-  if (isEntityAmbiguityQuestion(normalized)) {
+  if (client && isEntityAmbiguityQuestion(normalized)) {
     const ambiguities = resolveClientAmbiguitiesForRange(client.id, range.startMs, range.endMs, question, db)
     const answer = buildClientAmbiguityAnswer(client.name, range.label, ambiguities)
+    if (answer) {
+      return { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'ambiguity') }
+    }
+  }
+
+  if (client && isEntityTimeQuestion(normalized)) {
+    const payload = resolveClientQuery(client.id, range.startMs, range.endMs, question, db)
+    if (payload?.totals.session_count) {
+      return {
+        answer: buildClientTimeAnswer(payload, range.label),
+        entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'time'),
+      }
+    }
+  }
+
+  const evidenceEntity = extractEvidenceEntity(question, previousContext)
+  if (!evidenceEntity) return null
+
+  if (isEntityTimelineQuestion(normalized)) {
+    const timeline = resolveEvidenceBackedTimelineForRange(evidenceEntity, range.startMs, range.endMs, question, db)
+    const answer = timeline ? buildEvidenceBackedTimelineAnswer(evidenceEntity, range.label, timeline.sessions) : null
     return answer
-      ? { answer, entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'ambiguity') }
+      ? { answer, entityContext: buildEntityContext({ entityType: 'evidence', id: evidenceEntity.toLowerCase(), name: evidenceEntity }, range, 'timeline') }
+      : null
+  }
+
+  if (isEntityAppBreakdownQuestion(normalized)) {
+    const breakdown = resolveEvidenceBackedAppBreakdownForRange(evidenceEntity, range.startMs, range.endMs, question, db)
+    const answer = breakdown
+      ? buildClientAppBreakdownAnswer(`${evidenceEntity} (evidence-backed)`, range.label, breakdown.apps, 0)
+      : null
+    return answer
+      ? { answer, entityContext: buildEntityContext({ entityType: 'evidence', id: evidenceEntity.toLowerCase(), name: evidenceEntity }, range, 'appBreakdown') }
       : null
   }
 
   if (isEntityTimeQuestion(normalized)) {
-    const payload = resolveClientQuery(client.id, range.startMs, range.endMs, question, db)
+    const payload = resolveEvidenceBackedQuery(evidenceEntity, range.startMs, range.endMs, question, db)
     if (!payload) return null
     return {
-      answer: buildClientTimeAnswer(payload),
-      entityContext: buildEntityContext({ ...client, entityType: 'client' }, range, 'time'),
+      answer: buildEvidenceBackedTimeAnswer(payload, range.label),
+      entityContext: buildEntityContext({ entityType: 'evidence', id: evidenceEntity.toLowerCase(), name: evidenceEntity }, range, 'time'),
     }
   }
 

@@ -124,6 +124,13 @@ function supportsAutoUpdates(): boolean {
 }
 
 function normalizeUpdaterErrorMessage(message: string): string {
+  if (process.platform === 'win32') {
+    if (/latest\.yml/i.test(message) && /(404|Cannot find)/i.test(message)) {
+      return 'This Windows release was published without updater metadata, so in-app updates are unavailable for this build. Download the latest Windows installer from the Daylens site instead.'
+    }
+    return message
+  }
+
   if (process.platform !== 'linux') return message
 
   if (/APPIMAGE/i.test(message)) {
