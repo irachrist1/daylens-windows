@@ -66,6 +66,10 @@ export function buildRemoteUpdateFeedUrl(baseUrl: string, platform: NodeJS.Platf
 export function normalizeRemoteUpdaterError(message: string): string {
   const compact = message.replace(/\s+/g, ' ').trim()
 
+  if (/releases\.atom|github\.com\/[^/]+\/[^/]+\/releases/i.test(compact)) {
+    return 'Daylens could not reach the old GitHub updater feed. Download the latest build from the Daylens site, then future updates will use the public Daylens update service.'
+  }
+
   if (/HTTP 401|HTTP 403|authentication token|rate limit/i.test(compact)) {
     return 'Daylens could not reach the update service right now. The release feed rejected the request.'
   }
@@ -86,5 +90,5 @@ export function normalizeRemoteUpdaterError(message: string): string {
     return 'Daylens could not check for updates right now.'
   }
 
-  return compact
+  return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact
 }

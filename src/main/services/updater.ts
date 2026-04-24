@@ -397,7 +397,7 @@ async function checkRemoteFeed(trigger: 'manual' | 'background', support: Return
       releaseName: null,
       releaseNotesText: null,
       releaseDate: null,
-      downloadUrl: MANUAL_DOWNLOAD_URL,
+      downloadUrl: previousState.downloadUrl ?? MANUAL_DOWNLOAD_URL,
     })
     return getUpdaterState()
   }

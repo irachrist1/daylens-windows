@@ -50,4 +50,12 @@ test('normalizeRemoteUpdaterError collapses noisy upstream failures into concise
     normalizeRemoteUpdaterError('Due to security reasons, actual status may not be reported, but 404. authentication token is missing.'),
     'Daylens could not reach the update service right now. The release feed rejected the request.',
   )
+  assert.equal(
+    normalizeRemoteUpdaterError('404 "method: GET url: https://github.com/irachrist1/daylens/releases.atom" Headers: {"cache-control":"no-cache","set-cookie":["private"]}'),
+    'Daylens could not reach the old GitHub updater feed. Download the latest build from the Daylens site, then future updates will use the public Daylens update service.',
+  )
+  assert.equal(
+    normalizeRemoteUpdaterError(`Unexpected updater failure ${'x'.repeat(500)}`).length <= 240,
+    true,
+  )
 })
