@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.31 - 2026-04-24
+
+### Added
+- **Full-text search across your entire history** — type any word into the new search box in the AI view and get every matching app session, work block, browser page, and AI artifact, sorted by time with highlighted excerpts. No AI involved — pure local SQLite FTS5.
+- **Your name in Daylens** — set a display name in onboarding or Settings and the AI will use it in every response instead of the generic fallback.
+- **Goals now shape your AI context** — picking "less distractions" during onboarding adds a live distraction summary (minutes + top domains) to every AI response. Picking "deep work" adds your deep-work percentage and longest streak.
+
+### Changed
+- **Honest focus score** — the old formula returned ~20 even on idle days. The new score is a single percentage: time in focused deep-work sessions (25+ continuous minutes) divided by total active time. Returns "Not enough data" instead of a fake number when you haven't tracked enough yet.
+- Thread deletion now removes attached artifact files from disk instead of only cleaning the database row.
+- Creating a new chat reuses an existing empty thread instead of accumulating blank drafts.
+
 ## v1.0.30 - 2026-04-23
 
 ### Fixed
