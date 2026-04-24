@@ -927,6 +927,7 @@ export default function Insights() {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [threadPickerOpen, setThreadPickerOpen] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
+  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
   const loadingRef = useRef(false)
@@ -1746,31 +1747,20 @@ export default function Insights() {
             </div>
           </div>
 
-          <div style={{
-            borderRadius: 18,
-            border: '1px solid var(--color-border-ghost)',
-            background: 'var(--color-surface)',
-            padding: '14px 16px',
-            marginBottom: 20,
-          }}>
+          <div style={{ marginBottom: 20 }}>
             <div style={{ display: 'grid', gap: 10 }}>
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 10,
-                borderRadius: 12,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface-low)',
-                padding: '10px 12px',
+                borderBottom: '1px solid var(--color-border-ghost)',
+                paddingBottom: 10,
               }}>
-                <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  Search
-                </span>
                 <input
                   type="search"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Find sessions, blocks, pages, and artifacts..."
+                  placeholder="Search your history or ask anything."
                   aria-label="Search local Daylens history"
                   style={{
                     flex: 1,
@@ -1992,33 +1982,41 @@ export default function Insights() {
                         </div>
                       </div>
                     ) : (
-                      <div key={message.id} style={{ display: 'flex', gap: 10, alignItems: 'start' }}>
+                      <div
+                        key={message.id}
+                        style={{ display: 'flex', gap: 10, alignItems: 'start' }}
+                        onMouseEnter={() => setHoveredMessageId(message.id != null ? String(message.id) : null)}
+                        onMouseLeave={() => setHoveredMessageId(null)}
+                      >
                         <div style={{
-                          width: 26,
-                          height: 26,
-                          borderRadius: 7,
-                          background: 'var(--color-surface-high)',
-                          color: 'var(--color-text-primary)',
+                          width: 22,
+                          height: 22,
+                          borderRadius: 6,
+                          border: '1px solid var(--color-border-ghost)',
+                          background: 'transparent',
+                          color: 'var(--color-text-tertiary)',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          fontSize: 11,
+                          fontSize: 10,
                           fontWeight: 800,
                           flexShrink: 0,
-                          marginTop: 1,
+                          marginTop: 2,
+                          opacity: hoveredMessageId === String(message.id) ? 1 : 0,
+                          transition: 'opacity 120ms ease',
                         }}>
                           D
                         </div>
                         <div style={{
                           flex: 1,
-                          borderRadius: 16,
-                          border: message.state === 'error'
-                            ? '1px solid rgba(248, 113, 113, 0.28)'
-                            : '1px solid var(--color-border-ghost)',
-                          background: message.state === 'error'
-                            ? 'rgba(248, 113, 113, 0.08)'
-                            : 'var(--color-surface)',
-                          padding: '16px 16px 12px',
+                          maxWidth: 680,
+                          lineHeight: 1.6,
+                          ...(message.state === 'error' ? {
+                            borderRadius: 12,
+                            border: '1px solid rgba(248, 113, 113, 0.28)',
+                            background: 'rgba(248, 113, 113, 0.08)',
+                            padding: '14px 16px 10px',
+                          } : {}),
                         }}>
                           {message.state === 'pending' ? (
                             message.content.trim()
