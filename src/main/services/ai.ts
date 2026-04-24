@@ -31,7 +31,7 @@ import {
   upsertWorkContextCleanupReview,
   upsertWorkContextInsight,
 } from '../db/queries'
-import { routeInsightsQuestion, type EntityContext, type TemporalContext } from '../lib/insightsQueryRouter'
+import { routeInsightsQuestion, shouldUseRouter, type EntityContext, type TemporalContext } from '../lib/insightsQueryRouter'
 import { resolveFollowUp } from '../lib/followUpResolver'
 import {
   buildDeterministicFollowUpCandidates,
@@ -3996,7 +3996,9 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     return persistChatTurn(db, conversationId, userMessage, directReportEnvelope, threadId)
   }
 
-  const routed = await routeInsightsQuestion(effectiveUserMessage, new Date(), previousContext, db)
+  const routed = shouldUseRouter(effectiveUserMessage)
+    ? await routeInsightsQuestion(effectiveUserMessage, new Date(), previousContext, db)
+    : null
   const reportEnvelope = await maybeGenerateRequestedOutput({
     question: effectiveUserMessage,
     restoredState,

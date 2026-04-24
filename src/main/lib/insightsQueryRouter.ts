@@ -2018,3 +2018,56 @@ export async function routeInsightsQuestion(
 
   return null
 }
+
+// Synthesis-question starters that should bypass the deterministic router.
+// Temporal modifiers ("last week", "yesterday") are NOT sufficient to route —
+// they are parameters, not routing signals.
+const SYNTHESIS_BLOCK_PREFIXES = [
+  'what did i do',
+  'what was i doing',
+  'what were i doing',
+  'what have i been doing',
+  'what happened',
+  'which ',
+  'find ',
+  'show me ',
+  'summarize',
+  'recap',
+  'compare ',
+  'how did ',
+  'walk me through',
+  'tell me about',
+  'what should i',
+  'give me a summary',
+  'give me an overview',
+]
+
+// Numeric-lookup patterns that always route deterministically.
+const NUMERIC_ROUTE_PATTERNS: RegExp[] = [
+  /\bhow (long|much time)\b/,
+  /\bhow many (hours?|sessions?|times?)\b/,
+  /\bfocus score\b/,
+  /\bhow'?s? (my )?focus\b/,
+]
+
+/**
+ * Returns true only for pure numeric lookups that the deterministic router
+ * can answer without open-ended synthesis. Everything else goes to the
+ * freeform/tool-use path.
+ *
+ * Temporal modifiers ("last week", "yesterday") are parameters, not routing
+ * signals — they do not flip this to true by themselves.
+ */
+export function shouldUseRouter(message: string): boolean {
+  const lower = message.trim().toLowerCase()
+
+  for (const prefix of SYNTHESIS_BLOCK_PREFIXES) {
+    if (lower.startsWith(prefix)) return false
+  }
+
+  for (const pattern of NUMERIC_ROUTE_PATTERNS) {
+    if (pattern.test(lower)) return true
+  }
+
+  return false
+}
