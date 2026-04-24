@@ -1615,8 +1615,8 @@ export default function Insights() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        <div style={{ padding: '32px 40px 20px', maxWidth: 960, margin: '0 auto', width: '100%' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, marginBottom: 24 }}>
+        <div style={{ padding: '32px 40px 20px', maxWidth: 960, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ order: 2, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, marginBottom: 24 }}>
             <div>
               <h1 style={{ fontSize: 30, fontWeight: 780, letterSpacing: '-0.03em', margin: 0, color: 'var(--color-text-primary)' }}>
                 AI
@@ -1820,7 +1820,7 @@ export default function Insights() {
             </div>
           </div>
 
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ order: 1, marginBottom: 20 }}>
             <div style={{ display: 'grid', gap: 10 }}>
               <div style={{
                 display: 'flex',
@@ -1927,17 +1927,19 @@ export default function Insights() {
           </div>
 
           {messages.length === 0 && (
-            <RecapPanel
-              recap={recapSummaries}
-              activePeriod={activeRecapPeriod}
-              onSelectPeriod={setActiveRecapPeriod}
-              hasProviderAccess={hasApiKey}
-              onPromptClick={handlePromptChipClick}
-            />
+            <div style={{ order: 3 }}>
+              <RecapPanel
+                recap={recapSummaries}
+                activePeriod={activeRecapPeriod}
+                onSelectPeriod={setActiveRecapPeriod}
+                hasProviderAccess={hasApiKey}
+                onPromptClick={handlePromptChipClick}
+              />
+            </div>
           )}
 
           {!hasApiKey && (
-            <div style={{ marginBottom: 20 }}>
+            <div style={{ order: 4, marginBottom: 20 }}>
               <ConnectAI
                 variant="hero"
                 initialProvider={settings.aiProvider}
@@ -1953,7 +1955,7 @@ export default function Insights() {
           )}
 
           {hasApiKey && (
-            <div style={{ display: 'grid', gap: 20 }}>
+            <div style={{ order: 5, display: 'grid', gap: 20 }}>
               {messages.length === 0 && (
                 <>
                   <div style={{
