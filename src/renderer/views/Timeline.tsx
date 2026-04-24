@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -441,7 +441,26 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
   )
 }
 
+const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
+
 function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
+  const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
+  const [recapLoading, setRecapLoading] = useState(false)
+
+  useEffect(() => {
+    if (payload.totalSeconds === 0) return
+    const cached = daySummaryRecapCache.get(payload.date)
+    if (cached) { setRecap(cached); return }
+    setRecapLoading(true)
+    ipc.ai.generateDaySummary(payload.date)
+      .then((result) => {
+        daySummaryRecapCache.set(payload.date, result)
+        setRecap(result)
+      })
+      .catch(() => { /* silently skip on error */ })
+      .finally(() => setRecapLoading(false))
+  }, [payload.date, payload.totalSeconds])
+
   const topCategories = Array.from(payload.blocks.reduce<Map<AppCategory, number>>((map, block) => {
     map.set(block.dominantCategory, (map.get(block.dominantCategory) ?? 0) + blockDurationSeconds(block))
     return map
@@ -472,6 +491,39 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
           {formatFullDate(payload.date)}
         </div>
       </div>
+
+      {recapLoading && (
+        <div style={{
+          borderRadius: 10,
+          background: 'var(--color-surface-low)',
+          padding: '14px 16px',
+          display: 'grid',
+          gap: 8,
+        }}>
+          {[100, 80, 60].map((w) => (
+            <div
+              key={w}
+              style={{
+                height: 11,
+                borderRadius: 5,
+                background: 'var(--color-surface-high)',
+                width: `${w}%`,
+                opacity: 0.6,
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {recap && recap.summary && (
+        <div style={{
+          fontSize: 13,
+          lineHeight: 1.7,
+          color: 'var(--color-text-secondary)',
+        }}>
+          {recap.summary}
+        </div>
+      )}
 
       <div style={{
         display: 'grid',
