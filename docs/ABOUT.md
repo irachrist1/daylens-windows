@@ -2,24 +2,18 @@
 
 ## Short Version
 
-Daylens is a cross-platform activity tracker for your laptop. It quietly logs what you're working on so you and your AI tools can ask grounded questions about your work history.
+Daylens is a local-first desktop activity tracker that turns your laptop history into a grounded work timeline you can inspect directly or query through AI.
 
 ## Product Description
 
-Daylens captures local evidence from the tools you use - apps, windows, browser activity, files, and reconstructed work sessions - then turns that into a local-first timeline you can inspect directly or query through AI. The same AI surface keeps chat threads and generated artifacts (reports, tables, charts, exports, focus-session recaps) persistent and reviewable inside a single view — start or review focus sessions, generate grounded reports, and come back later to open what you produced, all without sending you to a separate reports, history, or focus tab.
+Daylens captures foreground app sessions, browser history, focus activity, and reconstructed work blocks, then stores that history locally so you can answer questions like what you worked on, when you worked on it, and what evidence surrounded it. The same AI surface can summarize the day, answer follow-up questions, and save generated artifacts without moving that work into a separate reports or history product.
 
-It is built for questions like:
-
-- "How much should I charge Client X based on how long I've been working on this for the past month?"
-- "What did I do between 2-4 pm on Wednesday?"
-- "Show me everything I touched for Project X. Why is it not working now if it worked yesterday?"
-
-Think of it as Google for your workday history, and Spotify Wrapped for how you actually spend your time.
+Optional workspace linking adds a browser companion and remote sync, but the desktop app remains the capture engine and local source of truth.
 
 ## Concise Repo / Store Description
 
-Cross-platform activity tracker that turns your laptop history into a searchable, AI-ready work timeline.
+Local-first desktop activity tracker for macOS, Windows, and Linux with grounded timeline recall, contextual app summaries, and AI over your work history.
 
 ## Website Blurb
 
-Daylens helps you understand what you worked on, how long it took, what changed, and what context surrounded it - across apps, tabs, files, work sessions, optional linked browser access, and grounded AI reports.
+Daylens quietly records the evidence of your workday, rebuilds it into coherent work blocks, and lets you revisit that history through Timeline, Apps, and grounded AI instead of raw app-usage charts.

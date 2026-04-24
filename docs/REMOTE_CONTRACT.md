@@ -1,306 +1,153 @@
 # Daylens Remote Contract
 
-Status: Draft for review on 2026-04-20
+Status: code-audited refresh on 2026-04-23
 
-This document defines the shared product and data contract between desktop Daylens, the cloud sync layer, and the remote web companion.
+This file documents the shared remote contract as it exists in code today and calls out the places where the code is narrower than the type surface.
 
-It is the implementation-facing companion to `PRD.md` and `SRS.md`.
+## Shared Package
 
-## Purpose
+The contract lives in `packages/remote-contract` and is re-exported to the desktop snapshot layer from `src/shared/snapshot.ts`.
 
-This contract exists to stop three recurring failure modes:
+Code references:
 
-- frontend and backend deploying out of sync
-- remote features shipping before the sync boundary is frozen
-- desktop and web drifting into separate AI and data models
+- `packages/remote-contract/index.ts:1-318`
+- `src/shared/snapshot.ts:1`
 
-## Contract Ownership
+Current contract version:
 
-The contract should live in a shared versioned package, referenced here as:
+- `2026-04-20-r2` (`packages/remote-contract/index.ts:1`)
 
-- `packages/remote-contract`
+## Code-Proven Contract Shapes
 
-That package should own the shared types and validation schemas used across repos.
+### Snapshot V2
 
-It should not own desktop-only capture internals or renderer-only UI types.
+Desktop snapshot v2 includes:
 
-## Contract Versioning
+- focus score V2
+- work blocks
+- recap
+- coverage
+- top workstreams
+- standout artifacts
+- entities
+- `privacyFiltered`
 
-Every remote release must expose:
+Code references:
 
-- `contractVersion`
-- `minimumSupportedDesktopVersion`
-- `minimumSupportedWebVersion`
-- `minimumSupportedCloudVersion`
+- `packages/remote-contract/index.ts:179-193`
+- `src/main/services/snapshotExporter.ts:343-552`
 
-Rules:
+### Sync Health And Presence
 
-- breaking sync-shape changes require a contract version bump
-- frontend and cloud must not promote to production on different approved contract versions
-- desktop may lag temporarily only if the contract explicitly supports backward compatibility for that version window
+Current contract types:
 
-## Approved Launch Entities
+- `SyncHealth`: `linked | pending_first_sync | healthy | stale | failed`
+- `WorkspacePresenceState`: `active | idle | meeting | sleeping | offline | stale`
 
-The contract must define the following shared remote entities:
+Desktop runtime derivation also has a local-only pre-link state:
 
-- `workspace`
-- `device`
-- `webSession`
-- `workspaceLivePresence`
-- `syncRun`
-- `syncFailure`
-- `syncedDaySummary`
-- `syncedWorkBlock`
-- `syncedEntity`
-- `syncedArtifact`
-- `webAiThread`
-- `webAiMessage`
-- `webAiArtifact`
-- `aiJob`
+- `local_only | linked | pending_first_sync | healthy | stale | failed`
 
-## Sync Boundary
+Code references:
 
-The approved launch sync boundary is limited to:
+- `packages/remote-contract/index.ts:199-212`
+- `src/main/services/syncState.ts:5-24`
+- `src/main/services/workspaceLinker.ts:183-198`
 
-- live presence
-- sync runs
-- sync failures
-- day summaries
+### Remote Payload Boundary
+
+The launch payload already contains:
+
+- one day summary
 - work blocks
 - entities
 - artifacts
+- contract version, device id, local date, generated-at
 
-The contract must explicitly reject these as standard launch payloads:
+Desktop privacy shaping removes raw block artifact refs and generalized page labels before upload.
 
-- raw capture rows
-- full file paths
-- broad URL/title exhaust
-- provider-side memory as Daylens memory
+Code references:
 
-## Identity And Session Contract
+- `packages/remote-contract/index.ts:235-263`
+- `src/main/services/remoteSync.ts:43-69`
+- `src/main/services/remoteSync.ts:192-227`
 
-Shared identity/session fields must include:
+### Workspace AI Types
 
-- `workspaceId`
-- `deviceId`
-- `sessionId`
-- `issuedAt`
-- `expiresAt`
-- `contractVersion`
+The shared contract already defines:
 
-Web session claims must always scope reads and writes to a workspace, and later must allow extension to user/org membership without breaking workspace-based linking.
+- `WorkspaceAIThread`
+- `WorkspaceAIMessage`
+- `WorkspaceAIArtifact`
 
-## Sync State Contract
+Code references:
 
-The shared sync-state enum must include:
+- `packages/remote-contract/index.ts:287-318`
 
-- `unlinked`
-- `pending_first_sync`
-- `healthy`
-- `stale`
-- `failed`
-- `offline`
+## Important Narrowings In The Current Implementation
 
-The shared live-presence enum should include:
+### Entity Rollups
 
-- `active`
-- `idle`
-- `meeting`
-- `sleeping`
-- `offline`
-- `unknown`
+The contract allows:
 
-Every remote Timeline read must carry enough state to answer:
+- `client`
+- `project`
+- `repo`
+- `topic`
 
-- is this workspace linked?
-- when did it last heartbeat?
-- when did it last sync durably?
-- is the current view fresh enough to trust?
+Desktop exporter currently loads only:
 
-## Launch Payload Shapes
+- `client`
+- `project`
 
-### Heartbeat / Live Presence
+Code references:
 
-Minimum fields:
+- `packages/remote-contract/index.ts:153-159`
+- `src/main/services/snapshotExporter.ts:279-321`
 
-- `workspaceId`
-- `deviceId`
-- `capturedAt`
-- `status`
-- `currentBlockPreview`
-- `lastMeaningfulActivityAt`
-- `syncState`
-- `contractVersion`
+### Work Block Label Source
 
-Behavior rules:
+The remote contract exposes:
 
-- this payload is low-latency and overwrite-friendly
-- it is not the canonical durable history model
-- expiry or stale cleanup must be bounded and automatic
+- `user`
+- `ai`
+- `rule`
 
-### Sync Run
+Local timeline finalization internally distinguishes:
 
-Minimum fields:
+- `user`
+- `ai`
+- `artifact`
+- `workflow`
+- `rule`
 
-- `syncRunId`
-- `workspaceId`
-- `deviceId`
-- `startedAt`
-- `completedAt`
-- `status`
-- `contractVersion`
-- `payloadKinds`
-- `highWatermark`
+That means remote consumers see a normalized label-source surface instead of the fuller local provenance.
 
-Behavior rules:
+Code references:
 
-- sync runs are append-only records
-- retries must be idempotent
-- failures must retain reason codes safe for UI and observability
+- `packages/remote-contract/index.ts:74-94`
+- `src/main/services/workBlocks.ts:1301-1349`
+- `src/main/services/snapshotExporter.ts:192-216`
 
-### Day Summary
+### Shared AI Continuity
 
-Minimum fields:
+The contract has shared workspace AI thread/message/artifact types, but desktop does not yet write those rows to the remote backend. Web-side AI persistence is therefore real but still web-originated today.
 
-- `workspaceId`
-- `date`
-- `trackedMinutes`
-- `focusScore`
-- `topWorkstreams`
-- `artifactCount`
-- `coverage`
-- `lastSyncedAt`
-- `contractVersion`
+Code references:
 
-### Work Block
+- `packages/remote-contract/index.ts:287-318`
+- `src/main/services/artifacts.ts:339-342`
 
-Minimum fields:
+## Web Compatibility Layer Still Present
 
-- `workspaceId`
-- `blockId`
-- `date`
-- `startAt`
-- `endAt`
-- `label`
-- `workIntent`
-- `confidence`
-- `entityRefs`
-- `artifactRefs`
-- `evidenceRefs`
-- `lastSyncedAt`
-- `contractVersion`
+`daylens-web` still normalizes legacy `hiddenByPreferences` input into the stronger `privacyFiltered` field when reading older snapshot payloads.
 
-Behavior rules:
+Code reference:
 
-- work blocks are the primary remote proof unit
-- unattributed or low-confidence blocks must remain visible
-- labels must prefer stable deterministic or reviewed labels over churn
+- `/Users/tonny/Dev-Personal/daylens-web/convex/snapshots.ts:228-230`
 
-### Entity
+## Contract Truthfulness Rules
 
-Minimum fields:
-
-- `workspaceId`
-- `entityId`
-- `type`
-- `name`
-- `aliases`
-- `evidenceCount`
-- `lastSeenAt`
-- `contractVersion`
-
-### Artifact
-
-Minimum fields:
-
-- `workspaceId`
-- `artifactId`
-- `type`
-- `title`
-- `source`
-- `createdAt`
-- `fileRef`
-- `relatedBlockIds`
-- `relatedEntityIds`
-- `contractVersion`
-
-Behavior rules:
-
-- metadata lives in queryable records
-- large files live in durable object/file storage
-
-## AI Continuity Contract
-
-Cross-surface AI continuity requires shared row-based records:
-
-- `webAiThread`
-- `webAiMessage`
-- `webAiArtifact`
-- `aiJob`
-
-Minimum thread fields:
-
-- `threadId`
-- `workspaceId`
-- `title`
-- `origin`
-- `createdAt`
-- `updatedAt`
-- `lastMessageAt`
-- `archivedAt`
-
-Minimum message fields:
-
-- `messageId`
-- `threadId`
-- `workspaceId`
-- `role`
-- `content`
-- `status`
-- `provider`
-- `model`
-- `createdAt`
-- `tokenUsage`
-- `latencyMs`
-- `deterministic`
-- `evidenceRefs`
-
-Rules:
-
-- provider-side state is optional and non-canonical
-- successful turns must persist Daylens-owned messages
-- thread continuity across desktop and web must use the same logical workspace thread identity
-- the legacy `web_chats` blob is outside the approved contract
-
-## API Key Contract
-
-Provider-key rules:
-
-- local OS credential storage remains default
-- cloud-stored encrypted copies are an explicit opt-in remote feature
-- key presence and provider status may sync; raw secrets must not appear in analytics or generic logs
-- remote AI should degrade honestly when no remote-usable key exists
-
-## Deploy-Parity Contract
-
-The release process must enforce:
-
-- shared contract package version match
-- generated Convex public-function manifest compatibility
-- environment validation for required remote secrets
-- staging smoke success for link, Timeline, AI, and Settings before production promotion
-
-## Compatibility Rules
-
-- additive fields are preferred over destructive replacements
-- deprecated fields must remain readable for at least one planned migration window
-- schema migrations must not silently orphan old synced records
-- clients must reject unknown critical contract versions loudly rather than rendering misleading state
-
-## Acceptance Criteria
-
-- desktop, web, and cloud all compile against the same shared contract package
-- remote reads expose sync state and contract version
-- work blocks, day summaries, entities, and artifacts validate against shared schemas
-- AI turns persist row-based threads/messages/artifacts instead of workspace blob documents
-- production deployment blocks on contract or manifest mismatch
+- Do not claim remote AI continuity across desktop and web until the desktop writes shared remote AI rows.
+- Do not claim broader first-class entity support than the exporter actually emits.
+- Do not widen the remote payload boundary beyond privacy-filtered work blocks, entities, artifacts, and day summary without an explicit decision.

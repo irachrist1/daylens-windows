@@ -1,85 +1,60 @@
 # Daylens
 
-Daylens is a cross-platform activity tracker for your laptop. It quietly logs what you're working on so you, and the AI tools you use, can ask grounded questions about your work history.
+Daylens is a local-first desktop activity tracker for macOS, Windows, and Linux. It captures app sessions, browser history, focus sessions, and reconstructed work blocks so you can inspect your day in `Timeline`, explain tool usage in `Apps`, and ask grounded questions in `AI`.
 
-It is built for questions like:
+This README was refreshed from the current code on 2026-04-23. Existing docs were treated as hypotheses, not authority.
 
-- "How much should I charge Client X based on how long I've been working on this for the past month?"
-- "What did I do between 2-4 pm on Wednesday?"
-- "Show me everything I touched for Project X. Why is it not working now if it worked yesterday?"
+## What The Code Shows Today
 
-Think of it as Google for your workday history, and Spotify Wrapped for how you actually spend your time.
+- Tracking runs in the desktop main process, polls foreground activity every 5 seconds, persists a live-session snapshot every 15 seconds, and recovers that snapshot after restart so the timeline is not purely in-memory (`src/main/services/tracking.ts:67-71`, `src/main/services/tracking.ts:981-1071`, `src/main/services/tracking.ts:1124-1178`, `src/main/services/tracking.ts:1395-1470`).
+- Browser history ingestion exists for macOS and Windows. The current implementation reads Chromium history on both platforms and Firefox history on Windows. Linux browser history capture is not implemented in this service today (`src/main/services/browser.ts:74-107`, `src/main/services/browser.ts:385-410`, `src/main/services/browser.ts:414-620`).
+- Timeline reconstruction is persisted to SQLite `timeline_*` tables, includes gaps and low-activity compression, and rebuilds day payloads from persisted sessions plus the live session when present (`src/main/services/workBlocks.ts:1212-1349`, `src/main/services/workBlocks.ts:1438-1607`, `src/main/services/workBlocks.ts:1849-1880`, `src/renderer/views/Timeline.tsx:1184-1545`).
+- Focus score V2 is implemented as a heuristic over coherence, deep-work density, artifact progress, and switch penalty, with a window-title fallback when artifact extraction is absent (`src/main/lib/focusScore.ts:71-177`, `tests/focusScoreV2.test.ts`).
+- The AI surface is real, not placeholder UI. It supports starter prompts, freeform chat, deterministic routing before LLM fallback, renderer-visible streaming, local thread persistence, artifact persistence, retry/copy/rating controls, and inline focus-session actions (`src/main/services/ai.ts:3715-3993`, `src/main/services/aiOrchestration.ts:54-185`, `src/main/services/aiOrchestration.ts:245-474`, `src/main/services/artifacts.ts:24-170`, `src/main/services/artifacts.ts:261-408`, `src/renderer/views/Insights.tsx:787-804`, `src/renderer/views/Insights.tsx:1083-1372`, `src/renderer/views/Insights.tsx:1608-1715`).
+- Settings already includes Tracking, Sync, AI, Labels, Notifications, Appearance, Updates, and Privacy sections. Workspace creation, browser linking, recovery words, sync-state display, provider routing, prompt-caching toggles, and redaction toggles are all present in code (`src/renderer/views/Settings.tsx:799-1334`).
+- Optional remote sync is implemented as a split between heartbeat/live presence and durable day sync. Desktop builds privacy-filtered remote payloads, uploads heartbeat every 15 seconds, uploads dirty days every 60 seconds, and derives sync status from durable success/failure plus heartbeat freshness (`src/main/services/remoteSync.ts:43-143`, `src/main/services/remoteSync.ts:192-289`, `src/main/services/syncUploader.ts:11-18`, `src/main/services/syncUploader.ts:125-202`, `src/main/services/syncState.ts:1-24`, `src/main/services/workspaceLinker.ts:64-198`).
+- The paired web repo already has `Timeline`, `Apps`, `AI`, and `Settings` navigation, remote truth-table reads, web-only AI thread persistence, and a desktop-style Timeline surface when snapshot v2 data exists (`/Users/tonny/Dev-Personal/daylens-web/app/components/AppChrome.tsx:58-165`, `/Users/tonny/Dev-Personal/daylens-web/app/api/snapshots/route.ts:20-41`, `/Users/tonny/Dev-Personal/daylens-web/app/components/SnapshotContent.tsx:16-35`, `/Users/tonny/Dev-Personal/daylens-web/app/components/GlobalChat.tsx:247-320`).
 
-Daylens captures local evidence from the tools you use - apps, windows, browser activity, files, and reconstructed work sessions - then turns that into a timeline you can inspect directly or query through AI. It is not meant to be an app-usage vanity dashboard. It is meant to help you understand what you worked on, how long it took, what changed, and what context surrounded that work.
+## Truthfulness Notes
 
-This repository is historically named `daylens-windows`, but the Electron desktop app in this repo is the cross-platform Daylens source of truth for macOS, Windows, and Linux. Platform-specific validation status still lives in [docs/ISSUES.md](docs/ISSUES.md), and the broader product direction includes editor-facing integrations so tools such as Claude Code, Cursor, and other MCP-style clients can pull in Daylens context while you build, debug, and investigate.
+Code-proven:
 
-## Install
+- Local tracking and persisted timeline reconstruction.
+- Persistent AI threads and local artifacts on desktop.
+- Main-process AI orchestration with provider/model routing and usage telemetry.
+- Workspace linking, recovery words, browser link codes, heartbeat, and day sync packaging.
 
-Public download routes (kept versionless so they follow the newest real asset instead of guessing):
+Implemented pending verification:
 
-- **[macOS download](https://daylens-web-irachrist1s-projects.vercel.app/daylens/api/download/mac)**
-- **[Windows download](https://daylens-web-irachrist1s-projects.vercel.app/daylens/api/download/windows)**
-- **[Linux status](https://daylens-web-irachrist1s-projects.vercel.app/daylens/linux)**  •  **[all GitHub releases](https://github.com/irachrist1/daylens/releases)**
+- Provider-backed AI flows in real user/runtime conditions across all supported providers.
+- Packaged runtime behavior across macOS, Windows, and Linux.
+- Linked multi-device remote freshness, stale-state UX, and failure recovery in normal use.
+- Week review, app narrative, report/export generation, and remote companion production behavior.
 
-Prefer a package manager on macOS (zero prompts, zero clicks):
+Still partial or intentionally limited:
 
-```bash
-brew install --cask irachrist1/daylens/daylens
-```
-
-After downloading the macOS DMG, drag Daylens into Applications, then double-click it. The first launch shows a one-time "Daylens Not Opened" prompt (the standard macOS prompt for any app not distributed through the App Store — the same prompt you'll see on ChatGPT's Codex app). Open **System Settings → Privacy & Security**, scroll to Security, and click **Open Anyway**. One-time only. The in-DMG `Start Here.txt` walks through the same steps with pictures.
-
-Full per-platform notes, troubleshooting, and build-from-source instructions live in [docs/INSTALL.md](docs/INSTALL.md).
-
-## Current product surfaces
-
-- `Onboarding` for first-run tracking setup and proof of capture
-- `Timeline` for reconstructed work blocks, prior days, week view, and artifact evidence
-- `Apps` for app-level context, paired tools, and the work happening inside them
-- `AI` for grounded summaries, daily/weekly/monthly recap experiences, follow-up questions, freeform work-history queries, and report/export generation
-- `Settings` for tracking, providers, notifications, privacy, updates, and appearance
-
-Current implementation gaps and near-term product backlog live in [docs/ISSUES.md](docs/ISSUES.md). Keep feature status there instead of duplicating it across other docs.
-
-## Current repo status
-
-- Local-first SQLite persistence
-- Cross-platform foreground-window tracking, including Linux compositor-aware fallbacks and desktop-entry cleanup upon review
-- Browser history ingestion for Chromium browsers on both platforms, plus Firefox on Windows
-- Cross-platform icon resolution for apps, sites, files, and artifacts
-- Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, deterministic daily/weekly/monthly recap cards, AI-generated report/export artifacts, and week/app summaries implemented pending verification
-- Persistent AI chat threads and artifact library inside the AI surface (thread switcher, artifacts strip with preview / open / export) implemented pending verification
-- Evidence-grounded focus score (coherence + deep-work density + artifact progress + demoted context-switching penalty) implemented pending verification
-- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, truthful platform-specific launch / quick-access / install expectations, explicit Anthropic / OpenAI model overrides, and sparse app category overrides implemented pending verification
-- macOS shell / release hardening for menu bar UX, legacy `userData` preservation, and signed package configuration implemented pending verification
-- Packaged macOS, Windows, and Linux build pipelines upon review
-
-Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md](docs/ISSUES.md), including what was manually validated on macOS versus what still remains implemented pending verification on Windows and Linux.
+- Structured entity rollups in snapshot export currently load `client` and `project` only, even though the shared remote contract also allows `repo` and `topic` kinds (`src/main/services/snapshotExporter.ts:279-321`, `packages/remote-contract/index.ts:153-159`).
+- Desktop does not yet sync shared cloud AI thread/message/artifact rows. The contract has workspace AI types, and local desktop thread metadata already carries `workspaceThreadId`, but cross-surface desktop-to-web AI continuity is still not implemented (`src/main/services/artifacts.ts:339-342`, `packages/remote-contract/index.ts:287-318`).
+- The web still carries both the new `remoteSync` truth-table path and a legacy `snapshots` path. `/api/snapshots?full=1` still calls the legacy snapshot list endpoint (`/Users/tonny/Dev-Personal/daylens-web/app/api/snapshots/route.ts:35-40`, `/Users/tonny/Dev-Personal/daylens-web/convex/snapshots.ts:88-231`).
 
 ## Development
 
-- `npm start` runs the Electron app in development mode
-- `npm run typecheck` checks TypeScript without emitting output
-- `npm run build:all` builds the main, preload, and renderer bundles
-- `npm run test:ai-chat` runs the AI chat, onboarding, cleanup, and prompt-caching tests
-- `npm run test:entity-prompts` runs the entity-routing prompt benchmark tests
-- `npm run dist:win` builds the Windows installer and update metadata into `dist-release/`
-- `npm run dist:mac` builds the macOS archive and DMG into `dist-release/`
-- `npm run dist:linux` builds the Linux release artifacts into `dist-release/`
-- published downloads should live together on the shared GitHub release tag (`vX.Y.Z`) so Windows, macOS, and Linux assets ship from one release page
+- `npm start` runs the Electron app in development mode.
+- `npm run typecheck` checks TypeScript without emitting output.
+- `npm run build:all` builds main, preload, and renderer bundles.
+- `npm run contract:check` validates the shared remote contract wiring.
+- `npm run test:ai-chat` runs the main desktop AI/chat regression suite.
+- `npm run test:entity-prompts` runs the prompt-routing benchmark harness.
+- `npm run dist:mac`, `npm run dist:win`, `npm run dist:linux` build release artifacts.
 
-## Canonical docs
+## Canonical Docs
 
-- [docs/INSTALL.md](docs/INSTALL.md) for platform install instructions and the macOS "damaged" fixes
-- [docs/CLAUDE.md](docs/CLAUDE.md) for a lightweight session guide
-- [docs/ABOUT.md](docs/ABOUT.md) for reusable product copy
-- [docs/AGENTS.md](docs/AGENTS.md) for the product and build contract
-- [docs/PRD.md](docs/PRD.md) for the remote companion product definition and phased product scope
-- [docs/SRS.md](docs/SRS.md) for the remote companion system requirements and architecture plan
-- [docs/REMOTE_PARITY_MATRIX.md](docs/REMOTE_PARITY_MATRIX.md) for the launch parity checklist across Timeline, Apps, AI, Settings, notifications, and Wrapped
-- [docs/REMOTE_CONTRACT.md](docs/REMOTE_CONTRACT.md) for the shared remote data, sync, session, and AI continuity contract
-- [docs/REMOTE_EXECUTION_PLAN.md](docs/REMOTE_EXECUTION_PLAN.md) for the milestone-by-milestone execution plan and release gates
-- [docs/diagrams/README.md](docs/diagrams/README.md) for rendered Mermaid architecture diagrams that visualize the remote companion plan
-- [docs/IDEAS.md](docs/IDEAS.md) for future directions
-- [docs/ISSUES.md](docs/ISSUES.md) for current constraints and open problems
+- [docs/AGENTS.md](docs/AGENTS.md): product and build contract
+- [docs/ISSUES.md](docs/ISSUES.md): current implementation status, known gaps, and validation needs
+- [docs/PRD.md](docs/PRD.md): remote companion product definition refreshed from code
+- [docs/SRS.md](docs/SRS.md): current desktop + remote system architecture
+- [docs/REMOTE_CONTRACT.md](docs/REMOTE_CONTRACT.md): shared sync and remote AI continuity contract
+- [docs/REMOTE_PARITY_MATRIX.md](docs/REMOTE_PARITY_MATRIX.md): desktop vs. remote status matrix
+- [docs/REMOTE_EXECUTION_PLAN.md](docs/REMOTE_EXECUTION_PLAN.md): next implementation sequence after the audit
+- [docs/ai-orchestration.md](docs/ai-orchestration.md): main-process AI routing and persistence model
+- [docs/IDEAS.md](docs/IDEAS.md): future work only

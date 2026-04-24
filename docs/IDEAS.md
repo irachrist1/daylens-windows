@@ -1,73 +1,32 @@
 # Ideas
 
-## Imported From TickTick
+Future work only. Items already implemented in code were removed from this file during the 2026-04-23 audit refresh.
 
-- `Daylens: Deepen cross-device sync/workspace validation after the launch pass`
-- `Feature: Annual Distraction Cost`
+## Foundation Gaps Worth Finishing
 
-## Product
+- Desktop-to-web shared AI continuity using the remote contract's workspace thread/message/artifact rows.
+- Retire the remaining legacy remote snapshot read path once `remoteSync` truth tables fully cover web reads.
+- Add Linux browser-history capture or document an intentional Linux browser-evidence boundary if that remains out of scope.
+- Broaden first-class structured attribution beyond clients and projects.
+- Add stronger remote search over synced work blocks, entities, artifacts, apps, and sites without falling back to whole-workspace scans.
 
-- Linux distro and session validation matrix beyond the initial launch pass
-- Richer MCP and editor integrations for Claude Code, Cursor, and other AI tools for daylens-electron build
-- Better "what changed?" debugging workflows across repos, docs, and browser activity
-- Scheduled or recurring evidence packs on top of the wired core reports/export flow
-- Richer artifact kinds in the AI surface (drafts, outline threads, pinned summaries) on top of the V1 thread + artifact persistence
-- Automatic titling / summarization for AI threads once multi-turn usage stabilises
-- Richer seasonal recap storytelling, shareable recap packs, and a true year-end "Wrapped for work" layer on top of the current daily / weekly / monthly AI recap surface
-- Stronger meeting and collaboration detection
+## Product Improvements
 
-## Intelligence
+- Better "what changed?" debugging flows across repos, docs, browser history, and artifacts.
+- Richer meeting and collaboration detection.
+- Better timeline drill-down for artifact, page, and workflow evidence.
+- Stronger app-detail explanations and alongside-tool narratives on both desktop and web.
+- More useful report/export templates on top of the existing artifact pipeline.
 
-- Better reconstruction of long-running multi-tool work sessions
-- Smarter artifact grouping across files, tabs, apps, and repos
-- More reliable pricing, estimation, and billing prompts
-- Better attribution for research, study, and internal workstreams
+## Recap And Storytelling
 
-## UX
+- Stronger annual recap and seasonal storytelling once daily/weekly/monthly recap usefulness is proven in real use.
+- Shareable recap/report packs with explicit privacy controls.
+- Scheduled or recurring evidence packs built on top of the existing AI artifact flow.
 
-- Cleaner onboarding proof of capture
-- Better timeline drill-down and artifact inspectors
-- More useful app detail surfaces
-- Rich tray or menu bar popup with current session, tracked time, focus score, and a few quick actions
-- More polished report templates, exports, and evidence packs on top of the current AI-surface flow
+## Verification Work
 
-## Tray Or Menu Bar Popup
-
-If we build this later, it should be a lightweight companion to the main app, not a second dashboard.
-
-Goals:
-
-- show meaningful status at a glance
-- open quickly near the tray or menu bar icon
-- dismiss easily when the user clicks away
-- help the user answer "what am I doing right now?" and "how has today gone so far?"
-- provide a few high-value quick actions without forcing a full app switch
-
-Avoid:
-
-- duplicating the full Timeline, Apps, or AI screens
-- turning it into a dumping ground for every metric we can compute
-- dense charts, heavy scrolling, or complicated navigation
-- noisy badges, alerts, or animated status states that create anxiety
-
-Good candidate content:
-
-- current tracking state
-- current work session label or best live description
-- today's tracked time
-- today's focus time or focus score
-- the current app or top app in the active block when useful
-- the most recent meaningful alert, such as distraction or idle state, when relevant
-- quick actions like open Daylens, pause or resume tracking, and start or stop a focus session
-
-Platform shape:
-
-- macOS: prefer a menu bar extra that can open a popover-like window when the content is richer than a normal menu
-- Windows and Linux: prefer a small anchored flyout on primary click and keep secondary click for a concise context menu
-- keep the icon itself simple and recognizable, with status treatment only when it communicates something genuinely useful
-
-Design principle:
-
-- glanceability first
-- quick actions second
-- deeper inspection through an `Open Daylens` escape hatch
+- Real-machine Windows runtime validation.
+- Real-machine Linux validation across X11, XWayland, Hyprland, and Sway sessions.
+- Linked multi-device remote validation for freshness, stale-state UX, and sync failure recovery.
+- Broader provider-backed AI validation for desktop and remote flows.

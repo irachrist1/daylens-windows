@@ -1,18 +1,18 @@
 # Daylens Product And Build Contract
 
-This file is the single project memory for Daylens. If code, mocks, old notes, or previous decisions conflict with this file, this file wins.
+This file is the product contract for Daylens. It defines what the product is supposed to be.
+
+For implementation status, current code and `docs/ISSUES.md` win over old prose. Do not use this file to claim that something is already shipped or validated.
 
 ## What Daylens Is
 
-Daylens is a cross-platform activity tracker for your laptop. It quietly logs what you're working on so you, and the AI tools you use, can ask grounded questions about your work history.
+Daylens is a local-first desktop activity tracker for your laptop. It quietly logs what you're working on so you, and the AI tools you use, can ask grounded questions about your work history.
 
 It should help answer questions like:
 
 - "How much should I charge Client X based on how long I've been working on this for the past month?"
 - "What did I do between 2-4 pm on Wednesday?"
 - "Show me everything I touched for Project X. Why is it not working now if it worked yesterday?"
-
-Daylens is Google for your workday history, and Spotify Wrapped for how you actually spend your time.
 
 Daylens is not:
 
@@ -54,17 +54,12 @@ If tracking or persistence is broken, stop and fix that before polishing seconda
 
 Daylens ships as one desktop product across macOS, Windows, and Linux.
 
-Hard rule:
+Hard rules:
 
 - shared functionality should ship with cross-platform parity, not as a macOS-only idea that gets backfilled later
-- truly platform-native surfaces may differ in implementation, but should still preserve parity of intent and user value
-- when work is intentionally platform-specific, contributors must document what the equivalent Windows and Linux behavior is, or explicitly note that parity is still pending in `docs/ISSUES.md`
-- do not mark a shared capability as done if it only feels finished on one platform
-
-Examples:
-
-- a DMG drag-to-Applications flow can be macOS-specific, but Windows and Linux still need equally intentional install/update expectations for their own packaging surfaces
-- a macOS menu bar extra does not require identical Windows/Linux UI, but those platforms should still get the equivalent quick-access or tray utility if that capability is meant to be product-critical
+- platform-native surfaces may differ in implementation, but should preserve parity of user value
+- if work is intentionally platform-specific, document the Windows and Linux expectation or mark parity pending in `docs/ISSUES.md`
+- do not mark a shared capability done if it only feels finished on one platform
 
 ## Navigation Contract
 
@@ -94,29 +89,29 @@ The timeline must:
 
 The timeline must not:
 
-- rely on in-memory state as the source of truth
+- rely on renderer memory as the source of truth
 - disappear after relaunch
 - show raw terminal commands as the main story
 - fall back to raw app names when better work context exists
 
 ### Work Block Heuristics
 
-`workBlocks.ts` is allowed to be heuristic, but it should stay legible and stable because it shapes the core proof surface.
+`src/main/services/workBlocks.ts` is allowed to be heuristic, but it should stay legible and stable because it shapes the core proof surface.
 
-Current formation rules to preserve unless there is a measured reason to change them:
+Current behavior to preserve unless there is a measured reason to change it:
 
-- coherent app/session clusters can stay merged as one work block
-- mixed runs can split when slow-switch boundaries suggest two distinct tasks
-- standalone meetings should split into their own blocks instead of being buried inside adjacent work
-- developer testing or high-context-switch flows can remain one heuristic block when splitting would create noise
-- closed blocks may get AI relabeling, but the visible label should prefer meaningful overrides first, then useful AI/rule-based labels, then safe fallbacks
-- overnight cleanup should sweep backlog history in background batches, relabel unlabeled blocks, and revisit obviously weak legacy AI labels such as generic fallback labels; already-good AI labels are not automatically reopened yet, and already-good deterministic labels should stay stable and be marked reviewed instead of churned
-- unattributed or low-confidence blocks should still remain visible rather than collapsing into blankness
+- coherent app/session clusters can remain merged as one block
+- slow-switch mixed runs can split into distinct tasks
+- standalone meetings should split out instead of being buried
+- high-context-switch developer testing flows can remain merged when splitting would create noise
+- visible labels should prefer user override, then useful AI labels, then stable evidence- or rule-based labels
+- background cleanup should revisit clearly weak legacy labels without churning already-good labels
+- low-confidence or unattributed blocks should stay visible
 
 When changing these heuristics:
 
 - protect persistence and reconstruction first
-- document the user-facing effect in `docs/ISSUES.md` if behavior changes materially
+- document material user-facing behavior changes in `docs/ISSUES.md`
 - do not make the live timeline depend on AI availability
 
 ## Apps Surface Contract
@@ -147,40 +142,35 @@ The AI surface must:
 - support copy, retry, and feedback controls
 - persist feedback locally and emit product telemetry for later review
 - support charts, tables, artifacts, and reports when requested
-- keep report/export generation inside the AI surface instead of growing a dedicated reports tab unless there is a strong measured reason to change that
-- persist chat threads in `ai_threads` and generated artifacts in `ai_artifacts` (plus files under `userData/artifacts/`), surface them through the in-view thread switcher and artifacts strip, and do not introduce a separate history or artifacts top-level tab
+- keep report/export generation inside the AI surface instead of growing a dedicated reports tab
+- persist local chat threads in `ai_threads` and generated artifacts in `ai_artifacts` plus `userData/artifacts/`
 
-Focus sessions, recap experiences, and report/export workflows should live inside the AI surface or be triggered from it unless there is a strong reason to create a separate entry point. Focus session start / stop / review flows belong here, not in a new top-level route.
+Focus sessions, recap experiences, and report/export workflows should live inside the AI surface or be triggered from it unless there is a strong reason to create a separate entry point.
 
-Current attribution truthfulness for launch:
-
-- first-class attributed entities currently include clients and projects
-- repos, classes, research topics, and internal initiatives may still rely on work-block and artifact evidence when no structured attribution exists
-- contributors should prefer honest evidence-grounded answers over pretending every workstream already has full entity attribution
-
-AI is an orchestration layer over deterministic local data, not the primary runtime of the product.
-
-Non-negotiable rules:
+Truthfulness rules:
 
 - deterministic first, AI second
-- never block timeline, apps, or persisted history on AI
+- never block Timeline, Apps, or persisted history on AI
 - keep labels stable and avoid visible churn
 - route AI through a backend orchestration layer, not ad hoc renderer calls
+- be honest that first-class structured attribution is currently strongest for clients and projects; broader workstreams may still rely on block and artifact evidence
+- do not claim cross-surface desktop-to-web AI continuity unless the desktop is actually writing shared remote AI rows
 
 ## Settings Contract
 
-Settings should be simple, sparse, and real.
+Settings should stay sparse, functional, and honest.
 
-Allowed categories:
+Current allowed areas:
 
 - Tracking
-- AI provider / key
+- Sync / workspace linking
+- AI provider / key / routing
 - Notifications
 - Privacy / export / delete
 - Launch and background behavior
-- Optional onboarding / profile preferences
-
-Customization such as app category overrides should fit the existing sparse settings shape without turning Settings into a cluttered control panel.
+- Appearance
+- Updates
+- Sparse category overrides where they directly improve reconstruction quality
 
 Do not ship decorative settings, fake controls, membership fluff, or jargon-heavy dashboards.
 
@@ -200,25 +190,23 @@ Keep the layered model:
 
 - raw capture
 - activity segments
-- work sessions
+- work sessions / work blocks
 - rollups and query payloads
 
 Never overwrite raw capture.
 Never make renderer state the source of truth.
 
-## Documentation And Status Discipline
-
-AI contributors should update the canonical docs as part of the same change whenever product behavior, backlog status, workflow, or constraints have changed enough that the docs would otherwise drift.
+## Documentation And Audit Discipline
 
 When updating docs:
 
-- keep `README.md`, `docs/ABOUT.md`, `docs/AGENTS.md`, `docs/CLAUDE.md`, `docs/PRD.md`, `docs/SRS.md`, `docs/IDEAS.md`, and `docs/ISSUES.md` aligned when those docs are in scope
-- treat documentation updates as part of the job, not optional cleanup the user has to keep asking for
-- mark shipped-sounding status carefully
-- use language like `upon review`, `ready for review`, `implemented pending verification`, or `needs user validation` unless the user explicitly confirms the work is done
-- do not mark an issue as fully fixed, complete, shipped, or resolved just because code was written
-- ask the user whether they tested it and whether it worked before moving something from review status to done/fixed
-- keep real implementation status in `docs/ISSUES.md` instead of scattering status notes across the other docs
+- read code first, then docs
+- treat existing docs as hypotheses to verify or correct
+- use exact file references where helpful
+- separate code-proven behavior from inferred behavior and runtime-validated behavior
+- use language like `implemented pending verification` when code exists but runtime proof is missing
+- keep `docs/ISSUES.md` as the status ledger instead of scattering status claims across other docs
+- keep remote-companion docs aligned with the actual `daylens` and `daylens-web` code, not stale summaries
 
 ## What Must Never Ship
 
@@ -242,6 +230,6 @@ A change is not done until all of these are true:
 3. Timeline shows real reconstructed blocks for today and prior days.
 4. AI starter prompts execute.
 5. Freeform AI questions return grounded responses.
-6. Apps view explains work, not just app frequency.
-7. Settings contain only functional controls.
+6. Apps explains work, not just app frequency.
+7. Settings contains only functional controls.
 8. The UI feels calmer, cleaner, and more native than before.
