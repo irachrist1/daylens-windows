@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import os from 'node:os'
 import type { ProjectionInvalidationEvent } from '@shared/core'
 import type {
   AppCategory,
@@ -136,6 +137,7 @@ const api = {
     getBreakRecommendation: (): Promise<BreakRecommendation | null> => ipcRenderer.invoke(IPC.FOCUS.GET_BREAK_RECOMMENDATION),
   },
   app: {
+    getDefaultUserName: (): Promise<string> => Promise.resolve(os.userInfo().username),
     relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.APP.RELAUNCH),
     completeOnboarding: (): Promise<void> => ipcRenderer.invoke(IPC.APP.COMPLETE_ONBOARDING),
   },

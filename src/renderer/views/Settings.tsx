@@ -570,19 +570,21 @@ export default function Settings() {
   const [syncNote, setSyncNote] = useState<string | null>(null)
   const [browserLink, setBrowserLink] = useState<BrowserLinkResult | null>(null)
   const [workspaceMnemonic, setWorkspaceMnemonic] = useState<string | null>(null)
+  const [defaultUserName, setDefaultUserName] = useState('')
   const [recentApps, setRecentApps] = useState<AppUsageSummary[]>([])
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, AppCategory>>({})
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
 
   useEffect(() => {
     void (async () => {
-      const [current, tools, tracking, status, summaries, overrides] = await Promise.all([
+      const [current, tools, tracking, status, summaries, overrides, suggestedName] = await Promise.all([
         ipc.settings.get(),
         ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null })),
         ipc.tracking.getDiagnostics().catch(() => null),
         ipc.sync.getStatus().catch(() => null),
         ipc.db.getAppSummaries(30).catch(() => []),
         ipc.db.getCategoryOverrides().catch(() => ({})),
+        ipc.app.getDefaultUserName().catch(() => ''),
       ])
       const access = current.aiProvider === 'claude-cli'
         ? !!tools.claude
@@ -599,6 +601,7 @@ export default function Settings() {
         .sort((left, right) => right.totalSeconds - left.totalSeconds)
         .slice(0, 8))
       setCategoryOverrides(overrides as Record<string, AppCategory>)
+      setDefaultUserName(String(suggestedName ?? ''))
     })()
   }, [])
 
@@ -798,6 +801,27 @@ export default function Settings() {
       <div style={settingsSurfaceStyle}>
         <SettingsSection
           first
+          title="Profile"
+          description="Personalizes local AI responses without changing what Daylens tracks."
+        >
+          <SettingsRow
+            first
+            title="Display name"
+            description="Used in the AI persona line. Leave blank if you prefer the generic Daylens voice."
+            control={
+              <input
+                type="text"
+                value={settings.userName}
+                placeholder={defaultUserName || 'Your name'}
+                maxLength={80}
+                onChange={(event) => void persist({ userName: event.target.value })}
+                style={inputStyle(240)}
+              />
+            }
+          />
+        </SettingsSection>
+
+        <SettingsSection
           title="Tracking"
           description="Runs quietly in the background."
         >

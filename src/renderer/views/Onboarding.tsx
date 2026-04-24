@@ -193,6 +193,8 @@ export default function Onboarding({
 }) {
   const [settings, setSettings] = useState(initialSettings)
   const [goals, setGoals] = useState<Set<string>>(new Set(initialSettings.userGoals))
+  const [nameDraft, setNameDraft] = useState(initialSettings.userName)
+  const [defaultUserName, setDefaultUserName] = useState('')
   const [permissionState, setPermissionState] = useState<TrackingPermissionState>(initialSettings.onboardingState.trackingPermissionState)
   const [busy, setBusy] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -227,6 +229,18 @@ export default function Onboarding({
   useEffect(() => {
     onboardingStateRef.current = settings.onboardingState
   }, [settings.onboardingState])
+
+  useEffect(() => {
+    let cancelled = false
+    ipc.app.getDefaultUserName()
+      .then((name) => {
+        if (!cancelled) setDefaultUserName(name)
+      })
+      .catch(() => {
+        if (!cancelled) setDefaultUserName('')
+      })
+    return () => { cancelled = true }
+  }, [])
 
   async function persistOnboarding(
     nextStage: OnboardingStage,
@@ -409,6 +423,7 @@ export default function Onboarding({
       await ipc.settings.set({
         onboardingComplete: true,
         onboardingState: nextOnboardingState,
+        userName: nameDraft.trim(),
         userGoals: Array.from(goals),
       })
       await ipc.app.completeOnboarding()
@@ -683,6 +698,15 @@ export default function Onboarding({
               title="What do you want Daylens to lean into first?"
               body="Optional. It just tunes which prompts and summaries show up sooner. You can change this any time in Settings."
             />
+            <label className="onboarding-name-field">
+              <span>What should Daylens call you?</span>
+              <input
+                value={nameDraft}
+                onChange={(event) => setNameDraft(event.target.value)}
+                placeholder={defaultUserName || 'Your name'}
+                maxLength={80}
+              />
+            </label>
             <div className="onboarding-goals-grid">
               {GOALS.map((goal) => {
                 const selected = goals.has(goal.id)
@@ -1151,6 +1175,32 @@ export default function Onboarding({
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
           gap: 12px;
+        }
+        .onboarding-name-field {
+          display: grid;
+          gap: 8px;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--color-text-tertiary);
+        }
+        .onboarding-name-field input {
+          width: 100%;
+          border: 1px solid var(--color-border-ghost);
+          border-radius: 14px;
+          background: rgba(255, 255, 255, 0.03);
+          color: var(--color-text-primary);
+          padding: 12px 14px;
+          font-size: 15px;
+          font-weight: 600;
+          letter-spacing: 0;
+          text-transform: none;
+          outline: none;
+        }
+        .onboarding-name-field input:focus {
+          border-color: rgba(125, 191, 255, 0.55);
+          box-shadow: 0 0 0 3px rgba(125, 191, 255, 0.12);
         }
         .onboarding-summary-tile,
         .onboarding-goal-card {

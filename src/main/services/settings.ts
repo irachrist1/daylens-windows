@@ -100,6 +100,9 @@ export async function getSettingsAsync(): Promise<AppSettings> {
 export async function setSettings(partial: Partial<AppSettings>): Promise<void> {
   const store = await getStore()
   const entries = { ...partial }
+  if ('userName' in entries) {
+    entries.userName = String(entries.userName ?? '').trim().slice(0, 80)
+  }
   if (entries.onboardingState) {
     entries.onboardingState = normalizeOnboardingState(entries.onboardingState, entries.onboardingState.stage === 'complete')
     if (!('onboardingComplete' in entries)) {
