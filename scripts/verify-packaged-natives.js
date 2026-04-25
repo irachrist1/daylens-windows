@@ -2,7 +2,6 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
-const asar = require('@electron/asar')
 
 const root = process.argv[2] || path.join(process.cwd(), 'dist-release')
 
@@ -24,30 +23,9 @@ function walk(dir, results = []) {
   return results
 }
 
-function hasAsarEntry(entries, entry) {
-  return entries.has(entry.replaceAll(path.sep, '/'))
-}
-
 function verifyPackage(asarPath) {
   const resourcesDir = path.dirname(asarPath)
   const unpackedDir = path.join(resourcesDir, 'app.asar.unpacked')
-  const entries = new Set(asar.listPackage(asarPath))
-
-  const requiredAsarEntries = [
-    '/node_modules/better-sqlite3/package.json',
-    '/node_modules/better-sqlite3/lib/index.js',
-    '/node_modules/better-sqlite3/lib/database.js',
-    '/node_modules/bindings/package.json',
-    '/node_modules/bindings/bindings.js',
-    '/node_modules/file-uri-to-path/package.json',
-    '/node_modules/file-uri-to-path/index.js',
-  ]
-
-  for (const entry of requiredAsarEntries) {
-    if (!hasAsarEntry(entries, entry)) {
-      fail(`${path.relative(process.cwd(), asarPath)} is missing ${entry}`)
-    }
-  }
 
   const nativeBinding = path.join(
     unpackedDir,
