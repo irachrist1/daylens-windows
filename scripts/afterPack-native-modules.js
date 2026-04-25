@@ -22,6 +22,10 @@ function copyDependency(projectDir, resourcesDir, name) {
     throw new Error(`Cannot repair unpacked native dependency; missing source ${source}`)
   }
 
+  if (fs.existsSync(target) && fs.realpathSync(source) === fs.realpathSync(target)) {
+    return
+  }
+
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.cpSync(source, target, { recursive: true, force: true })
 }
