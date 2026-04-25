@@ -14,6 +14,31 @@ function walk(dir, results = []) {
   return results
 }
 
+function requiredFilesFor(name) {
+  if (name === 'better-sqlite3') {
+    return [
+      'package.json',
+      path.join('lib', 'index.js'),
+      path.join('lib', 'database.js'),
+      path.join('build', 'Release', 'better_sqlite3.node'),
+    ]
+  }
+
+  if (name === 'bindings') {
+    return ['package.json', 'bindings.js']
+  }
+
+  if (name === 'file-uri-to-path') {
+    return ['package.json', 'index.js']
+  }
+
+  return ['package.json']
+}
+
+function isDependencyComplete(target, name) {
+  return requiredFilesFor(name).every((entry) => fs.existsSync(path.join(target, entry)))
+}
+
 function copyDependency(projectDir, resourcesDir, name) {
   const source = path.join(projectDir, 'node_modules', ...name.split('/'))
   const target = path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', ...name.split('/'))
@@ -22,7 +47,7 @@ function copyDependency(projectDir, resourcesDir, name) {
     throw new Error(`Cannot repair unpacked native dependency; missing source ${source}`)
   }
 
-  if (fs.existsSync(target) && fs.realpathSync(source) === fs.realpathSync(target)) {
+  if (isDependencyComplete(target, name)) {
     return
   }
 
