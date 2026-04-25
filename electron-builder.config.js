@@ -95,6 +95,7 @@ module.exports = {
     },
   ],
   mac,
+  afterPack: './scripts/afterPack-native-modules.js',
   afterSign: macAfterSign,
   win,
   linux,
@@ -133,9 +134,9 @@ module.exports = {
   },
   asar: true,
   asarUnpack: [
-    'node_modules/better-sqlite3/**',
-    'node_modules/@paymoapp/active-window/**',
-    'node_modules/keytar/**',
+    'node_modules/better-sqlite3/build/Release/*.node',
+    'node_modules/@paymoapp/active-window/build/Release/*.node',
+    'node_modules/keytar/build/Release/*.node',
   ],
   publish: {
     provider: 'github',

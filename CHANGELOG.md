@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.32 - 2026-04-25
+
+### Fixed
+- Windows startup no longer fails with a main-process JavaScript error when `better-sqlite3` resolves through `app.asar.unpacked`; packaged builds now repair and verify the native module layout before release.
+- Windows release builds now run the same full `build:all` path as macOS and Linux, including the bundled MCP server.
+- Remote sync now accepts the current `focusScoreV2` contract on the web/Convex side, so linked devices can resume durable day sync instead of repeating `Remote day sync failed`.
+
+### Changed
+- Release packaging now includes an opt-in local MCP stdio server bundle and records its pending real-client validation honestly in the docs.
+- Existing installs can reach update assets through the public website feed/proxy, while legacy GitHub-feed builds are recoverable once the GitHub release feed is publicly reachable.
+
 ## v1.0.31 - 2026-04-24
 
 ### Added

@@ -83,6 +83,9 @@ jobs:
             npx electron-builder --win nsis --publish never --config electron-builder.config.js
           fi
 
+      - name: Verify packaged native module layout
+        run: node scripts/verify-packaged-natives.js dist-release
+
       - name: Upload preview artifact
         uses: actions/upload-artifact@v6
         with:

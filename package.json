@@ -1,7 +1,7 @@
 {
   "name": "daylens-windows",
   "productName": "Daylens",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "description": "Cross-platform activity tracker that turns your laptop history into a searchable, AI-ready work timeline.",
   "main": ".vite/build/main.js",
   "scripts": {
@@ -17,7 +17,8 @@
     "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
     "build:preload": "cross-env STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
     "build:renderer": "cross-env STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",
-    "build:all": "npm run build:main && npm run build:preload && npm run build:renderer",
+    "build:mcp": "vite build --config vite.mcp.config.ts",
+    "build:all": "npm run build:main && npm run build:preload && npm run build:renderer && npm run build:mcp",
     "dist:win": "npm run build:all && electron-builder --win --config electron-builder.config.js",
     "dist:mac": "npm run build:all && electron-builder --mac zip dmg --config electron-builder.config.js",
     "dist:linux": "npm run build:all && electron-builder --linux AppImage deb rpm tar.gz --config electron-builder.config.js",

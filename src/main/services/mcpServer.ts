@@ -23,7 +23,7 @@ function resolveServerPaths():
 
   if (app.isPackaged) {
     // Production: compiled bundle shipped as app resource.
-    const bundlePath = path.join(root, 'packages', 'mcp-server', 'dist', 'index.cjs')
+    const bundlePath = path.join(root, 'dist', 'mcp-server', 'index.cjs')
     if (fs.existsSync(bundlePath)) {
       return { execPath: process.execPath, loaderPath: null, serverPath: bundlePath }
     }

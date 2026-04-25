@@ -115,6 +115,9 @@ jobs:
           fi
           npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
 
+      - name: Verify packaged native module layout
+        run: node scripts/verify-packaged-natives.js dist-release
+
       - name: Build release notes
         id: notes
         shell: bash

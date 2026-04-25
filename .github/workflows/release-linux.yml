@@ -82,6 +82,9 @@ jobs:
       - name: Package with electron-builder
         run: npx electron-builder --linux --publish never --config electron-builder.config.js
 
+      - name: Verify packaged native module layout
+        run: node scripts/verify-packaged-natives.js dist-release
+
       - name: Sanity-check Linux release artifacts
         shell: bash
         run: |

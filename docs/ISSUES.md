@@ -26,6 +26,7 @@ This file is the implementation-status ledger. Items below are separated into co
 
 - Desktop AI supports starter prompts, freeform chat, deterministic routing before LLM fallback, streaming, retry/copy/rating controls, focus-session actions, persistent local threads, and local artifacts (`src/main/services/ai.ts:3715-3993`, `src/main/services/artifacts.ts:24-170`, `src/main/services/artifacts.ts:261-408`, `src/renderer/views/Insights.tsx:787-804`, `src/renderer/views/Insights.tsx:957-965`, `src/renderer/views/Insights.tsx:1083-1372`, `src/renderer/views/Insights.tsx:1608-1715`).
 - AI orchestration is centralized in the main process with per-job routing, provider fallback, prompt redaction, and usage telemetry (`src/main/services/aiOrchestration.ts:54-185`, `src/main/services/aiOrchestration.ts:245-474`).
+- The MCP server is bundled in this repo under `packages/mcp-server/` and exposed from Settings as an opt-in local stdio integration for MCP clients. It reuses the AI tool schemas and opens the local Daylens SQLite database read-only (`packages/mcp-server/src/index.ts:1-67`, `src/main/services/mcpServer.ts:19-57`, `src/renderer/views/Settings.tsx:1348-1428`).
 
 ### Settings And Sync Controls
 
@@ -94,4 +95,5 @@ These features exist in code and, in several cases, have focused test coverage, 
 - Linux packaged runtime validation on real desktops, including X11 and Wayland/XWayland scenarios.
 - End-to-end linked workspace creation, browser linking, heartbeat/day-sync freshness, and stale/failure recovery in normal use.
 - Desktop provider-backed AI chat, report generation, and focus-session action flows with real credentials.
+- MCP client setup and real question/answer validation through Claude Desktop, Cursor, or Claude Code.
 - Desktop-to-web AI continuity after the shared remote AI persistence is actually implemented.
