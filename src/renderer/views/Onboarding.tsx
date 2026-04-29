@@ -4,7 +4,7 @@ import type { AppSettings, DayTimelinePayload, LiveSession, OnboardingStage, Pro
 import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
-import { formatDuration, todayString } from '../lib/format'
+import { todayString } from '../lib/format'
 
 const GOALS = [
   { id: 'deep-work', label: 'See where my focus actually went' },
@@ -33,78 +33,33 @@ interface ProofSnapshot {
 }
 
 function StageHeading({
-  eyebrow,
   title,
   body,
 }: {
-  eyebrow: string
   title: string
-  body: string
+  body?: string
 }) {
   return (
     <div style={{ display: 'grid', gap: 10 }}>
-      <div className="onboarding-eyebrow">{eyebrow}</div>
       <h1 className="onboarding-title">{title}</h1>
-      <p className="onboarding-sub">{body}</p>
+      {body && <p className="onboarding-sub">{body}</p>}
     </div>
   )
 }
 
-function ProgressStepper({ steps, activeIndex }: { steps: Array<{ label: string }>; activeIndex: number }) {
+function ProgressDots({ count, activeIndex }: { count: number; activeIndex: number }) {
   return (
-    <div className="onboarding-stepper" aria-label="Setup progress">
-      {steps.map((step, index) => {
-        const state = index < activeIndex ? 'done' : index === activeIndex ? 'active' : 'upcoming'
-        return (
-          <div key={step.label} className={`onboarding-step onboarding-step-${state}`}>
-            <div className="onboarding-step-dot">
-              {state === 'done' ? (
-                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                  <path d="M1.8 5.4L4 7.6L8.2 2.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-                </svg>
-              ) : state === 'active' ? (
-                <span className="onboarding-step-pulse" aria-hidden="true" />
-              ) : null}
-            </div>
-            <span className="onboarding-step-label">{step.label}</span>
-          </div>
-        )
-      })}
+    <div className="onboarding-dots" aria-label="Setup progress">
+      {Array.from({ length: count }).map((_, i) => (
+        <div
+          key={i}
+          className={`onboarding-dot${i === activeIndex ? ' onboarding-dot-active' : i < activeIndex ? ' onboarding-dot-done' : ''}`}
+        />
+      ))}
     </div>
   )
 }
 
-function TimelinePreview() {
-  return (
-    <div className="onboarding-preview" aria-hidden="true">
-      <div className="onboarding-preview-axis">
-        <span>09:00</span>
-        <span>11:00</span>
-        <span>13:00</span>
-        <span>15:00</span>
-        <span>17:00</span>
-      </div>
-      <div className="onboarding-preview-track">
-        <div className="onboarding-preview-block onboarding-preview-block-a" style={{ left: '4%', width: '22%' }}>
-          <div className="onboarding-preview-label">Client brief — Figma</div>
-        </div>
-        <div className="onboarding-preview-block onboarding-preview-block-b" style={{ left: '28%', width: '10%' }}>
-          <div className="onboarding-preview-label">Break</div>
-        </div>
-        <div className="onboarding-preview-block onboarding-preview-block-c" style={{ left: '40%', width: '28%' }}>
-          <div className="onboarding-preview-label">Deep work — Repo daylens</div>
-        </div>
-        <div className="onboarding-preview-block onboarding-preview-block-d" style={{ left: '70%', width: '12%' }}>
-          <div className="onboarding-preview-label">Calls</div>
-        </div>
-        <div className="onboarding-preview-block onboarding-preview-block-e" style={{ left: '84%', width: '14%' }}>
-          <div className="onboarding-preview-label">Research</div>
-        </div>
-      </div>
-      <div className="onboarding-preview-caption">A preview. In a day or two, this is your own week.</div>
-    </div>
-  )
-}
 
 function SettingsPreview() {
   return (
@@ -136,53 +91,6 @@ function SettingsPreview() {
   )
 }
 
-function SummaryTile({
-  label,
-  value,
-  detail,
-  highlight,
-}: {
-  label: string
-  value: string
-  detail?: string
-  highlight?: boolean
-}) {
-  return (
-    <div className={`onboarding-summary-tile${highlight ? ' onboarding-summary-tile-highlight' : ''}`}>
-      <div className="onboarding-summary-label">{label}</div>
-      <div className="onboarding-summary-value">{value}</div>
-      {detail && <div className="onboarding-summary-detail">{detail}</div>}
-    </div>
-  )
-}
-
-function proofDetail(snapshot: ProofSnapshot): Array<{ label: string; value: string; detail?: string }> {
-  const items: Array<{ label: string; value: string; detail?: string }> = []
-  if (snapshot.liveSession) {
-    items.push({
-      label: 'Live right now',
-      value: snapshot.liveSession.appName,
-      detail: snapshot.liveSession.windowTitle || 'Daylens can see what you are working on.',
-    })
-  }
-  if (snapshot.timeline) {
-    if (snapshot.timeline.totalSeconds > 0) {
-      items.push({
-        label: 'Tracked today',
-        value: formatDuration(snapshot.timeline.totalSeconds),
-        detail: `${snapshot.timeline.blocks.length} work block${snapshot.timeline.blocks.length === 1 ? '' : 's'} reconstructed so far`,
-      })
-    }
-    if (snapshot.timeline.siteCount > 0) {
-      items.push({
-        label: 'Browser evidence',
-        value: `${snapshot.timeline.siteCount} site${snapshot.timeline.siteCount === 1 ? '' : 's'}`,
-        detail: 'Page titles and sites are already flowing in.',
-      })
-    }
-  }
-  return items.slice(0, 3)
-}
 
 export default function Onboarding({
   initialSettings,
@@ -207,8 +115,6 @@ export default function Onboarding({
   const platform = settings.onboardingState.platform
   const stage = settings.onboardingState.stage
   const isMac = platform === 'macos'
-  const proofTiles = useMemo(() => proofDetail(proof), [proof])
-
   const steps = isMac ? MAC_STEPS : NON_MAC_STEPS
   const activeStepIndex = useMemo(() => {
     const idx = steps.findIndex((s) => s.id.includes(stage))
@@ -507,75 +413,27 @@ export default function Onboarding({
   return (
     <div className="onboarding-root">
       <div className="onboarding-shell">
-        <ProgressStepper steps={steps} activeIndex={activeStepIndex} />
+        <ProgressDots count={steps.length} activeIndex={activeStepIndex} />
 
         {stage === 'welcome' && (
           <div className="onboarding-screen">
-            <StageHeading
-              eyebrow="WELCOME"
-              title={isMac
-                ? 'Know where your time actually went — before anyone asks.'
-                : 'Daylens quietly turns your workday into answers you can trust.'}
-              body={isMac
-                ? 'Daylens stays local and sips context from your active window so Timeline, Apps, and AI can answer real questions: what happened between 2 and 4 pm, how long that client really took, why yesterday felt different.'
-                : 'No clocking in, no manual tagging. Just a calm record of how you actually worked, so you can ask grounded questions when it matters.'}
-            />
-            <TimelinePreview />
-            <div className="onboarding-reassure">
-              <div className="onboarding-reassure-pill">Local-only</div>
-              <div className="onboarding-reassure-pill">No video recorded</div>
-              <div className="onboarding-reassure-pill">Private by default</div>
-            </div>
+            <h1 className="onboarding-title onboarding-title-large">
+              {isMac
+                ? 'Daylens watches how you work, so you don\'t have to.'
+                : 'Daylens watches how you work, so you don\'t have to.'}
+            </h1>
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void handleContinueFromWelcome()}>
                 {isMac ? 'Get started' : 'Start tracking'}
               </button>
-              {isMac && (
-                <span className="onboarding-hint onboarding-hint-quiet">
-                  Two quick steps. Takes less than a minute.
-                </span>
-              )}
             </div>
           </div>
         )}
 
         {stage === 'permission' && (
           <div className="onboarding-screen">
-            <StageHeading
-              eyebrow="ONE ACCESS TOGGLE"
-              title="macOS calls it Screen Recording. Daylens only reads window titles — no video, ever."
-              body="This is the single switch that lets Daylens see what you are working in. Nothing is recorded. Nothing leaves this machine. Without it, Timeline opens empty and AI has nothing honest to say."
-            />
-
-            <div className="onboarding-permission-grid">
-              <div className="onboarding-permission-narrative">
-                <ol className="onboarding-steps-list">
-                  <li>
-                    <span className="onboarding-steps-index">1</span>
-                    <div>
-                      <div className="onboarding-steps-title">Open Privacy &amp; Security → Screen Recording</div>
-                      <div className="onboarding-steps-body">We will jump you straight there and hold your place here.</div>
-                    </div>
-                  </li>
-                  <li>
-                    <span className="onboarding-steps-index">2</span>
-                    <div>
-                      <div className="onboarding-steps-title">Flip the Daylens toggle on</div>
-                      <div className="onboarding-steps-body">macOS may ask for your password. That is system-level, not Daylens.</div>
-                    </div>
-                  </li>
-                  <li>
-                    <span className="onboarding-steps-index">3</span>
-                    <div>
-                      <div className="onboarding-steps-title">Come back. Daylens will notice.</div>
-                      <div className="onboarding-steps-body">No need to click anything when you return — we watch for the permission.</div>
-                    </div>
-                  </li>
-                </ol>
-              </div>
-              <SettingsPreview />
-            </div>
-
+            <StageHeading title="macOS calls it Screen Recording. Daylens only reads window titles — no video, ever." />
+            <SettingsPreview />
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void beginPermissionRequest()} disabled={busy}>
                 {busy ? 'Opening System Settings…' : 'Open Screen Recording'}
@@ -584,7 +442,7 @@ export default function Onboarding({
                 I already enabled it
               </button>
             </div>
-
+            <p className="onboarding-reassurance">Everything stays on your device. No screenshots, no video, ever.</p>
             <div className={`onboarding-status onboarding-status-${permissionStatusTone}`}>
               <span className="onboarding-status-dot" />
               <span className="onboarding-status-label">{permissionStatusLabel}</span>
@@ -599,11 +457,7 @@ export default function Onboarding({
 
         {stage === 'relaunch_required' && (
           <div className="onboarding-screen">
-            <StageHeading
-              eyebrow="ONE RESTART"
-              title="Daylens has the permission. macOS needs one restart to hand it over."
-              body="This is a macOS quirk, not a Daylens one: apps can only use Screen Recording after relaunching with it enabled. Daylens will reopen right back to this flow."
-            />
+            <StageHeading title="Daylens has the permission. macOS needs one restart to hand it over." />
             <div className="onboarding-handoff">
               <div className="onboarding-handoff-beam" aria-hidden="true">
                 <div className="onboarding-handoff-pulse" />
@@ -625,11 +479,7 @@ export default function Onboarding({
 
         {stage === 'verifying_permission' && (
           <div className="onboarding-screen">
-            <StageHeading
-              eyebrow="CONFIRMING"
-              title="Checking in with macOS and warming up the tracker."
-              body="If the permission stuck, you will land straight in proof. If something reverted, we will walk you back to the right step — no dead ends."
-            />
+            <StageHeading title="Checking in with macOS and warming up the tracker." />
             <div className="onboarding-verify">
               <div className="onboarding-breath" aria-hidden="true">
                 <span />
@@ -648,41 +498,47 @@ export default function Onboarding({
 
         {stage === 'proof' && (
           <div className="onboarding-screen">
-            <StageHeading
-              eyebrow={proof.ready ? 'IT WORKS' : 'LISTENING'}
-              title={proof.ready
-                ? 'This is the first real slice of your day.'
-                : 'Daylens is tuning in. Keep working as normal.'}
-              body={proof.ready
-                ? 'Everything you see below came from your own activity on this machine in the last minute. Timeline will keep filling in the more you work.'
-                : 'We are waiting for a live window title, browser evidence, or the first reconstructed block. This usually happens within 60 seconds once you switch to anything real.'}
-            />
-            <div className="onboarding-proof-card">
-              {!proof.ready && (
-                <div className="onboarding-proof-pending">
-                  <span className="onboarding-spinner" aria-hidden="true" />
-                  <div>
-                    <div className="onboarding-callout-title">Gathering local proof</div>
-                    <div className="onboarding-callout-body">
-                      Open a browser tab, a doc, or an editor — Daylens will pick it up.
-                    </div>
+            {proof.ready ? (
+              <>
+                <StageHeading title="Here's what we've picked up so far." />
+                <div className="onboarding-proof-visual">
+                  <div className="onboarding-live-activity">
+                    {proof.liveSession && (
+                      <div className="onboarding-live-row onboarding-live-row-active">
+                        <div className="onboarding-live-pulse" aria-hidden="true" />
+                        <div>
+                          <div className="onboarding-live-app">{proof.liveSession.appName}</div>
+                          {proof.liveSession.windowTitle && (
+                            <div className="onboarding-live-title">{proof.liveSession.windowTitle}</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {proof.timeline && proof.timeline.totalSeconds > 0 && (
+                      <div className="onboarding-live-row">
+                        <div className="onboarding-live-stat">{Math.round(proof.timeline.totalSeconds / 60)}m</div>
+                        <div className="onboarding-live-label">tracked today across {proof.timeline.blocks.length} session{proof.timeline.blocks.length !== 1 ? 's' : ''}</div>
+                      </div>
+                    )}
+                    {proof.timeline && proof.timeline.siteCount > 0 && (
+                      <div className="onboarding-live-row">
+                        <div className="onboarding-live-stat">{proof.timeline.siteCount}</div>
+                        <div className="onboarding-live-label">browser site{proof.timeline.siteCount !== 1 ? 's' : ''} already flowing in</div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
-              {proofTiles.length > 0 && (
-                <div className="onboarding-summary-grid">
-                  {proofTiles.map((item, index) => (
-                    <SummaryTile
-                      key={item.label}
-                      label={item.label}
-                      value={item.value}
-                      detail={item.detail}
-                      highlight={index === 0}
-                    />
-                  ))}
+              </>
+            ) : (
+              <div className="onboarding-proof-pending">
+                <div className="onboarding-breath" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
                 </div>
-              )}
-            </div>
+                <p>Have a great day. Daylens will keep listening for real work signal.</p>
+              </div>
+            )}
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" disabled={!proof.ready} onClick={() => void continueFromProof()}>
                 {proof.ready ? 'Continue' : 'Waiting for the first signal…'}
@@ -693,13 +549,8 @@ export default function Onboarding({
 
         {stage === 'personalize' && (
           <div className="onboarding-screen">
-            <StageHeading
-              eyebrow="LAST STEP"
-              title="What do you want Daylens to lean into first?"
-              body="Optional. It just tunes which prompts and summaries show up sooner. You can change this any time in Settings."
-            />
+            <StageHeading title="Make it yours." />
             <label className="onboarding-name-field">
-              <span>What should Daylens call you?</span>
               <input
                 value={nameDraft}
                 onChange={(event) => setNameDraft(event.target.value)}
@@ -713,11 +564,10 @@ export default function Onboarding({
                 return (
                   <button
                     key={goal.id}
-                    className={`onboarding-goal-card${selected ? ' onboarding-goal-card-selected' : ''}`}
+                    className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
                     onClick={() => toggleGoal(goal.id)}
                   >
-                    <div className="onboarding-goal-dot" />
-                    <span>{goal.label}</span>
+                    {goal.label}
                   </button>
                 )
               })}
@@ -726,10 +576,10 @@ export default function Onboarding({
               <button className="onboarding-btn-primary" onClick={() => void finishOnboarding()} disabled={busy}>
                 {busy ? 'Opening Timeline…' : 'Open Daylens'}
               </button>
-              <button className="onboarding-btn-secondary" onClick={() => void finishOnboarding()} disabled={busy}>
-                Skip
-              </button>
             </div>
+            <button className="onboarding-skip-link" onClick={() => void finishOnboarding()} disabled={busy}>
+              Skip for now
+            </button>
           </div>
         )}
 
@@ -741,9 +591,9 @@ export default function Onboarding({
           position: fixed;
           inset: 0;
           background:
-            radial-gradient(circle at 18% 12%, rgba(79, 220, 200, 0.14), transparent 42%),
-            radial-gradient(circle at 86% 88%, rgba(125, 191, 255, 0.12), transparent 40%),
-            #0a0f16;
+            radial-gradient(circle at 18% 12%, rgba(26, 111, 212, 0.14), transparent 42%),
+            radial-gradient(circle at 86% 88%, rgba(90, 179, 255, 0.10), transparent 40%),
+            #07090f;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -752,8 +602,8 @@ export default function Onboarding({
         }
         .onboarding-shell {
           width: min(780px, 100%);
-          border-radius: 28px;
-          border: 1px solid rgba(173, 198, 255, 0.14);
+          border-radius: 32px;
+          border: 1px solid rgba(173, 198, 255, 0.18);
           background: linear-gradient(180deg, rgba(12, 18, 27, 0.92), rgba(8, 12, 18, 0.92));
           box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
           padding: 28px 32px 26px;
@@ -762,62 +612,24 @@ export default function Onboarding({
           display: grid;
           gap: 22px;
         }
-        .onboarding-stepper {
+        .onboarding-dots {
           display: flex;
           align-items: center;
-          gap: 10px;
-          flex-wrap: wrap;
-          padding-bottom: 4px;
-          border-bottom: 1px solid rgba(173, 198, 255, 0.06);
+          gap: 6px;
         }
-        .onboarding-step {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          padding: 4px 10px 4px 4px;
-          border-radius: 999px;
-          transition: background 160ms ease, color 160ms ease;
+        .onboarding-dot {
+          height: 6px;
+          width: 6px;
+          border-radius: 3px;
+          background: rgba(255, 255, 255, 0.1);
+          transition: width 300ms ease, background 300ms ease;
         }
-        .onboarding-step-dot {
+        .onboarding-dot-done {
+          background: rgba(90, 179, 255, 0.52);
+        }
+        .onboarding-dot-active {
           width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border: 1.5px solid rgba(173, 198, 255, 0.22);
-          background: rgba(255, 255, 255, 0.02);
-          color: #9fd4c6;
-          flex-shrink: 0;
-        }
-        .onboarding-step-label {
-          font-size: 11.5px;
-          font-weight: 600;
-          letter-spacing: 0.04em;
-          color: var(--color-text-tertiary);
-          white-space: nowrap;
-        }
-        .onboarding-step-done .onboarding-step-dot {
-          background: linear-gradient(135deg, #4fd3c6 0%, #7bb7ff 100%);
-          border-color: transparent;
-          color: #07131b;
-        }
-        .onboarding-step-done .onboarding-step-label { color: var(--color-text-secondary); }
-        .onboarding-step-active .onboarding-step-dot {
-          border-color: rgba(125, 191, 255, 0.55);
-          background: rgba(125, 191, 255, 0.08);
-        }
-        .onboarding-step-active .onboarding-step-label {
-          color: var(--color-text-primary);
-          font-weight: 700;
-        }
-        .onboarding-step-pulse {
-          width: 7px;
-          height: 7px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #7bb7ff 0%, #4fd3c6 100%);
-          box-shadow: 0 0 0 0 rgba(125, 191, 255, 0.55);
-          animation: onboardingPulse 1.6s ease-out infinite;
+          background: linear-gradient(145deg, #1a6fd4 0%, #5ab3ff 100%);
         }
         .onboarding-screen {
           display: grid;
@@ -828,20 +640,24 @@ export default function Onboarding({
           font-weight: 800;
           letter-spacing: 0.14em;
           text-transform: uppercase;
-          color: var(--color-text-tertiary);
+          color: rgba(194,198,214,0.5);
         }
         .onboarding-title {
           margin: 0;
           font-size: 30px;
           line-height: 1.1;
           letter-spacing: -0.03em;
-          color: var(--color-text-primary);
+          color: #f0f4ff;
+        }
+        .onboarding-title-large {
+          font-size: 40px;
+          line-height: 1.08;
         }
         .onboarding-sub {
           margin: 0;
           font-size: 14.5px;
           line-height: 1.7;
-          color: var(--color-text-secondary);
+          color: #c2c6d6;
           max-width: 62ch;
         }
         .onboarding-reassure {
@@ -857,7 +673,7 @@ export default function Onboarding({
           border-radius: 999px;
           border: 1px solid rgba(173, 198, 255, 0.16);
           background: rgba(255, 255, 255, 0.02);
-          color: var(--color-text-secondary);
+          color: #c2c6d6;
         }
         .onboarding-preview {
           display: grid;
@@ -943,12 +759,12 @@ export default function Onboarding({
         .onboarding-steps-title {
           font-size: 13.5px;
           font-weight: 650;
-          color: var(--color-text-primary);
+          color: #f0f4ff;
           letter-spacing: -0.01em;
         }
         .onboarding-steps-body {
           font-size: 12.5px;
-          color: var(--color-text-secondary);
+          color: #c2c6d6;
           line-height: 1.55;
           margin-top: 2px;
         }
@@ -1083,7 +899,7 @@ export default function Onboarding({
           width: 10px;
           height: 10px;
           border-radius: 50%;
-          background: linear-gradient(135deg, #7bb7ff 0%, #4fd3c6 100%);
+          background: linear-gradient(135deg, #1a6fd4 0%, #5ab3ff 100%);
           animation: onboardingBreath 1.4s ease-in-out infinite;
         }
         .onboarding-breath span:nth-child(2) { animation-delay: 0.2s; }
@@ -1094,18 +910,18 @@ export default function Onboarding({
           font-weight: 800;
           letter-spacing: 0.1em;
           text-transform: uppercase;
-          color: var(--color-text-tertiary);
+          color: rgba(194,198,214,0.5);
         }
         .onboarding-callout-body,
         .onboarding-summary-detail,
         .onboarding-hint {
           font-size: 12.5px;
           line-height: 1.65;
-          color: var(--color-text-secondary);
+          color: #c2c6d6;
         }
         .onboarding-hint-quiet {
           font-size: 11.5px;
-          color: var(--color-text-tertiary);
+          color: rgba(194,198,214,0.5);
           align-self: center;
         }
         .onboarding-actions {
@@ -1126,18 +942,18 @@ export default function Onboarding({
         }
         .onboarding-btn-primary {
           border: none;
-          background: linear-gradient(135deg, #7bb7ff 0%, #4fd3c6 100%);
-          color: #07131b;
-          box-shadow: 0 8px 22px rgba(79, 211, 198, 0.22);
+          background: linear-gradient(145deg, #1a6fd4 0%, #5ab3ff 100%);
+          color: #fff;
+          box-shadow: 0 10px 28px rgba(26, 111, 212, 0.32), 0 0 0 1px rgba(173, 198, 255, 0.10) inset;
         }
         .onboarding-btn-primary:hover:not(:disabled) {
           transform: translateY(-1px);
-          box-shadow: 0 12px 26px rgba(79, 211, 198, 0.32);
+          box-shadow: 0 16px 36px rgba(26, 111, 212, 0.44), 0 0 0 1px rgba(240, 248, 255, 0.16) inset;
         }
         .onboarding-btn-secondary {
-          border: 1px solid var(--color-border-ghost);
+          border: 1px solid rgba(255,255,255,0.08);
           background: transparent;
-          color: var(--color-text-primary);
+          color: #f0f4ff;
         }
         .onboarding-btn-secondary:hover:not(:disabled) {
           border-color: rgba(173, 198, 255, 0.32);
@@ -1155,10 +971,10 @@ export default function Onboarding({
           flex-wrap: wrap;
           padding: 10px 14px;
           border-radius: 12px;
-          border: 1px solid var(--color-border-ghost);
+          border: 1px solid rgba(255,255,255,0.08);
           background: rgba(255, 255, 255, 0.02);
           font-size: 12.5px;
-          color: var(--color-text-secondary);
+          color: #c2c6d6;
         }
         .onboarding-status-dot {
           width: 8px;
@@ -1168,29 +984,24 @@ export default function Onboarding({
         }
         .onboarding-status-ok .onboarding-status-dot { background: #4ad18b; box-shadow: 0 0 0 3px rgba(74, 209, 139, 0.18); }
         .onboarding-status-waiting .onboarding-status-dot { background: #f5c662; animation: onboardingPulse 1.6s ease-out infinite; }
-        .onboarding-status-label { font-weight: 600; color: var(--color-text-primary); }
-        .onboarding-status-note { color: var(--color-text-tertiary); }
+        .onboarding-status-label { font-weight: 600; color: #f0f4ff; }
+        .onboarding-status-note { color: rgba(194,198,214,0.5); }
         .onboarding-summary-grid,
         .onboarding-goals-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          grid-template-columns: minmax(0, 1fr);
           gap: 12px;
         }
         .onboarding-name-field {
           display: grid;
-          gap: 8px;
-          font-size: 12px;
-          font-weight: 800;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-          color: var(--color-text-tertiary);
+          gap: 0;
         }
         .onboarding-name-field input {
           width: 100%;
-          border: 1px solid var(--color-border-ghost);
+          border: 1px solid rgba(255,255,255,0.08);
           border-radius: 14px;
           background: rgba(255, 255, 255, 0.03);
-          color: var(--color-text-primary);
+          color: #f0f4ff;
           padding: 12px 14px;
           font-size: 15px;
           font-weight: 600;
@@ -1199,13 +1010,13 @@ export default function Onboarding({
           outline: none;
         }
         .onboarding-name-field input:focus {
-          border-color: rgba(125, 191, 255, 0.55);
-          box-shadow: 0 0 0 3px rgba(125, 191, 255, 0.12);
+          border-color: rgba(90, 179, 255, 0.58);
+          box-shadow: 0 0 0 3px rgba(26, 111, 212, 0.14);
         }
         .onboarding-summary-tile,
         .onboarding-goal-card {
           border-radius: 16px;
-          border: 1px solid var(--color-border-ghost);
+          border: 1px solid rgba(255,255,255,0.08);
           background: rgba(255, 255, 255, 0.025);
           padding: 14px 14px 12px;
           transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
@@ -1219,45 +1030,114 @@ export default function Onboarding({
           margin-top: 8px;
           font-size: 18px;
           font-weight: 720;
-          color: var(--color-text-primary);
+          color: #f0f4ff;
         }
-        .onboarding-goal-card {
-          display: flex;
-          align-items: center;
-          gap: 10px;
+        .onboarding-goal-chip {
+          min-height: 48px;
+          padding: 13px 17px;
+          border-radius: 10px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255, 255, 255, 0.025);
+          color: #f0f4ff;
+          font-size: 14px;
+          font-weight: 500;
           text-align: left;
-          color: var(--color-text-primary);
           cursor: pointer;
+          transition: border-color 160ms ease, background 160ms ease;
         }
-        .onboarding-goal-card-selected {
-          border-color: rgba(125, 191, 255, 0.45);
-          background: rgba(97, 165, 255, 0.10);
+        .onboarding-goal-chip-selected {
+          border-color: rgba(90, 179, 255, 0.52);
+          background: rgba(26, 111, 212, 0.13);
+          color: #d9edff;
         }
-        .onboarding-goal-card:hover:not(.onboarding-goal-card-selected) {
+        .onboarding-goal-chip:hover:not(.onboarding-goal-chip-selected) {
           border-color: rgba(173, 198, 255, 0.28);
-          background: rgba(255, 255, 255, 0.035);
+          background: rgba(255, 255, 255, 0.04);
         }
-        .onboarding-goal-dot {
-          width: 9px;
-          height: 9px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #7bb7ff 0%, #4fd3c6 100%);
-          flex-shrink: 0;
+        .onboarding-proof-visual {
+          padding: 4px 0 0;
+          min-height: 90px;
         }
-        .onboarding-proof-pending {
+        .onboarding-live-activity {
+          display: grid;
+          gap: 14px;
+        }
+        .onboarding-live-row {
           display: flex;
           align-items: center;
           gap: 14px;
-          margin-bottom: 14px;
         }
-        .onboarding-spinner {
-          width: 18px;
-          height: 18px;
+        .onboarding-live-row-active {
+          padding: 4px 0 4px 13px;
+          border-left: 3px solid #5ab3ff;
+        }
+        .onboarding-live-pulse {
+          width: 8px;
+          height: 8px;
           border-radius: 50%;
-          border: 2px solid rgba(255, 255, 255, 0.14);
-          border-top-color: #7bb7ff;
-          animation: onboardingSpin 1s linear infinite;
+          background: #5ab3ff;
           flex-shrink: 0;
+          box-shadow: 0 0 0 0 rgba(90, 179, 255, 0.55);
+          animation: onboardingPulse 1.6s ease-out infinite;
+        }
+        .onboarding-live-app {
+          font-size: 14px;
+          font-weight: 650;
+          color: #f0f4ff;
+        }
+        .onboarding-live-title {
+          font-size: 12px;
+          color: rgba(194,198,214,0.5);
+          margin-top: 2px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 44ch;
+        }
+        .onboarding-live-stat {
+          font-size: 20px;
+          font-weight: 720;
+          color: #f0f4ff;
+          min-width: 36px;
+        }
+        .onboarding-live-label {
+          font-size: 13px;
+          color: #c2c6d6;
+        }
+        .onboarding-reassurance {
+          font-size: 12px;
+          color: rgba(194,198,214,0.5);
+          margin: 0;
+        }
+        .onboarding-skip-link {
+          background: none;
+          border: none;
+          color: rgba(194,198,214,0.5);
+          font-size: 12.5px;
+          cursor: pointer;
+          padding: 0;
+          text-align: center;
+          transition: color 140ms ease;
+        }
+        .onboarding-skip-link:hover {
+          color: #c2c6d6;
+        }
+        .onboarding-proof-pending {
+          display: grid;
+          justify-items: start;
+          gap: 10px;
+          padding: 12px 0 2px;
+        }
+        .onboarding-proof-pending .onboarding-breath {
+          height: auto;
+          justify-content: flex-start;
+        }
+        .onboarding-proof-pending p {
+          margin: 0;
+          color: #f0f4ff;
+          font-size: 20px;
+          line-height: 1.45;
+          max-width: 32ch;
         }
         .onboarding-error {
           padding: 12px 14px;

@@ -281,3 +281,27 @@ a[href], button.link-style {
   70% { transform: scale(0.97); }
   100% { transform: scale(1); }
 }
+
+/* ── Day Wrapped overlay animations ─────────────────────────────────────── */
+
+@keyframes wrappedOverlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes wrappedEnterFromRight {
+  from { opacity: 0; transform: translateX(56px) scale(0.96); }
+  to   { opacity: 1; transform: translateX(0)    scale(1); }
+}
+
+@keyframes wrappedEnterFromLeft {
+  from { opacity: 0; transform: translateX(-56px) scale(0.96); }
+  to   { opacity: 1; transform: translateX(0)     scale(1); }
+}
+
+@keyframes wrappedIdentityBounce {
+  0%   { opacity: 0; transform: scale(0.55); }
+  62%  { opacity: 1; transform: scale(1.10); }
+  80%  { transform: scale(0.96); }
+  100% { transform: scale(1); }
+}

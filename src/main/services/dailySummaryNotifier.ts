@@ -32,21 +32,27 @@ function writeState(state: DailyNotifierState): void {
   fs.writeFileSync(statePath(), JSON.stringify(state, null, 2))
 }
 
-function notifyWithNavigation(title: string, body: string, route: string): void {
+function notifyWithNavigation(title: string, body: string, route: string, options: { actionText?: string } = {}): void {
   if (!Notification.isSupported()) return
-  const notification = new Notification({ title, body })
-  notification.on('click', () => {
+  const notification = new Notification({
+    title,
+    body,
+    actions: options.actionText ? [{ type: 'button', text: options.actionText }] : undefined,
+  })
+  const openRoute = () => {
     if (!navigationWindow || navigationWindow.isDestroyed()) return
     if (navigationWindow.isMinimized()) navigationWindow.restore()
     navigationWindow.show()
     navigationWindow.focus()
     navigationWindow.webContents.send('navigate', route)
-  })
+  }
+  notification.on('click', openRoute)
+  notification.on('action', openRoute)
   notification.show()
 }
 
-function hasTrackedActivityToday(today: string): boolean {
-  const [fromMs, toMs] = localDayBounds(today)
+function hasTrackedActivityOn(date: string): boolean {
+  const [fromMs, toMs] = localDayBounds(date)
   return getSessionsForRange(getDb(), fromMs, toMs).length > 0
 }
 
@@ -58,6 +64,7 @@ function dailyReportRoute(report: { threadId: number | null; artifactId: number 
   const params = new URLSearchParams()
   if (report.threadId != null) params.set('threadId', String(report.threadId))
   if (report.artifactId != null) params.set('artifactId', String(report.artifactId))
+  if ('date' in report && typeof report.date === 'string') params.set('date', report.date)
   params.set('source', 'daily-summary')
   const query = params.toString()
   return query ? `/ai?${query}` : '/ai'
@@ -73,7 +80,7 @@ async function checkDailySummary(): Promise<void> {
   const state = readState()
   if (state.lastDailySummaryDate === today) return
   if (!hasReachedLocalTime(now, 18)) return
-  if (!hasTrackedActivityToday(today)) return
+  if (!hasTrackedActivityOn(today)) return
 
   dailySummaryPreparing = true
   try {
@@ -86,19 +93,34 @@ async function checkDailySummary(): Promise<void> {
   }
 }
 
-function checkMorningNudge(): void {
+async function checkMorningNudge(): Promise<void> {
   const settings = getSettings()
   if (!settings.morningNudgeEnabled) return
+  if (dailySummaryPreparing) return
 
   const now = new Date()
   const today = localDateString(now)
+  const yesterday = localDateString(new Date(now.getTime() - 86_400_000))
   const state = readState()
   if (state.lastMorningNudgeDate === today) return
   if (!hasReachedLocalTime(now, 9) || now.getHours() >= 12) return
-  if (hasTrackedActivityToday(today)) return
+  if (hasTrackedActivityOn(today)) return
+  if (!hasTrackedActivityOn(yesterday)) return
 
-  notifyWithNavigation('Daylens', 'Open your timeline and start the main thread for today.', '/timeline')
-  writeState({ ...state, lastMorningNudgeDate: today })
+  dailySummaryPreparing = true
+  try {
+    const report = await prepareDailyReport(yesterday)
+    if (report.status !== 'ready') return
+    notifyWithNavigation(
+      'Morning Brief is ready',
+      "Open yesterday's recap and carry the best signal into today.",
+      dailyReportRoute(report),
+      { actionText: 'Open' },
+    )
+    writeState({ ...state, lastMorningNudgeDate: today })
+  } finally {
+    dailySummaryPreparing = false
+  }
 }
 
 export function setDailySummaryNotificationWindow(window: BrowserWindow | null): void {
@@ -114,7 +136,7 @@ export function startDailySummaryNotifier(window?: BrowserWindow | null): void {
   const runChecks = () => {
     void (async () => {
       try {
-        checkMorningNudge()
+        await checkMorningNudge()
         await checkDailySummary()
       } catch (err) {
         console.warn('[daily-summary] notifier check failed:', err)

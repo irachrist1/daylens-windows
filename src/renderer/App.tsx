@@ -5,11 +5,13 @@ import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import DayWrapped from './components/DayWrapped'
 import { ipc } from './lib/ipc'
 import { track } from './lib/analytics'
+import { dateStringFromMs, todayString } from './lib/format'
 import Onboarding from './views/Onboarding'
 import FeedbackModal from './components/FeedbackModal'
-import type { AppSettings, AppTheme } from '@shared/types'
+import type { AppSettings, AppTheme, DayTimelinePayload, OnboardingState } from '@shared/types'
 
 // Lazy-load route views so the initial bundle is small (#6)
 const Timeline = lazy(() => import('./views/Timeline'))
@@ -39,13 +41,78 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   const location = useLocation()
   const navigate = useNavigate()
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [wrappedOpen, setWrappedOpen] = useState(false)
+  const [wrappedDay, setWrappedDay] = useState<DayTimelinePayload | null>(null)
+  const [wrappedThreadId, setWrappedThreadId] = useState<number | null>(null)
+  const [wrappedArtifactId, setWrappedArtifactId] = useState<number | null>(null)
 
   // Route to the correct view when a notification is tapped
   useEffect(() => {
     return ipc.navigation.onNavigate((route) => {
-      navigate(route)
+      const url = new URL(route, 'http://x')
+      if (url.searchParams.get('source') === 'daily-summary') {
+        const threadId  = Number(url.searchParams.get('threadId'))  || null
+        const artifactId = Number(url.searchParams.get('artifactId')) || null
+        const wrappedDate = url.searchParams.get('date') || todayString()
+        void ipc.db.getTimelineDay(wrappedDate)
+          .then((payload) => {
+            if (payload.totalSeconds > 0) {
+              setWrappedDay(payload)
+              setWrappedThreadId(threadId)
+              setWrappedArtifactId(artifactId)
+              setWrappedOpen(true)
+            } else {
+              navigate(route)
+            }
+          })
+          .catch(() => navigate(route))
+      } else {
+        navigate(route)
+      }
     })
   }, [navigate])
+
+  // Dev escape hatch: Cmd+Shift+Option+O resets onboarding without touching tracked data
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.metaKey || !e.shiftKey || !e.altKey || e.code !== 'KeyO') return
+      const freshState: OnboardingState = {
+        flowVersion: settings?.onboardingState.flowVersion ?? 3,
+        platform: settings?.onboardingState.platform ?? 'macos',
+        stage: 'welcome',
+        trackingPermissionState: 'missing',
+        permissionRequestedAt: null,
+        proofState: 'idle',
+        personalizationState: 'pending',
+        aiSetupState: 'pending',
+        completedAt: null,
+      }
+      void ipc.settings.set({
+        onboardingComplete: false,
+        onboardingState: freshState,
+        userName: '',
+        userGoals: [],
+      }).then(() => window.location.reload())
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [settings])
+
+  // Dev shortcut: Cmd+Shift+Option+W opens DayWrapped for yesterday
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.metaKey || !e.shiftKey || !e.altKey || e.code !== 'KeyW') return
+      const yesterday = dateStringFromMs(Date.now() - 86_400_000)
+      void ipc.db.getTimelineDay(yesterday).then((payload) => {
+        setWrappedDay(payload)
+        setWrappedThreadId(null)
+        setWrappedArtifactId(null)
+        setWrappedOpen(true)
+      })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // Track route changes
   useEffect(() => {
@@ -70,6 +137,23 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     <>
       <UpdateBanner />
       {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
+      {wrappedOpen && wrappedDay && (
+        <DayWrapped
+          data={wrappedDay}
+          threadId={wrappedThreadId}
+          artifactId={wrappedArtifactId}
+          userName={settings?.userName ?? null}
+          onClose={() => setWrappedOpen(false)}
+          onOpenReport={() => {
+            setWrappedOpen(false)
+            if (wrappedThreadId != null) {
+              navigate(`/ai?threadId=${wrappedThreadId}${wrappedArtifactId != null ? `&artifactId=${wrappedArtifactId}` : ''}`)
+            } else {
+              navigate('/ai')
+            }
+          }}
+        />
+      )}
       {/* Full-height shell: title bar on top, sidebar + content below */}
       <div className="flex flex-col h-full overflow-hidden" style={{ fontFamily: 'var(--font-sans)' }}>
         <TitleBar />
