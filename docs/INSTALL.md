@@ -70,7 +70,7 @@ Daylens currently ships arm64 builds only. Intel Macs are not supported by the p
 
 1. Download the current Windows installer from the link above
 2. Run it. It installs per-user (no admin prompt) and launches automatically.
-3. On first run, SmartScreen may show a blue *"Windows protected your PC"* banner. Click **More info** → **Run anyway**. This is the Windows equivalent of the macOS first-launch approval — ad-hoc signed builds are unknown to Microsoft's reputation service.
+3. If Windows shows a blue *"Windows protected your PC"* banner, stop and verify the installer came from the official Daylens release link above. Older Windows builds were unsigned, which triggers the strongest SmartScreen warning. New public Windows releases are expected to be Authenticode-signed; a signed but brand-new build can still show a reputation warning until Microsoft has seen enough trusted installs.
 
 To uninstall: **Settings → Apps → Daylens → Uninstall**.
 

@@ -1,6 +1,6 @@
 # Issues
 
-Status last updated 2026-04-28 (v1.0.33 release). Prior audit: 2026-04-23.
+Status last updated 2026-04-29 (v1.0.34 release). Prior audit: 2026-04-23.
 
 This file is the implementation-status ledger. Items below are separated into code-proven, `implemented pending verification`, and still-partial/open. Older docs and summaries were treated as hypotheses during this refresh.
 
@@ -62,6 +62,11 @@ These features exist in code and, in several cases, have focused test coverage, 
 
 ## Still Partial Or Open
 
+### Windows Signing And SmartScreen
+
+- v1.0.33 and earlier Windows installers were published unsigned because `release-windows.yml` allowed empty signing secrets and electron-builder skipped signing. The workflow now fails without signing credentials and verifies Authenticode signatures before upload (`.github/workflows/release-windows.yml`). The next Windows release still requires a trusted certificate to be added as GitHub Actions secrets before it can publish.
+- Even after Authenticode signing, brand-new Windows installer file hashes can still show SmartScreen reputation warnings until Microsoft reputation accumulates. This is a distribution trust/reputation issue, not evidence that the packaged app contains malware.
+
 ### Browser Evidence
 
 - Linux browser-history ingestion is not implemented in `src/main/services/browser.ts`. Current browser ingestion is macOS/Windows only (`src/main/services/browser.ts:74-107`, `src/main/services/browser.ts:414-620`).
@@ -98,6 +103,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 ## Real Runtime Or User Verification Still Needed
 
 - Windows packaged runtime validation on a real machine.
+- Windows Authenticode-signed release validation on a real machine after signing secrets are added.
 - Windows/macOS in-app update validation from an older installed build to the newly published public-feed build.
 - Linux packaged runtime validation on real desktops, including X11 and Wayland/XWayland scenarios.
 - End-to-end linked workspace creation, browser linking, heartbeat/day-sync freshness, and stale/failure recovery in normal use.

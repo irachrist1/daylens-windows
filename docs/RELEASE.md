@@ -102,6 +102,18 @@ Both macOS and Windows workflows publish assets to the same GitHub release at `v
 
 After packaging, CI runs `node scripts/verify-packaged-natives.js dist-release`. This script checks that `better-sqlite3`, `@paymoapp/active-window`, and `keytar` are present in the unpacked layout inside the ASAR. If any are missing the step exits with code 1 and the run fails. This was the root cause of several failures in the v1.0.30–v1.0.32 range.
 
+### Windows code signing
+
+Public Windows releases must be Authenticode-signed. `release-windows.yml` fails before packaging when `WIN_CERTIFICATE_FILE` or `WIN_CERTIFICATE_PASSWORD` is missing, then checks `Get-AuthenticodeSignature` for the unpacked app executable, NSIS helper, generated uninstaller, and setup installer before uploading release assets.
+
+Required GitHub Actions secrets:
+
+- `WIN_CERTIFICATE_FILE` — base64-encoded trusted PFX certificate
+- `WIN_CERTIFICATE_PASSWORD` — PFX password
+- `WIN_CERT_SUBJECT_NAME` — optional publisher subject hint
+
+Unsigned internal test builds belong in `preview-builds.yml`, not the public release workflow. A valid signature proves publisher identity and avoids the strongest unknown-publisher block, but Microsoft SmartScreen reputation can still warn for a new file hash until the signed app builds reputation.
+
 ---
 
 ## Why previous releases failed (historical)
@@ -116,6 +128,14 @@ After packaging, CI runs `node scripts/verify-packaged-natives.js dist-release`.
 **Root cause:** `electron-builder` was not correctly unpacking native modules into `app.asar.unpacked`. The `verify-packaged-natives.js` script was added in v1.0.32 to catch this before publish. The underlying `electron-builder.config.js` `asarUnpack` patterns were fixed across `4e83fe4`–`7a7b609` (the four commits immediately before v1.0.33).
 
 **Status:** Fixed. If this re-appears, check `asarUnpack` in `electron-builder.config.js`.
+
+### Unsigned Windows installers (v1.0.33 and earlier)
+
+**Symptom:** Installing on Windows shows the blue Defender SmartScreen / "Windows protected your PC" warning, with the installer treated as unknown or potentially dangerous.
+
+**Root cause:** The public Windows release workflow allowed empty signing secrets. electron-builder logged `no signing info identified, signing is skipped` for `Daylens.exe`, `elevate.exe`, the NSIS uninstaller, and `Daylens-1.0.33-Setup.exe`, then uploaded the unsigned installer anyway.
+
+**Status:** Release workflow fixed to require signing secrets and verify Authenticode signatures before upload. The remaining operational blocker is adding a trusted Windows code-signing certificate to GitHub Actions secrets before the next Windows release.
 
 ### Artifact storage quota (sporadic)
 
@@ -179,10 +199,12 @@ For persistent notifications, enable GitHub email notifications for "Failed work
 [ ] Write CHANGELOG.md entry with date
 [ ] npm run typecheck — zero errors
 [ ] npm run test:ai-chat — all pass
+[ ] Confirm Windows signing secrets exist before pushing v{VERSION}-win
 [ ] git add + commit + push to main
 [ ] git tag v{VERSION}-mac && git tag v{VERSION}-win
 [ ] git push origin v{VERSION}-mac v{VERSION}-win
 [ ] gh run list — confirm both runs appear
 [ ] gh run watch <run-id> — confirm both succeed
+[ ] For Windows, confirm "Verify Authenticode signatures" passed
 [ ] gh release view v{VERSION} — confirm assets present
 ```

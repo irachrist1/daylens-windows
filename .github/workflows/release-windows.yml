@@ -84,8 +84,19 @@ jobs:
       #   WIN_CERT_SUBJECT_NAME     — e.g. "Daylens Inc."
       # Obtain an OV or EV code-signing certificate from a trusted CA
       # (e.g. DigiCert, Sectigo) and store the PFX as a base64 secret.
+      - name: Require Windows code-signing credentials
+        shell: pwsh
+        run: |
+          $missing = @()
+          if ([string]::IsNullOrWhiteSpace($env:WIN_CERTIFICATE_FILE)) { $missing += 'WIN_CERTIFICATE_FILE' }
+          if ([string]::IsNullOrWhiteSpace($env:WIN_CERTIFICATE_PASSWORD)) { $missing += 'WIN_CERTIFICATE_PASSWORD' }
+
+          if ($missing.Count -gt 0) {
+            Write-Error "Refusing to publish an unsigned Windows installer. Missing GitHub secret(s): $($missing -join ', '). Add a trusted Authenticode code-signing certificate, or use preview-builds.yml for unsigned internal test artifacts."
+            exit 1
+          }
+
       - name: Decode code-signing certificate
-        if: ${{ env.WIN_CERTIFICATE_FILE != '' }}
         shell: bash
         run: |
           echo "$WIN_CERTIFICATE_FILE" | base64 --decode > /tmp/cert.pfx
@@ -95,6 +106,31 @@ jobs:
 
       - name: Package with electron-builder
         run: npx electron-builder --win --publish never --config electron-builder.config.js
+
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          $paths = @(
+            'dist-release\win-unpacked\Daylens.exe',
+            'dist-release\win-unpacked\resources\elevate.exe',
+            'dist-release\__uninstaller-nsis-daylens-windows.exe',
+            'dist-release\Daylens-${{ steps.meta.outputs.version }}-Setup.exe'
+          )
+
+          foreach ($path in $paths) {
+            if (-not (Test-Path $path)) {
+              Write-Error "Expected signed file is missing: $path"
+              exit 1
+            }
+
+            $signature = Get-AuthenticodeSignature -FilePath $path
+            if ($signature.Status -ne 'Valid') {
+              Write-Error "$path is not Authenticode-signed with a valid trusted signature. Status: $($signature.Status). Message: $($signature.StatusMessage)"
+              exit 1
+            }
+
+            Write-Host "$path signed by $($signature.SignerCertificate.Subject)"
+          }
 
       - name: Verify packaged native module layout
         run: node scripts/verify-packaged-natives.js dist-release
