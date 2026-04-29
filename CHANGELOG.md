@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.34 - 2026-04-29
+
+### Added
+- **Day Wrapped and Morning Brief.** Daily summary notifications now open a polished Wrapped-style experience, with morning briefs showing yesterday through a rotating warm video opener, identity slide, forward-looking nudge, and AI report CTA when a prepared thread exists.
+- **Bundled morning visuals.** Six lightweight morning video loops are bundled into the renderer so the brief can feel different across days without depending on files from the user's Downloads folder.
+
+### Changed
+- **Onboarding is calmer and more direct.** The first-run flow now uses a single-headline welcome, dots-only progress, sky-blue primary buttons, plain proof rows, and larger one-column personalization chips.
+- **Morning notifications prepare yesterday's report.** The morning notification is now titled "Morning Brief is ready", includes an Open action, and routes to yesterday's recap instead of sending the user to an empty today view.
+
+### Fixed
+- **Wrapped report buttons stay clickable.** The final Wrapped actions explicitly stop slide navigation from swallowing report and dismiss clicks.
+- **Windows public releases now refuse unsigned installers.** The Windows release workflow now requires Authenticode signing credentials and verifies signatures before publishing, preventing another unsigned public installer from being uploaded by accident.
+
 ## v1.0.33 - 2026-04-28
 
 ### Fixed
