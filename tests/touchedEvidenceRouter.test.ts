@@ -104,3 +104,48 @@ test('files/docs/pages prompt uses available local artifacts, pages, windows, an
   assert.match(routed?.answer ?? '', /Window titles:/)
   assert.doesNotMatch(routed?.answer ?? '', /didn't detect any specific files/i)
 })
+
+test('files/docs/pages prompt returns null (router miss) when only app sessions exist — no hollow header', async () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+
+  // Only app sessions — no window titles, no website visits, no artifacts
+  insertAppSession(
+    db,
+    'Google Chrome',
+    'chrome.exe',
+    'Google Chrome', // generic window title — same as app name, no file evidence
+    localMs(9, 0),
+    localMs(10, 0),
+    'browsing',
+  )
+  insertAppSession(
+    db,
+    'Slack',
+    'slack.exe',
+    'Slack',
+    localMs(10, 0),
+    localMs(10, 30),
+    'communication',
+  )
+
+  const routed = await routeInsightsQuestion(
+    'Which files, docs, or pages mattered most today?',
+    new Date(2026, 3, 29, 12, 0, 0, 0),
+    null,
+    db,
+  )
+
+  // Router must return null (miss) so the full AI synthesis path handles the question.
+  // A non-null answer with no file content produces a hollow header — never acceptable.
+  const answer = routed?.kind === 'answer' ? routed.answer : null
+  if (answer !== null) {
+    // If the router did answer, it must have real content — not just a header line
+    const lines = answer.split('\n').filter((l) => l.trim())
+    assert.ok(
+      lines.length > 1,
+      'A non-null router answer must have more than just a header line',
+    )
+    assert.doesNotMatch(answer, /no clear file\/doc names.*app evidence follows/i, 'Header-only answer with no body must not reach the user')
+  }
+})

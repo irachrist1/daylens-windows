@@ -17,6 +17,7 @@ import {
   getConversationMessages,
   getConversationState,
   getOrCreateConversation,
+  getThreadConversationState,
   getThreadMessages,
   getActiveFocusSession,
   getAppSummariesForRange,
@@ -194,12 +195,14 @@ class CLIProviderError extends Error {
 }
 
 const CLI_TIMEOUT_MS = 180_000
-const conversationTemporalContext = new Map<number, TemporalContext | null>()
+const conversationTemporalContext = new Map<string, TemporalContext | null>()
 const weeklyBriefCache = new Map<string, WeeklyBriefEvidencePack>()
 const daySummaryCache = new Map<string, AIDaySummaryResult>()
 const cliToolCache: Partial<Record<'claude' | 'codex', Promise<ResolvedCLITool | null>>> = {}
 const STREAM_CHUNK_DELAY_MS = 12
 const STREAM_CHUNK_SIZE = 32
+const USER_VISIBLE_ACTIVITY_PROSE_RULE =
+  'Never use raw app names as the activity. Describe activity, work threads, artifacts, pages, or context instead of listing tool names as nouns.'
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -2497,12 +2500,29 @@ async function generateSuggestedFollowUps(
   }
 }
 
+function conversationContextKey(conversationId: number, threadId: number | null): string {
+  return threadId == null ? `conversation:${conversationId}` : `thread:${threadId}`
+}
+
 function restoreConversationState(conversationId: number): AIConversationState | null {
   const db = getDb()
   const persisted = getConversationState(db, conversationId)
   if (!persisted) return null
-  if (!conversationTemporalContext.has(conversationId)) {
-    conversationTemporalContext.set(conversationId, deserializeTemporalContext(persisted.routingContext))
+  const key = conversationContextKey(conversationId, null)
+  if (!conversationTemporalContext.has(key)) {
+    conversationTemporalContext.set(key, deserializeTemporalContext(persisted.routingContext))
+  }
+  return persisted
+}
+
+function restoreChatState(conversationId: number, threadId: number | null): AIConversationState | null {
+  if (threadId == null) return restoreConversationState(conversationId)
+  const db = getDb()
+  const persisted = getThreadConversationState(db, threadId)
+  if (!persisted) return null
+  const key = conversationContextKey(conversationId, threadId)
+  if (!conversationTemporalContext.has(key)) {
+    conversationTemporalContext.set(key, deserializeTemporalContext(persisted.routingContext))
   }
   return persisted
 }
@@ -2554,8 +2574,10 @@ async function persistChatTurn(
       ),
     },
   )
-  upsertConversationState(db, conversationId, envelope.conversationState)
-  conversationTemporalContext.set(conversationId, envelope.resolvedTemporalContext)
+  if (threadId == null) {
+    upsertConversationState(db, conversationId, envelope.conversationState)
+  }
+  conversationTemporalContext.set(conversationContextKey(conversationId, threadId), envelope.resolvedTemporalContext)
   if (threadId != null) {
     touchThreadLastMessage(db, threadId, Date.now())
     queueWeakThreadTitleUpgrade(threadId, userMessage, envelope)
@@ -2796,11 +2818,13 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
 
   const systemPrompt = [
     'You are Daylens, writing the opening daily briefing for a desktop work-intelligence app.',
+    'Do not use emoji in any part of your response.',
     'Turn deterministic local work evidence into a concise, useful summary.',
     'Focus on what the person was actually working on, what moved forward, and what deserves follow-up.',
     'Prefer the structured workIntent signal over raw homepage, feed, or generic tab labels when they conflict.',
     'Treat generic feed/home usage as context unless the evidence clearly says it was the main task.',
-    'Treat X.com, twitter.com, Twitter, and X as the same product; when that evidence appears, refer to it as "X (Twitter)" unless a more specific page or thread title is available.',
+    'Never use raw app names as the subject of a sentence. Instead, describe what the app is used for: Warp or Terminal → "your terminal", a browser (Chrome, Safari, Arc, Firefox) → "your browser", VS Code or Cursor → "your editor", Figma → "your design tool", Slack or Teams → "your messaging app", X.com or Twitter → "social browsing" or a specific activity from the page title. Use the specific app name only when a more descriptive phrase would be unclear.',
+    'Use window titles and page titles as evidence for what the user was doing. Do not use the app name as a proxy for the activity. When a page or thread title is available, prefer describing the specific content over naming the platform.',
     'Ignore badge-count prefixes like "(4)" when interpreting page or tab titles.',
     'Mention exact file, document, page, repo, or artifact names only when they appear verbatim in the evidence.',
     'Do not write like a dashboard, analytics panel, or generic AI recap.',
@@ -3155,6 +3179,8 @@ async function generateWeekReview(weekStartStr: string): Promise<AISurfaceSummar
   const fallback = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey, { stale: true })
   const systemPrompt = [
     'You are Daylens, writing the short week-review card for the Timeline week view.',
+    'Do not use emoji in any part of your response.',
+    USER_VISIBLE_ACTIVITY_PROSE_RULE,
     'Use only the deterministic local evidence provided.',
     'Focus on the actual work threads, named artifacts, and where the week concentrated.',
     'Avoid dashboard filler or generic productivity language.',
@@ -3215,6 +3241,8 @@ async function generateAppNarrative(
   const fallback = getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
   const systemPrompt = [
     'You are Daylens, writing the short narrative card for an app detail view.',
+    'Do not use emoji in any part of your response.',
+    USER_VISIBLE_ACTIVITY_PROSE_RULE,
     'Explain what this tool was helping with, which artifacts or contexts appeared there, and what it tended to pair with.',
     'Use only the deterministic evidence below.',
     'Do not write vanity metrics or generic app summaries.',
@@ -3515,6 +3543,8 @@ async function maybeGenerateRequestedOutput(params: {
   const outputKindsLabel = outputKinds.join(', ')
   const systemPrompt = [
     'You are Daylens, generating shareable work-history outputs from deterministic local evidence.',
+    'Do not use emoji in any part of your response.',
+    USER_VISIBLE_ACTIVITY_PROSE_RULE,
     'Use only the facts in the scaffold below.',
     'Return strict JSON with keys "assistantResponse", "reportTitle", and "reportMarkdown".',
     '"assistantResponse" should be 1-3 short paragraphs for the in-app chat card.',
@@ -3662,6 +3692,8 @@ function weeklyBriefPrompts(
 
   const systemPrompt = [
     'You are Daylens.',
+    'Do not use emoji in any part of your response.',
+    USER_VISIBLE_ACTIVITY_PROSE_RULE,
     'You turn a deterministic weekly browsing evidence pack into a natural editorial briefing.',
     'The evidence selection is already done for you. Your job is writing, not retrieval.',
     'Use only the facts in the scaffold below. Do not invent pages, repos, docs, files, videos, or claims of certainty.',
@@ -3743,10 +3775,10 @@ function workBlockPrompt(block: WorkContextBlock): string {
   const lines = [
     'Analyze this Daylens work block.',
     'Return strict JSON: {"label":"...","narrative":"..."}',
-    'label: 3-7 word title-case. NEVER return a bare category name ("Browsing", "Development").',
+    'label: 2-5 word activity description. NEVER return a raw app name, browser name, or bare category name ("Chrome", "Safari", "Cursor", "Warp", "Browsing", "Development").',
     'narrative: 1-2 plain sentences. Evidence-led, no hype, no "the user" prefix.',
     'Priority rules:',
-    '  - Website titles > window titles > app names > category.',
+    '  - Window titles and page titles > artifact names > category descriptions > app names only as last-resort context, never as the label.',
     '  - Browser+AI only ≠ Development → call it Research or Planning.',
     '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
     '',
@@ -3861,6 +3893,7 @@ export async function generateWorkBlockInsight(
   const systemPrompt = [
     'You are Daylens.',
     'You label productivity timeline blocks from local activity evidence.',
+    'Do not use emoji in any part of your response.',
     'Be concrete, restrained, and evidence-led.',
     'Never mention the model provider.',
     'If the evidence is weak, keep the label generic but still useful.',
@@ -4071,31 +4104,13 @@ const APP_VOCABULARY_HINT =
   'Outlook/Spark/Apple Mail = email. ' +
   'Key websites: x.com and twitter.com = X (social media); youtube.com = video platform; reddit.com = forum/discussion; instagram.com = social media; github.com = code hosting.'
 
-function answerNamesEvidenceType(text: string): boolean {
-  return /^(from your|based on|direct from|ai synthesis over|outside what daylens tracks)/i.test(text.trim())
-}
-
-function answerLooksOutsideTrackedScope(text: string): boolean {
-  const lower = text.slice(0, 500).toLowerCase()
-  return lower.includes("doesn't capture") ||
-    lower.includes('does not capture') ||
-    lower.includes("can't capture") ||
-    lower.includes('cannot capture') ||
-    lower.includes('outside what daylens tracks') ||
-    lower.includes('not something daylens tracks')
-}
-
-function ensureEvidenceLead(text: string, fallbackEvidence = 'From your tracked data'): string {
-  const trimmed = text
+function ensureEvidenceLead(text: string): string {
+  return text
     .trim()
     .replace(/^\s*(?:[-*•]|\d+[.)])\s+/gm, '')
     .replace(/\s*\n+\s*/g, ' ')
     .replace(/\s{2,}/g, ' ')
-  if (!trimmed || answerNamesEvidenceType(trimmed)) return trimmed
-  const evidence = answerLooksOutsideTrackedScope(trimmed)
-    ? 'Outside what Daylens tracks'
-    : fallbackEvidence
-  return `${evidence}: ${trimmed}`
+    .trim()
 }
 
 async function routerProsePass(
@@ -4104,6 +4119,8 @@ async function routerProsePass(
 ): Promise<string> {
   const systemPrompt =
     `Rewrite this structured data as one to three natural sentences for a user asking "${question}". ` +
+    'Do not use emoji. ' +
+    `${USER_VISIBLE_ACTIVITY_PROSE_RULE} ` +
     'Do not use bullet points, numbers, or tables. ' +
     'Mention specific names and numbers that appear in the data. ' +
     'Do not invent anything not in the data. ' +
@@ -4155,16 +4172,19 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       maybeRenameWeakThread(threadId, existing.title, userMessage)
     }
   }
-  const history = getConversationMessages(db, conversationId)
+  const history = threadId == null
+    ? getConversationMessages(db, conversationId)
+    : getThreadMessages(db, threadId)
   const stream = createChatStreamAccumulator(payload.clientRequestId ?? null, options)
-  const restoredState = payload.contextOverride ?? restoreConversationState(conversationId)
+  const restoredState = payload.contextOverride ?? restoreChatState(conversationId, threadId)
   const restoredTemporalContext = deserializeTemporalContext(restoredState?.routingContext ?? null)
   const followUpResolution = resolveFollowUp(userMessage, restoredState, history)
   const effectiveUserMessage = followUpResolution.effectivePrompt
+  const contextKey = conversationContextKey(conversationId, threadId)
   const previousContext = followUpResolution.shouldResetContext
     ? null
     : (restoredTemporalContext
-      ?? conversationTemporalContext.get(conversationId)
+      ?? conversationTemporalContext.get(contextKey)
       ?? null)
 
   capture(ANALYTICS_EVENT.AI_FOLLOWUP_RESOLUTION, {
@@ -4259,7 +4279,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
         sendWithProvider,
         { onDelta: (delta) => stream.push(delta) },
       )
-      const assistantText = ensureEvidenceLead(text, 'From your tracked weekly evidence')
+      const assistantText = ensureEvidenceLead(text)
       await stream.streamText(assistantText)
       if (!assistantText.trim()) {
         throw new Error('The AI returned an empty response. Please try again.')
@@ -4343,6 +4363,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       'When a question needs specific data (a day, an app, a time range, a project), call the appropriate tool first. ' +
       'You can call multiple tools to piece together a complete answer.\n' +
       'Synthesize tool results into a conversational answer — do not recite raw data. Tell the story.\n' +
+      USER_VISIBLE_ACTIVITY_PROSE_RULE + '\n' +
       'Grounding rule: only mention a file, doc, repo, or project name if it appears verbatim in tool results.\n' +
       'Evidence-type rule: weave evidence type naturally into the answer when it adds clarity (e.g. "your window titles showed...", "based on your app sessions...") — do not open every answer with a boilerplate evidence prefix. ' +
       'Never write "you edited X" or "you worked on Y" — the data shows foreground time and window-title strings, not edits or intent. ' +
@@ -4352,6 +4373,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       'Refusal rule: if the user asks about anything in the NOT-captured list, say so plainly in one or two sentences, then offer the closest thing you actually can see. Never dump an unrelated aggregation to avoid saying "I do not have that".\n' +
       APP_VOCABULARY_HINT + '\n' +
       'Keep it short. 2-5 sentences for most questions. Never say "the user" — address them directly.\n' +
+      'Do not use emoji in any part of your response.\n' +
       'Always speak as Daylens.\n' +
       `If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(chatProvider)} (${chatModel}).`
 
@@ -4395,10 +4417,12 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       '- You DO have access to all-time tracked data (see "Lifetime tracked data" below) and recent daily history, not just today. Never tell the user "I only have today\'s data" — that is false. If you\'ve already given a lifetime/weekly/yesterday answer earlier in this conversation, treat it as ground truth and use it for follow-ups (e.g. "how many days is that" → the tracking window stated above).\n\n' +
       'How to write:\n' +
       '- Conversational, grounded, slightly social — a thoughtful friend who reviewed your day, not a dashboard.\n' +
+      `- ${USER_VISIBLE_ACTIVITY_PROSE_RULE}\n` +
       '- Lead with the story of the day (what the user was doing and when), then surface totals only if the user asked or if a number matters.\n' +
       '- Keep it short. 2-5 sentences for most questions. Use bullet points only when listing distinct blocks or suggestions.\n' +
       '- Reference block time ranges and labels when they add specificity: "between 9:30 and 11:00 you were in a research block on arxiv and Claude".\n' +
       '- Never say "the user" — address them directly ("you").\n' +
+      '- Do not use emoji in any part of your response.\n' +
       '- Always speak as Daylens, never as a raw model/provider persona.\n' +
       `- If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(preferredConfig.provider)} (${preferredConfig.model}).\n` +
       '- If the data genuinely doesn\'t answer the question, say so plainly and offer what you can infer.\n' +
@@ -4556,7 +4580,7 @@ export function clearAIHistory(): void {
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
   clearConversation(db, conversationId)
-  conversationTemporalContext.delete(conversationId)
+  conversationTemporalContext.clear()
 }
 
 export async function testCLITool(tool: 'claude' | 'codex'): Promise<{ ok: true; output: string } | { ok: false; error: string }> {

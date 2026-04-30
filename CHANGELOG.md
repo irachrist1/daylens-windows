@@ -1,13 +1,23 @@
 # Changelog
 
-## v1.0.35 - 2026-04-29
+## v1.0.35 - 2026-04-30
+
+### Added
+- **Smarter work history.** Timeline blocks now split sustained context changes, cap very long deterministic blocks, and keep file, page, repo, and window-title evidence ahead of raw app names.
+- **Better app context.** Apps now opens on today's activity and focuses each app detail on what you did there, the files and documents touched, pages visited, and tools used alongside it.
+
+### Changed
+- **Cleaner daily and weekly views.** Timeline and AI summary copy now avoid overconfident focus-percentage language and emphasize tracked work blocks, artifacts, and activity patterns instead.
+- **AI answers sound less like an app list.** Day summaries, weekly reviews, app narratives, generated reports, and chat prompts now explicitly avoid using raw app names as the activity itself.
 
 ### Fixed
 - **Updates show honest progress.** Downloads no longer sit at a fake 0%, and public Windows releases are blocked unless the installer is signed.
-- **AI answers use the evidence Daylens has.** Files/docs/pages questions now use local files, pages, window titles, apps, and timeline evidence instead of falling back to a generic no-filenames response.
+- **Daylens stops tracking itself.** Foreground capture now filters Daylens windows and Daylens project-title sessions before they can pollute the timeline or artifact evidence.
+- **Daily notifications open the right recap.** Day Wrapped and Morning Brief click-through now show the requested report date even when the window was hidden or the day has no tracked activity yet.
+- **AI answers use the evidence Daylens has.** Files/docs/pages questions now use local files, pages, window titles, and timeline evidence instead of showing a hollow fallback when only app sessions exist.
 - **Daily summaries stay grounded.** Timeline summaries avoid malformed JSON, keep wording cautious when evidence is thin, and stop inventing intent from app or browser names alone.
 - **Settings hides raw sync errors.** Expired workspace links and server failures now show short recovery guidance instead of stack traces or request internals.
-- **Timeline and app icons are calmer.** The right inspector keeps its scrollbar hidden while remaining scrollable, and Microsoft 365 app icons render consistently across Timeline, Apps, and artifact views.
+- **Timeline and app icons are calmer.** The right inspector keeps its scrollbar hidden while remaining scrollable, and Microsoft 365, WhatsApp, GitHub, ChatGPT, OneDrive, LinkedIn, and FaceTime labels render consistently across Timeline, Apps, and artifact views.
 
 ## v1.0.34 - 2026-04-29
 

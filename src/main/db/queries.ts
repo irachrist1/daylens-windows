@@ -148,8 +148,9 @@ function mergeSessions(sessions: AppSession[]): AppSession[] {
     const curr = sessions[i]
     const last = merged[merged.length - 1]
     const gap = curr.startTime - appSessionEndTime(last)
+    const sameWindowTitle = (curr.windowTitle ?? '').trim() === (last.windowTitle ?? '').trim()
 
-    if (curr.bundleId === last.bundleId && gap <= SAME_APP_MERGE_GAP_MS) {
+    if (curr.bundleId === last.bundleId && sameWindowTitle && gap <= SAME_APP_MERGE_GAP_MS) {
       const newEnd = Math.max(appSessionEndTime(last), appSessionEndTime(curr))
       last.endTime = newEnd
       last.durationSeconds = Math.max(1, Math.round((newEnd - last.startTime) / 1000))
@@ -558,15 +559,16 @@ export function getAppSummariesForRange(
   const summaryMap = new Map<string, AppUsageSummary>()
 
   for (const session of clippedSessions) {
-    const existing = summaryMap.get(session.bundleId)
+    const identity = resolveCanonicalApp(session.bundleId, session.appName)
+    const mapKey = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
+    const existing = summaryMap.get(mapKey)
     if (existing) {
       existing.totalSeconds += session.durationSeconds
       existing.sessionCount = (existing.sessionCount ?? 0) + 1
     } else {
-      const identity = resolveCanonicalApp(session.bundleId, session.appName)
-      summaryMap.set(session.bundleId, {
+      summaryMap.set(mapKey, {
         bundleId: session.bundleId,
-        canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId,
+        canonicalAppId: mapKey,
         appName: identity.displayName || session.appName,
         category: session.category,
         totalSeconds: session.durationSeconds,
@@ -1315,6 +1317,26 @@ export function getThreadMessages(
       rating: 'up' | 'down' | null
       ratingUpdatedAt: number | null
     })) as AIThreadMessage[]
+}
+
+export function getThreadConversationState(
+  db: Database.Database,
+  threadId: number,
+): AIConversationState | null {
+  const rows = db
+    .prepare(
+      `SELECT metadata_json AS metadataJson
+       FROM ai_messages
+       WHERE thread_id = ?
+       ORDER BY created_at DESC, id DESC`
+    )
+    .all(threadId) as { metadataJson: string | null }[]
+
+  for (const row of rows) {
+    const metadata = parseJsonObject<AIThreadMessageMetadata>(row.metadataJson, {})
+    if (metadata.contextSnapshot) return metadata.contextSnapshot
+  }
+  return null
 }
 
 export function updateAIMessageFeedback(

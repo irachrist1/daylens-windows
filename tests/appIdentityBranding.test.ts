@@ -27,6 +27,22 @@ test('renderer display aliases stay human on mac-focused app names', () => {
   assert.equal(formatDisplayAppName('DaylensWindows'), 'Daylens')
 })
 
+test('camelcase product brands keep their marketed display names', () => {
+  assert.equal(formatDisplayAppName('whatsApp'), 'WhatsApp')
+  assert.equal(formatDisplayAppName('chatGPT'), 'ChatGPT')
+  assert.equal(formatDisplayAppName('gitHub'), 'GitHub')
+  assert.equal(formatDisplayAppName('oneDrive'), 'OneDrive')
+  assert.equal(formatDisplayAppName('linkedIn'), 'LinkedIn')
+  assert.equal(formatDisplayAppName('faceTime'), 'FaceTime')
+
+  assert.equal(resolveCanonicalApp('', 'whatsApp').displayName, 'WhatsApp')
+  assert.equal(resolveCanonicalApp('', 'chatGPT').displayName, 'ChatGPT')
+  assert.equal(resolveCanonicalApp('', 'gitHub').displayName, 'GitHub')
+  assert.equal(resolveCanonicalApp('', 'oneDrive').displayName, 'OneDrive')
+  assert.equal(resolveCanonicalApp('', 'linkedIn').displayName, 'LinkedIn')
+  assert.equal(resolveCanonicalApp('', 'faceTime').displayName, 'FaceTime')
+})
+
 test('renderer has branded Microsoft 365 fallback icon specs', () => {
   assert.deepEqual(brandedAppIconSpec('Microsoft Excel', 'excel'), {
     label: 'X',

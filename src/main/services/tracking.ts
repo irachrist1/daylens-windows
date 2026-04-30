@@ -4,6 +4,7 @@ import { app, powerMonitor } from 'electron'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import type Database from 'better-sqlite3'
 import {
   clearLiveAppSessionSnapshot,
   getLiveAppSessionSnapshot,
@@ -17,6 +18,7 @@ import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from './database'
 import type {
   AppCategory,
+  AppSession,
   LinuxTrackingDiagnostics,
   LiveSession,
   TrackingModuleSource,
@@ -930,10 +932,77 @@ const OS_NOISE_APP_NAMES = new Set([
 // Previously matched 'electron' as a substring which filtered VS Code, Discord,
 // Slack, Figma, and every other Electron app. Now uses exact exe name matching.
 const SELF_NOISE_EXE_NAMES = new Set([
+  'daylens',
+  'daylens.exe',
   'daylens windows.exe',
   'daylenswindows.exe',
   'electron.exe',      // dev mode — raw electron runner, not a user app
 ])
+
+const DAYLENS_SELF_BUNDLE_IDS = new Set([
+  'com.daylens.desktop',
+  'com.daylens.app',
+  'com.daylens.app.dev',
+  'daylens',
+  'daylens.desktop',
+])
+
+const DAYLENS_SELF_PROCESS_NAMES = new Set([
+  'daylens',
+  'daylens desktop',
+  'daylens windows',
+  'daylenswindows',
+])
+
+function normalizedSelfIdentity(value: string | null | undefined): string {
+  const trimmed = value?.trim()
+  if (!trimmed) return ''
+  const basename = path.basename(trimmed)
+  return basename
+    .replace(/\.app$/i, '')
+    .replace(/\.appimage$/i, '')
+    .replace(/\.desktop$/i, '')
+    .replace(/\.exe$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+}
+
+function isDaylensSelfIdentity(bundleId: string, appName: string, rawAppName?: string | null, winPath?: string | null): boolean {
+  const lowerBundleId = bundleId.trim().toLowerCase()
+  if (DAYLENS_SELF_BUNDLE_IDS.has(lowerBundleId)) return true
+
+  const appNameIdentity = normalizedSelfIdentity(appName)
+  if (DAYLENS_SELF_PROCESS_NAMES.has(appNameIdentity)) return true
+
+  const rawAppNameIdentity = normalizedSelfIdentity(rawAppName)
+  if (DAYLENS_SELF_PROCESS_NAMES.has(rawAppNameIdentity)) return true
+
+  const pathIdentity = normalizedSelfIdentity(winPath)
+  if (DAYLENS_SELF_PROCESS_NAMES.has(pathIdentity)) return true
+
+  return false
+}
+
+function trackedForegroundSessionExclusionReason(
+  session: Pick<Omit<AppSession, 'id'>, 'bundleId' | 'appName' | 'windowTitle' | 'rawAppName'> & { executablePath?: string | null },
+): string | null {
+  if (isDaylensSelfIdentity(session.bundleId, session.appName, session.rawAppName, session.executablePath)) {
+    return 'daylens_self_capture'
+  }
+  if (session.windowTitle?.trimStart().startsWith('Daylens:')) {
+    return 'daylens_project_title'
+  }
+  return null
+}
+
+export function persistTrackedForegroundSession(
+  db: Database.Database,
+  session: Omit<AppSession, 'id'>,
+): number | null {
+  if (trackedForegroundSessionExclusionReason(session)) return null
+  return insertAppSession(db, session)
+}
 
 function isOsNoise(bundleId: string, appName: string, winPath?: string): boolean {
   if (OS_NOISE_BUNDLE_IDS.has(bundleId)) return true
@@ -1029,7 +1098,7 @@ function recoverPersistedLiveSnapshot(): void {
 
     if (!duplicate && durationSeconds >= MIN_SESSION_SEC) {
       const { isFocused, category } = classifyResult(snapshot.bundleId, snapshot.appName)
-      insertAppSession(db, {
+      const insertedId = persistTrackedForegroundSession(db, {
         bundleId: snapshot.bundleId,
         appName: snapshot.appName,
         windowTitle: snapshot.windowTitle,
@@ -1045,24 +1114,26 @@ function recoverPersistedLiveSnapshot(): void {
         category,
         isFocused,
       })
-      upsertAppIdentityObservation(db, {
-        bundleId: snapshot.bundleId,
-        rawAppName: snapshot.rawAppName,
-        appInstanceId: snapshot.appInstanceId,
-        observedCategory: category,
-        firstSeenAt: snapshot.startTime,
-        lastSeenAt: endTime,
-      })
-      invalidateProjectionScope('timeline', 'activity_recorded', {
-        date: localDateString(new Date(endTime)),
-      })
-      invalidateProjectionScope('apps', 'activity_recorded', {
-        canonicalAppId: snapshot.canonicalAppId,
-      })
-      invalidateProjectionScope('insights', 'activity_recorded', {
-        date: localDateString(new Date(endTime)),
-      })
-      console.log('[tracking] recovered live session snapshot after restart')
+      if (insertedId !== null) {
+        upsertAppIdentityObservation(db, {
+          bundleId: snapshot.bundleId,
+          rawAppName: snapshot.rawAppName,
+          appInstanceId: snapshot.appInstanceId,
+          observedCategory: category,
+          firstSeenAt: snapshot.startTime,
+          lastSeenAt: endTime,
+        })
+        invalidateProjectionScope('timeline', 'activity_recorded', {
+          date: localDateString(new Date(endTime)),
+        })
+        invalidateProjectionScope('apps', 'activity_recorded', {
+          canonicalAppId: snapshot.canonicalAppId,
+        })
+        invalidateProjectionScope('insights', 'activity_recorded', {
+          date: localDateString(new Date(endTime)),
+        })
+        console.log('[tracking] recovered live session snapshot after restart')
+      }
     }
 
     clearPersistedLiveSnapshot()
@@ -1319,6 +1390,7 @@ async function poll(): Promise<void> {
 
     const resolvedWin = resolveWindowIdentity(win)
     const { bundleId, appName } = resolvedWin
+    const resolvedWindowTitle = resolvedWin.title?.trim() || null
     trackingStatus.lastResolvedWindow = {
       backend,
       bundleId,
@@ -1328,6 +1400,19 @@ async function poll(): Promise<void> {
       path: resolvedWin.path,
     }
     const identity = resolveCanonicalApp(bundleId, appName)
+
+    const exclusionReason = trackedForegroundSessionExclusionReason({
+      bundleId,
+      appName,
+      windowTitle: resolvedWindowTitle,
+      rawAppName: appName,
+      executablePath: resolvedWin.path,
+    })
+    if (exclusionReason) {
+      if (currentSession) flushCurrent(undefined, exclusionReason)
+      clearPersistedLiveSnapshot()
+      return
+    }
 
     // Skip OS infrastructure processes
     if (isOsNoise(bundleId, appName, resolvedWin.path)) return
@@ -1344,7 +1429,7 @@ async function poll(): Promise<void> {
       currentSession = {
         bundleId,
         appName: identity.displayName,
-        windowTitle: resolvedWin.title?.trim() || null,
+        windowTitle: resolvedWindowTitle,
         rawAppName: appName,
         canonicalAppId: identity.canonicalAppId,
         appInstanceId: identity.appInstanceId,
@@ -1370,7 +1455,7 @@ async function poll(): Promise<void> {
       })
       persistLiveSnapshot(true)
     } else {
-      currentSession.windowTitle = resolvedWin.title?.trim() || null
+      currentSession.windowTitle = resolvedWindowTitle
       lastMeaningfulCaptureAt = Date.now()
       lastPresenceOverride = currentSession.category === 'meetings' ? 'meeting' : 'active'
       persistLiveSnapshot()
@@ -1410,7 +1495,7 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
     try {
       const db = getDb()
       const { isFocused, category } = classifyResult(currentSession.bundleId, currentSession.appName)
-      insertAppSession(db, {
+      const insertedId = persistTrackedForegroundSession(db, {
         bundleId:        currentSession.bundleId,
         appName:         currentSession.appName,
         windowTitle:     currentSession.windowTitle,
@@ -1426,23 +1511,25 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
         category,
         isFocused,
       })
-      upsertAppIdentityObservation(db, {
-        bundleId: currentSession.bundleId,
-        rawAppName: currentSession.rawAppName,
-        appInstanceId: currentSession.appInstanceId,
-        observedCategory: category,
-        firstSeenAt: currentSession.startTime,
-        lastSeenAt: endTime,
-      })
-      invalidateProjectionScope('timeline', 'activity_recorded', {
-        date: localDateString(new Date(endTime)),
-      })
-      invalidateProjectionScope('apps', 'activity_recorded', {
-        canonicalAppId: currentSession.canonicalAppId,
-      })
-      invalidateProjectionScope('insights', 'activity_recorded', {
-        date: localDateString(new Date(endTime)),
-      })
+      if (insertedId !== null) {
+        upsertAppIdentityObservation(db, {
+          bundleId: currentSession.bundleId,
+          rawAppName: currentSession.rawAppName,
+          appInstanceId: currentSession.appInstanceId,
+          observedCategory: category,
+          firstSeenAt: currentSession.startTime,
+          lastSeenAt: endTime,
+        })
+        invalidateProjectionScope('timeline', 'activity_recorded', {
+          date: localDateString(new Date(endTime)),
+        })
+        invalidateProjectionScope('apps', 'activity_recorded', {
+          canonicalAppId: currentSession.canonicalAppId,
+        })
+        invalidateProjectionScope('insights', 'activity_recorded', {
+          date: localDateString(new Date(endTime)),
+        })
+      }
     } catch (err) {
       console.error('[tracking] flush error:', err)
       captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:flush', {

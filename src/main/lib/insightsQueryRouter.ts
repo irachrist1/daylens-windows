@@ -664,7 +664,11 @@ function aggregateDayArtifacts(date: Date, db: Database.Database) {
 
     for (const session of block.sessions) {
       const title = session.windowTitle?.trim()
-      if (title && !/^(new tab|untitled|home|start page)$/i.test(title)) {
+      if (
+        title
+        && !/^(new tab|untitled|home|start page)$/i.test(title)
+        && title.toLowerCase() !== session.appName.toLowerCase()
+      ) {
         const key = `${session.bundleId}:${title}`.toLowerCase()
         const existing = windowTitles.get(key)
         if (existing) {
@@ -749,7 +753,7 @@ function buildDayBlocksAnswer(date: Date, db: Database.Database, header?: string
 function buildArtifactAnswer(date: Date, db: Database.Database): string | null {
   const { payload, artifacts, pages, windowTitles, apps } = aggregateDayArtifacts(date, db)
   if (payload.totalSeconds === 0) return null
-  if (artifacts.length === 0 && pages.length === 0 && windowTitles.length === 0 && apps.length === 0) return null
+  if (artifacts.length === 0 && pages.length === 0 && windowTitles.length === 0) return null
 
   const label = relativeDayLabel(date)
   const lines = [

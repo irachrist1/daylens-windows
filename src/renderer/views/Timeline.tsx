@@ -206,9 +206,6 @@ function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
       <span>
         <strong style={{ color: 'var(--color-text-primary)' }}>{formatDuration(payload.totalSeconds)}</strong> tracked
       </span>
-      <span>
-        <strong style={{ color: 'var(--color-text-primary)' }}>{formatDuration(payload.focusSeconds)}</strong> focused
-      </span>
       <span>{payload.blocks.length} block{payload.blocks.length !== 1 ? 's' : ''}</span>
       <span>{payload.appCount} app{payload.appCount !== 1 ? 's' : ''}</span>
       <span>{payload.siteCount} site{payload.siteCount !== 1 ? 's' : ''}</span>
@@ -247,15 +244,14 @@ function TimelineRow({
         <div style={{
           borderTop: '1px solid var(--color-border-ghost)',
           paddingTop: 10,
-          minHeight: 42,
+          paddingBottom: 10,
           color: 'var(--color-text-tertiary)',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
+          gap: 6,
         }}>
-          <span style={{ fontSize: 12.5 }}>{gapKindLabel(gapSegment.kind)}</span>
-          <span style={{ fontSize: 11 }}>{formatClockTime(gapSegment.endTime)}</span>
+          <span style={{ fontSize: 12 }}>{gapKindLabel(gapSegment.kind)}</span>
+          <span style={{ fontSize: 11 }}>{duration}</span>
         </div>
       </div>
     )
@@ -391,13 +387,15 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
     return map
   }, new Map())
 
-  const chips = (['machine_off', 'away', 'idle_gap'] as const)
+  const chips = (['machine_off', 'away'] as const)
     .filter((kind) => totals.has(kind))
     .map((kind) => ({
       kind,
       label: gapKindLabel(kind),
       duration: formatDuration(totals.get(kind) ?? 0),
     }))
+
+  if (chips.length === 0) return null
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
@@ -408,28 +406,17 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
       <div style={{
         borderTop: '1px solid var(--color-border-ghost)',
         paddingTop: 10,
-        minHeight: 48,
+        paddingBottom: 10,
         display: 'grid',
         gap: 8,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-            Compressed low-activity gap
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-            {formatClockTime(segment.endTime)}
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           {chips.map((chip) => (
             <span
               key={`${segment.startTime}:${chip.kind}`}
               style={{
-                borderRadius: 999,
-                padding: '4px 8px',
-                background: 'var(--color-surface-low)',
-                color: 'var(--color-text-secondary)',
-                fontSize: 11.5,
+                color: 'var(--color-text-tertiary)',
+                fontSize: 12,
               }}
             >
               {chip.label} {chip.duration}
@@ -539,22 +526,22 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
         gap: 10,
       }}>
         <div style={{ borderRadius: 14, background: 'var(--color-surface-low)', padding: '12px 14px' }}>
-          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
             Tracked
           </div>
           <div style={{ fontSize: 19, fontWeight: 760, color: 'var(--color-text-primary)' }}>{formatDuration(payload.totalSeconds)}</div>
         </div>
         <div style={{ borderRadius: 14, background: 'var(--color-surface-low)', padding: '12px 14px' }}>
-          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
-            Focus
+          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+            Blocks
           </div>
-          <div style={{ fontSize: 19, fontWeight: 760, color: 'var(--color-text-primary)' }}>{payload.focusPct}%</div>
+          <div style={{ fontSize: 19, fontWeight: 760, color: 'var(--color-text-primary)' }}>{payload.blocks.length}</div>
         </div>
       </div>
 
       {headlineBlocks.length > 0 && (
         <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
             Main blocks
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
@@ -574,7 +561,7 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
                     style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
                   />
                   <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                    {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockDurationSeconds(block))}
+                    {formatDuration(blockDurationSeconds(block))}
                   </div>
                 </div>
               </div>
@@ -585,7 +572,7 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
 
       {topCategories.length > 0 && (
         <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
             Where the day went
           </div>
           <div style={{ display: 'grid', gap: 8 }}>
@@ -752,8 +739,8 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
 
       <div style={{ display: 'grid', gap: 18 }}>
         <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-            Apps Used
+          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+            Apps used
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
             {block.topApps.slice(0, 6).map((app) => (
@@ -776,8 +763,8 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
 
         {block.topArtifacts.length > 0 && (
           <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-              Key Artifacts
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+              Key artifacts
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
               {block.topArtifacts.slice(0, 6).map((artifact) => (
@@ -849,7 +836,7 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
 
         {block.websites.length > 0 && (
           <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
               Websites
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -877,8 +864,8 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
 
         {block.workflowRefs.length > 0 && (
           <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-              Workflow Clues
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+              Workflow clues
             </div>
             <div style={{ display: 'grid', gap: 8 }}>
               {block.workflowRefs.slice(0, 4).map((workflow) => (
@@ -897,8 +884,6 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
 interface WeekDaySummary {
   date: string
   totalSeconds: number
-  focusSeconds: number
-  focusPct: number
   categories: Array<{ category: AppCategory; seconds: number }>
   blockCount: number
   topLabels: string[]
@@ -932,16 +917,16 @@ function WeekView({
         return {
           date: payload.date,
           totalSeconds: payload.totalSeconds,
-          focusSeconds: payload.focusSeconds,
-          focusPct: payload.focusPct,
           categories: [...categories.entries()]
             .sort((left, right) => right[1] - left[1])
             .map(([category, seconds]) => ({ category, seconds })),
           blockCount: payload.blocks.length,
-          topLabels: payload.blocks
-            .slice(0, 3)
-            .map((block) => block.label.current)
-            .filter(Boolean),
+          topLabels: [...new Set(
+            payload.blocks
+              .slice(0, 5)
+              .map((block) => block.label.current)
+              .filter(Boolean)
+          )].slice(0, 3),
         }
       })
     },
@@ -949,6 +934,7 @@ function WeekView({
   const weekReviewResource = useProjectionResource<AISurfaceSummary | null>({
     scope: 'timeline',
     dependencies: [weekStart],
+    intervalMs: 0,
     load: () => ipc.ai.getWeekReview(weekStart).catch(() => null),
   })
 
@@ -958,8 +944,8 @@ function WeekView({
   const activeDays = data.filter((day) => day.totalSeconds > 0)
   const totalWeekSeconds = activeDays.reduce((sum, day) => sum + day.totalSeconds, 0)
   const averageTrackedSeconds = activeDays.length > 0 ? Math.round(totalWeekSeconds / activeDays.length) : 0
-  const bestDay = activeDays.length > 0
-    ? activeDays.reduce((best, day) => day.focusPct > best.focusPct ? day : best)
+  const mostActiveDay = activeDays.length > 0
+    ? activeDays.reduce((best, day) => day.totalSeconds > best.totalSeconds ? day : best)
     : null
   const topWeekCategory = Array.from(activeDays.reduce<Map<AppCategory, number>>((map, day) => {
     for (const category of day.categories) {
@@ -1065,7 +1051,7 @@ function WeekView({
           gap: 12,
         }}>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
               Week total
             </div>
             <div style={{ fontSize: 24, fontWeight: 780, color: 'var(--color-text-primary)' }}>
@@ -1078,29 +1064,26 @@ function WeekView({
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
-              Average tracked day
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+              Daily average
             </div>
             <div style={{ fontSize: 24, fontWeight: 780, color: 'var(--color-text-primary)' }}>
               {activeDays.length > 0 ? formatDuration(averageTrackedSeconds) : '0m'}
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-              Across tracked days only
-            </div>
           </div>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
-              Best focus
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+              Most active
             </div>
             <div style={{ fontSize: 24, fontWeight: 780, color: 'var(--color-text-primary)' }}>
-              {bestDay ? `${bestDay.focusPct}%` : '0%'}
+              {mostActiveDay ? formatDuration(mostActiveDay.totalSeconds) : '0m'}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-              {bestDay ? formatFullDate(bestDay.date) : 'No focused blocks yet'}
+              {mostActiveDay ? formatFullDate(mostActiveDay.date) : 'No tracked days'}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
               Main mode
             </div>
             <div style={{ fontSize: 16, fontWeight: 760, color: 'var(--color-text-primary)' }}>
@@ -1120,8 +1103,8 @@ function WeekView({
             gap: 8,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
-                Week Review
+              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)' }}>
+                Week review
               </div>
               <button
                 type="button"
@@ -1166,7 +1149,7 @@ function WeekView({
                   {formatFullDate(activeDay.date)}
                 </div>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-                  {formatDuration(activeDay.totalSeconds)} tracked • {formatDuration(activeDay.focusSeconds)} focused • {activeDay.blockCount} block{activeDay.blockCount !== 1 ? 's' : ''}
+                  {formatDuration(activeDay.totalSeconds)} tracked • {activeDay.blockCount} block{activeDay.blockCount !== 1 ? 's' : ''}
                 </div>
               </div>
               <button

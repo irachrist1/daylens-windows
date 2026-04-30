@@ -72,7 +72,7 @@ function hasNamedEntity(text: string): boolean {
   const words = text.trim().split(/\s+/)
   if (words.length < 2) return false
   return (
-    words.slice(1).some((w) => /^[A-Z][a-z]/.test(w)) ||
+    words.slice(1).some((w) => /^[A-Z][a-z]/.test(w) && !ENTITY_STOP_WORDS.has(w.toLowerCase().replace(/\W+$/, ''))) ||
     /\b\w+\.\w{1,6}\b/.test(text)
   )
 }

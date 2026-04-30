@@ -6,7 +6,6 @@ import {
   getLaunchOnLoginDescription,
   getQuickAccessExpectation,
 } from '@shared/platformExpectations'
-import { sanitizeSyncFailureMessage } from '@shared/syncMessages'
 import type {
   AIProvider,
   AIProviderMode,
@@ -303,12 +302,10 @@ function normalizeFallbackOrder(order: AIProvider[]): AIProvider[] {
 
 function SettingsSection({
   title,
-  description,
   children,
   first = false,
 }: {
   title: string
-  description: string
   children: ReactNode
   first?: boolean
 }) {
@@ -324,9 +321,6 @@ function SettingsSection({
     >
       <div style={{ flex: '0 0 188px', maxWidth: 228 }}>
         {sectionTitle(title)}
-        <div style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
-          {description}
-        </div>
       </div>
       <div style={{ flex: '1 1 560px', minWidth: 0, display: 'grid', gap: 18 }}>
         {children}
@@ -358,14 +352,6 @@ function updateStatusLabel(status: UpdaterStatusInfo | null, version: string | n
     default:
       return version ? `Current version: ${version}.` : 'Ready.'
   }
-}
-
-function formatSyncTimestamp(value: number | null): string {
-  if (!value) return 'Not synced yet.'
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value))
 }
 
 function formatDurationShort(totalSeconds: number): string {
@@ -436,7 +422,6 @@ function UpdatesSection() {
   return (
     <SettingsSection
       title="Updates"
-      description="Daylens checks for new builds and lets you choose when to install them."
     >
       <div>
         <SettingsRow
@@ -786,22 +771,12 @@ export default function Settings() {
       : linuxTracking?.supportLevel === 'unsupported'
         ? 'error'
         : 'neutral'
-  const linuxHelperSummary = linuxTracking
-    ? [
-        `hyprctl ${linuxTracking.helperCommands.hyprctl ? 'yes' : 'no'}`,
-        `swaymsg ${linuxTracking.helperCommands.swaymsg ? 'yes' : 'no'}`,
-        `xdotool ${linuxTracking.helperCommands.xdotool ? 'yes' : 'no'}`,
-        `xprop ${linuxTracking.helperCommands.xprop ? 'yes' : 'no'}`,
-      ].join(' · ')
-    : null
-  const linuxBackendTrace = trackingDiagnostics?.trackingStatus.backendTrace ?? []
-  const linuxBackendLabel = trackingDiagnostics?.trackingStatus.lastResolvedWindow?.backend
-    ?? trackingDiagnostics?.trackingStatus.moduleSource
-    ?? null
   const currentPlatform = trackingDiagnostics?.platform ?? null
   const quickAccessCopy = getQuickAccessExpectation(currentPlatform)
   const launchOnLoginDescription = getLaunchOnLoginDescription(currentPlatform)
-  const sanitizedSyncFailure = sanitizeSyncFailureMessage(syncStatus?.lastFailureMessage)
+  const syncDescription = syncStatus?.isLinked && syncStatus.state === 'healthy'
+    ? 'Connected and syncing.'
+    : 'Not connected.'
 
   return (
     <div style={{ padding: '30px 32px 48px', maxWidth: 1080 }}>
@@ -815,7 +790,6 @@ export default function Settings() {
         <SettingsSection
           first
           title="Profile"
-          description="Personalizes local AI responses without changing what Daylens tracks."
         >
           <SettingsRow
             first
@@ -836,7 +810,6 @@ export default function Settings() {
 
         <SettingsSection
           title="Tracking"
-          description="Runs quietly in the background."
         >
           <div>
             <SettingsRow
@@ -871,28 +844,6 @@ export default function Settings() {
                   </div>
                   <StatusPill label={linuxTracking.supportLevel} tone={linuxSupportTone} />
                 </div>
-                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-                  Session: {linuxTracking.sessionType || 'unknown'}
-                  {linuxTracking.desktop ? ` · Desktop: ${linuxTracking.desktop}` : ''}
-                  {linuxBackendLabel ? ` · Backend: ${linuxBackendLabel}` : ''}
-                </div>
-                {linuxHelperSummary && (
-                  <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-                    Helpers: {linuxHelperSummary}
-                  </div>
-                )}
-                {linuxDesktop && (
-                  <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-                    Secure store: {linuxDesktop.secureStoreAvailable ? 'ready' : 'limited'}
-                    {linuxDesktop.secretServiceReachable === false ? ' · Secret Service unreachable' : ''}
-                    {linuxDesktop.packageType ? ` · Package: ${linuxDesktop.packageType}` : ''}
-                  </div>
-                )}
-                {linuxBackendTrace.length > 0 && (
-                  <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.65 }}>
-                    Trace: {linuxBackendTrace.join(' | ')}
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -900,17 +851,12 @@ export default function Settings() {
 
         <SettingsSection
           title="Sync"
-          description="Link this device to a Daylens workspace for browser linking and editor context."
         >
           <div>
             <SettingsRow
               first
               title="Workspace status"
-              description={
-                syncStatus?.isLinked
-                  ? `Linked${syncStatus.workspaceId ? ` to ${syncStatus.workspaceId}` : ''}. State: ${syncStatus.state.replace(/_/g, ' ')}. Last heartbeat: ${formatSyncTimestamp(syncStatus.lastHeartbeatAt)}. Last durable sync: ${formatSyncTimestamp(syncStatus.lastSuccessfulSyncAt)}${sanitizedSyncFailure ? ` · ${sanitizedSyncFailure}` : ''}`
-                  : 'This device is local-only.'
-              }
+              description={syncDescription}
               control={<StatusPill label={syncStatus?.isLinked ? syncStatus.state.replace(/_/g, ' ') : 'Local only'} tone={
                 !syncStatus?.isLinked
                   ? 'neutral'
@@ -1036,7 +982,6 @@ export default function Settings() {
 
         <SettingsSection
           title="AI"
-          description="Optional provider access for grounded questions and reports."
         >
           <div style={{ display: 'grid', gap: 18 }}>
             <ConnectAI
@@ -1050,16 +995,8 @@ export default function Settings() {
                 type="button"
                 onClick={() => setShowAdvancedAI((value) => !value)}
                 style={{
+                  ...inlineButtonStyle,
                   justifySelf: 'start',
-                  padding: 0,
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--color-text-tertiary)',
-                  fontSize: 12,
-                  fontWeight: 800,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                  cursor: 'pointer',
                 }}
               >
                 {showAdvancedAI ? 'Hide advanced AI controls' : 'Show advanced AI controls'}
@@ -1222,7 +1159,6 @@ export default function Settings() {
 
         <SettingsSection
           title="Labels"
-          description="Override categories for apps Daylens has seen."
         >
           <div>
             {recentApps.length === 0 ? (
@@ -1269,7 +1205,6 @@ export default function Settings() {
 
         <SettingsSection
           title="Notifications"
-          description="Nudges that help you close the day well."
         >
           <div>
             <SettingsRow
@@ -1318,7 +1253,6 @@ export default function Settings() {
 
         <SettingsSection
           title="Appearance"
-          description="Window theme."
         >
           <div>
             <SettingsRow
@@ -1348,7 +1282,6 @@ export default function Settings() {
 
         <SettingsSection
           title="MCP Server"
-          description="Expose your Daylens work history to AI coding tools and agents via the Model Context Protocol."
         >
           <div>
             <SettingsRow
@@ -1435,7 +1368,6 @@ export default function Settings() {
 
         <SettingsSection
           title="Privacy"
-          description="History stays local unless you explicitly enable sync or feedback sharing controls here."
         >
           <div>
             <SettingsRow
@@ -1453,11 +1385,6 @@ export default function Settings() {
               title="Local data"
               description="Tracked history lives in the local Daylens database."
               control={<StatusPill label="Local only" />}
-            />
-            <SettingsRow
-              title="Website icon fallback"
-              description="Allow a domain-only fallback when no local favicon exists."
-              control={<Toggle checked={settings.allowThirdPartyWebsiteIconFallback ?? true} onChange={(value) => void persist({ allowThirdPartyWebsiteIconFallback: value })} />}
             />
           </div>
         </SettingsSection>

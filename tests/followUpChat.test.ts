@@ -8,6 +8,7 @@ import {
   getConversationMessages,
   getConversationState,
   getOrCreateConversation,
+  getThreadConversationState,
   updateAIMessageFeedback,
   upsertConversationState,
 } from '../src/main/db/queries.ts'
@@ -228,6 +229,59 @@ test('conversation state persists alongside structured AI messages', () => {
   clearConversation(db, conversationId)
   assert.equal(getConversationMessages(db, conversationId).length, 0)
   assert.equal(getConversationState(db, conversationId), null)
+  db.close()
+})
+
+test('thread conversation state is restored from only that thread', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const conversationId = getOrCreateConversation(db)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO ai_threads (id, title, created_at, updated_at, last_message_at, archived, metadata_json)
+    VALUES (?, ?, ?, ?, ?, 0, '{}')
+  `).run(1, 'Older chat', now - 20_000, now - 20_000, now - 20_000)
+  db.prepare(`
+    INSERT INTO ai_threads (id, title, created_at, updated_at, last_message_at, archived, metadata_json)
+    VALUES (?, ?, ?, ?, ?, 0, '{}')
+  `).run(2, 'New chat', now - 10_000, now - 10_000, now - 10_000)
+
+  appendConversationMessage(db, conversationId, 'user', 'what have i explored AI related this week', {
+    threadId: 1,
+    createdAt: now - 4_000,
+  })
+  appendConversationMessage(db, conversationId, 'assistant', 'AI as working infrastructure.', {
+    threadId: 1,
+    createdAt: now - 3_000,
+    metadata: {
+      answerKind: 'weekly_brief',
+      contextSnapshot: weeklyState(),
+      retryable: true,
+      retrySourceUserMessageId: null,
+      suggestedFollowUps: [],
+    },
+  })
+
+  assert.equal(getThreadConversationState(db, 2), null)
+
+  const stats = statsState()
+  appendConversationMessage(db, conversationId, 'user', 'what did I do today?', {
+    threadId: 2,
+    createdAt: now - 2_000,
+  })
+  appendConversationMessage(db, conversationId, 'assistant', 'You tracked several work blocks today.', {
+    threadId: 2,
+    createdAt: now - 1_000,
+    metadata: {
+      answerKind: 'deterministic_stats',
+      contextSnapshot: stats,
+      retryable: true,
+      retrySourceUserMessageId: null,
+      suggestedFollowUps: [],
+    },
+  })
+
+  assert.deepEqual(getThreadConversationState(db, 2), stats)
   db.close()
 })
 

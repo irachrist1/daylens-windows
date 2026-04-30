@@ -73,11 +73,11 @@ const SUSTAINED_CATEGORY_THRESHOLD_SEC = 15 * 60
 const COMMUNICATION_INTERRUPTION_THRESHOLD_SEC = 5 * 60
 const FAST_SWITCH_THRESHOLD_SEC = 5 * 60
 const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
-const TIMELINE_SOFT_MAX_BLOCK_SPAN_MS = 90 * 60_000
-const TIMELINE_HARD_MAX_BLOCK_SPAN_MS = 2 * 60 * 60_000
+const SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC = 5 * 60
+const TIMELINE_MAX_BLOCK_SPAN_MS = 60 * 60_000
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v2'
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v3'
 
 type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
 
@@ -110,6 +110,12 @@ interface AppStreak {
   range: [number, number]
   targetDurationSeconds: number
   label: string
+}
+
+interface ContextRun {
+  context: string
+  startIndex: number
+  totalSeconds: number
 }
 
 interface ArtifactCandidate {
@@ -453,7 +459,7 @@ function bestTimelineGapSplitIndex(sessions: AppSession[]): number | null {
 function fallbackTimelineSplitIndex(sessions: AppSession[]): number | null {
   if (sessions.length < 2) return null
 
-  const targetTime = sessions[0].startTime + TIMELINE_SOFT_MAX_BLOCK_SPAN_MS
+  const targetTime = sessions[0].startTime + TIMELINE_MAX_BLOCK_SPAN_MS
   for (let index = 1; index < sessions.length; index++) {
     if (sessions[index].startTime >= targetTime && validTimelineSplit(index, sessions)) {
       return index
@@ -470,24 +476,65 @@ function fallbackTimelineSplitIndex(sessions: AppSession[]): number | null {
   return null
 }
 
+function splitSessionAt(session: AppSession, splitTime: number): [AppSession, AppSession] {
+  const endTime = sessionEndMs(session)
+  return [
+    {
+      ...session,
+      endTime: splitTime,
+      durationSeconds: Math.max(1, Math.round((splitTime - session.startTime) / 1000)),
+    },
+    {
+      ...session,
+      startTime: splitTime,
+      endTime,
+      durationSeconds: Math.max(1, Math.round((endTime - splitTime) / 1000)),
+    },
+  ]
+}
+
+function splitSessionsAtTime(sessions: AppSession[], splitTime: number): [AppSession[], AppSession[]] {
+  const left: AppSession[] = []
+  const right: AppSession[] = []
+
+  for (const session of sessions) {
+    const endTime = sessionEndMs(session)
+    if (endTime <= splitTime) {
+      left.push(session)
+      continue
+    }
+    if (session.startTime >= splitTime) {
+      right.push(session)
+      continue
+    }
+
+    const [leftSession, rightSession] = splitSessionAt(session, splitTime)
+    left.push(leftSession)
+    right.push(rightSession)
+  }
+
+  return [left, right]
+}
+
 function normalizeTimelineCandidates(candidates: CandidateBlock[]): CandidateBlock[] {
   return candidates.flatMap((candidate) => {
     const spanMs = candidateSpanMs(candidate)
-    const shouldPreserveLongSpan =
-      candidate.formation === 'meeting'
-      || candidate.formation === 'longSingleApp'
 
-    if (
-      candidate.sessions.length <= 1
-      || shouldPreserveLongSpan
-      || spanMs <= TIMELINE_SOFT_MAX_BLOCK_SPAN_MS
-    ) {
+    if (spanMs <= TIMELINE_MAX_BLOCK_SPAN_MS) {
       return [candidate]
+    }
+
+    const maxSplitTime = candidate.sessions[0].startTime + TIMELINE_MAX_BLOCK_SPAN_MS
+    const [leftSessions, rightSessions] = splitSessionsAtTime(candidate.sessions, maxSplitTime)
+    if (leftSessions.length > 0 && rightSessions.length > 0) {
+      return normalizeTimelineCandidates(
+        analyzeSessions(leftSessions, candidate.boundedBeforeGap, false)
+          .concat(analyzeSessions(rightSessions, false, candidate.boundedAfterGap)),
+      )
     }
 
     const splitIndex =
       bestTimelineGapSplitIndex(candidate.sessions)
-      ?? (spanMs > TIMELINE_HARD_MAX_BLOCK_SPAN_MS ? fallbackTimelineSplitIndex(candidate.sessions) : null)
       ?? fallbackTimelineSplitIndex(candidate.sessions)
 
     if (splitIndex === null) return [candidate]
@@ -823,6 +870,64 @@ function compactWindowTitle(title: string): string {
     .find((part) => part.length > 2) ?? title.trim()
 }
 
+function contentContextForSession(session: AppSession): string {
+  const title = usefulWindowTitle(session)
+  if (title) return compactWindowTitle(title).toLowerCase()
+  return `${session.category}:${session.bundleId}`.toLowerCase()
+}
+
+function contextRunsFor(sessions: AppSession[]): ContextRun[] {
+  if (sessions.length === 0) return []
+
+  const runs: ContextRun[] = []
+  let currentContext = contentContextForSession(sessions[0])
+  let startIndex = 0
+  let totalSeconds = sessions[0].durationSeconds
+
+  for (let index = 1; index < sessions.length; index++) {
+    const session = sessions[index]
+    const context = contentContextForSession(session)
+    if (context === currentContext) {
+      totalSeconds += session.durationSeconds
+      continue
+    }
+
+    runs.push({ context: currentContext, startIndex, totalSeconds })
+    currentContext = context
+    startIndex = index
+    totalSeconds = session.durationSeconds
+  }
+
+  runs.push({ context: currentContext, startIndex, totalSeconds })
+  return runs
+}
+
+function sustainedContextShiftSplitIndex(sessions: AppSession[]): number | null {
+  const runs = contextRunsFor(sessions)
+  if (runs.length < 2) return null
+
+  let previousSustainedContext: string | null = null
+  let previousSustainedSeconds = 0
+  for (const run of runs) {
+    if (run.totalSeconds < SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC) continue
+    const leftSpan = run.startIndex > 0 ? sessionEndMs(sessions[run.startIndex - 1]) - sessions[0].startTime : 0
+    const rightSpan = sessionEndMs(sessions[sessions.length - 1]) - sessions[run.startIndex].startTime
+    if (
+      previousSustainedContext
+      && previousSustainedContext !== run.context
+      && previousSustainedSeconds >= SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC
+      && leftSpan >= SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC * 1000
+      && rightSpan >= SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC * 1000
+    ) {
+      return run.startIndex
+    }
+    previousSustainedContext = run.context
+    previousSustainedSeconds = run.totalSeconds
+  }
+
+  return null
+}
+
 function buildPageCandidates(
   db: Database.Database,
   startTime: number,
@@ -880,7 +985,10 @@ function buildPageCandidates(
         subtitle: page.domain,
         totalSeconds: page.totalSeconds,
         confidence: 0.9,
-        canonicalAppId: page.canonicalBrowserId,
+        canonicalAppId: page.canonicalBrowserId
+          ?? (page.browserBundleId
+            ? resolveCanonicalApp(page.browserBundleId, page.browserBundleId).canonicalAppId
+            : null),
         url: page.url,
         host: page.domain,
         openTarget: {
@@ -1189,6 +1297,11 @@ function analyzeSessions(
     return blocks
   }
 
+  const contextSplitIndex = sustainedContextShiftSplitIndex(sessions)
+  if (contextSplitIndex !== null) {
+    return splitAndAnalyze(sessions, contextSplitIndex, boundedBeforeGap, boundedAfterGap)
+  }
+
   const streak = longSingleAppStreak(sessions)
   if (streak) {
     const [startIndex, endIndex] = streak.range
@@ -1263,6 +1376,31 @@ function usefulDerivedLabel(value: string | null | undefined): string | null {
   return trimmed
 }
 
+function normalizedLabelValue(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function labelLooksToolOnly(label: string, block: WorkContextBlock): boolean {
+  const normalizedLabel = normalizedLabelValue(label)
+  if (!normalizedLabel) return true
+  const appNames = block.topApps
+    .map((app) => normalizedLabelValue(app.appName))
+    .filter(Boolean)
+  if (appNames.includes(normalizedLabel)) return true
+  if (appNames.some((appName) => normalizedLabel === `${appName}loop`)) return true
+  if (appNames.length >= 2) {
+    const pair = `${appNames[0]}${appNames[1]}`
+    if (normalizedLabel === pair || normalizedLabel === `${pair}loop`) return true
+  }
+  return false
+}
+
+function usefulBlockLabel(block: WorkContextBlock, value: string | null | undefined): string | null {
+  const label = usefulDerivedLabel(value)
+  if (!label) return null
+  return labelLooksToolOnly(label, block) ? null : label
+}
+
 function preferredArtifactLabel(block: WorkContextBlock): string | null {
   const documentLabel = usefulDerivedLabel(block.documentRefs[0]?.displayTitle)
   if (documentLabel) return documentLabel
@@ -1277,14 +1415,14 @@ export type BackgroundRelabelDisposition = 'skip' | 'review' | 'relabel'
 export function hasStableDeterministicBlockLabel(block: WorkContextBlock): boolean {
   return Boolean(
     preferredArtifactLabel(block)
-    || usefulDerivedLabel(block.workflowRefs[0]?.label)
-    || usefulDerivedLabel(block.ruleBasedLabel),
+    || usefulBlockLabel(block, block.workflowRefs[0]?.label)
+    || usefulBlockLabel(block, block.ruleBasedLabel),
   )
 }
 
 function hasLegacyWeakAiLabel(block: WorkContextBlock): boolean {
   const aiLabel = block.aiLabel?.trim()
-  return Boolean(aiLabel) && !usefulDerivedLabel(aiLabel)
+  return Boolean(aiLabel) && !usefulBlockLabel(block, aiLabel)
 }
 
 export function backgroundRelabelDispositionForBlock(block: WorkContextBlock): BackgroundRelabelDisposition {
@@ -1304,28 +1442,28 @@ function finalizedLabelForBlock(
 ): WorkContextBlock {
   const override = getBlockLabelOverride(db, block.id)
   const artifactLabel = preferredArtifactLabel(block)
-  const workflowLabel = usefulDerivedLabel(block.workflowRefs[0]?.label)
-  const ruleLabel = usefulDerivedLabel(block.ruleBasedLabel)
-  const aiLabel = usefulDerivedLabel(block.aiLabel)
+  const workflowLabel = usefulBlockLabel(block, block.workflowRefs[0]?.label)
+  const ruleLabel = usefulBlockLabel(block, block.ruleBasedLabel)
+  const aiLabel = usefulBlockLabel(block, block.aiLabel)
 
   const chosen = override?.label?.trim()
-    || aiLabel
     || artifactLabel
     || workflowLabel
+    || aiLabel
     || ruleLabel
     || userVisibleLabelForBlock(block)
 
   const source = override?.label?.trim()
     ? 'user'
-    : aiLabel && chosen === aiLabel
-      ? 'ai'
     : artifactLabel && chosen === artifactLabel
       ? 'artifact'
       : workflowLabel && chosen === workflowLabel
         ? 'workflow'
-        : ruleLabel && chosen === ruleLabel
-          ? 'rule'
-          : 'rule'
+        : aiLabel && chosen === aiLabel
+          ? 'ai'
+          : ruleLabel && chosen === ruleLabel
+            ? 'rule'
+            : 'rule'
 
   return {
     ...block,
@@ -1792,10 +1930,9 @@ export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?
   if (websiteLabels.length === 1) return websiteLabels[0]
 
   const appLabels = block.topApps.filter((app) => !app.isBrowser && app.category !== 'system' && app.category !== 'uncategorized')
-  if (appLabels.length >= 2) return `${appLabels[0].appName} + ${appLabels[1].appName}`
-  if (appLabels.length === 1) return appLabels[0].appName
+  if (appLabels.length > 0) return 'Untitled block'
 
-  return prettyCategory(block.dominantCategory)
+  return 'Untitled block'
 }
 
 export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
@@ -1919,6 +2056,14 @@ function labelForSessionCluster(sessions: AppSession[]): string {
   return sanitizeBlockLabel(identity.displayName)
     ?? sanitizeBlockLabel(lead.appName)
     ?? prettyCategory(lead.category)
+}
+
+function normalizedAppActivityLabel(value: string | null | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function labelMatchesSelectedApp(label: string, displayName: string): boolean {
+  return normalizedAppActivityLabel(label) === normalizedAppActivityLabel(displayName)
 }
 
 function buildSessionDerivedAppDetailBlocksByDate(
@@ -2156,8 +2301,24 @@ export function getAppDetailPayload(
     })
 
     for (const artifact of block.topArtifacts) {
-      const belongsToSelectedApp = artifact.canonicalAppId === canonicalAppId
-        || (!artifact.canonicalAppId && blockContainsOnlySelectedApp)
+      let belongsToSelectedApp: boolean
+      if (artifact.canonicalAppId) {
+        belongsToSelectedApp = artifact.canonicalAppId === canonicalAppId
+      } else if (artifact.ownerBundleId) {
+        const ownerIdentity = resolveCanonicalApp(artifact.ownerBundleId, artifact.ownerAppName ?? artifact.ownerBundleId)
+        belongsToSelectedApp = (ownerIdentity.canonicalAppId ?? artifact.ownerBundleId) === canonicalAppId
+      } else if (artifact.artifactType === 'page') {
+        // Pages always belong to the browser that tracked them. For legacy data where
+        // canonicalAppId was not persisted, resolve ownership from browserBundleId.
+        const pageArtifact = artifact as PageRef
+        const browserId = pageArtifact.canonicalBrowserId
+          ?? (pageArtifact.browserBundleId
+            ? resolveCanonicalApp(pageArtifact.browserBundleId, pageArtifact.browserBundleId).canonicalAppId
+            : null)
+        belongsToSelectedApp = browserId !== null ? browserId === canonicalAppId : false
+      } else {
+        belongsToSelectedApp = blockContainsOnlySelectedApp
+      }
 
       if (!belongsToSelectedApp) continue
 
@@ -2177,7 +2338,12 @@ export function getAppDetailPayload(
   const pageTotals = new Map<string, PageRef>()
   for (const block of relatedBlocks) {
     for (const page of block.pageRefs) {
-      if (page.canonicalAppId !== canonicalAppId) continue
+      const pageBrowserId = page.canonicalAppId
+        ?? page.canonicalBrowserId
+        ?? (page.browserBundleId
+          ? resolveCanonicalApp(page.browserBundleId, page.browserBundleId).canonicalAppId
+          : null)
+      if (pageBrowserId !== canonicalAppId) continue
 
       const existing = pageTotals.get(page.id)
       if (existing) {
@@ -2242,6 +2408,22 @@ export function getAppDetailPayload(
     topBlockIds: relatedBlocks.slice(0, 8).map((block) => block.id),
     computedAt: Date.now(),
   }
+  const blockAppearances = Array.from(sessionDerivedBlocksByDate.values())
+    .flat()
+    .sort((left, right) => right.startTime - left.startTime)
+    .map((block) => {
+      const rawLabel = block.label.current
+      const cleanLabel = sanitizeBlockLabel(rawLabel) ?? prettyCategory(block.dominantCategory)
+      return {
+        blockId: block.id,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        label: cleanLabel,
+        dominantCategory: block.dominantCategory,
+      }
+    })
+    .filter((block) => !labelMatchesSelectedApp(block.label, displayName))
+    .slice(0, 12)
 
   return {
     canonicalAppId,
@@ -2253,17 +2435,7 @@ export function getAppDetailPayload(
     topArtifacts,
     topPages,
     pairedApps,
-    blockAppearances: relatedBlocks.slice(0, 12).map((block) => {
-      const rawLabel = block.label.current
-      const cleanLabel = sanitizeBlockLabel(rawLabel) ?? prettyCategory(block.dominantCategory)
-      return {
-        blockId: block.id,
-        startTime: block.startTime,
-        endTime: block.endTime,
-        label: cleanLabel,
-        dominantCategory: block.dominantCategory,
-      }
-    }),
+    blockAppearances,
     workflowAppearances: relatedBlocks.flatMap((block) => block.workflowRefs)
       .filter((workflow, index, workflows) => workflows.findIndex((entry) => entry.id === workflow.id) === index)
       .slice(0, 10),

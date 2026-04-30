@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import TitleBar from './components/TitleBar'
@@ -9,6 +9,7 @@ import DayWrapped from './components/DayWrapped'
 import { ipc } from './lib/ipc'
 import { track } from './lib/analytics'
 import { dateStringFromMs, todayString } from './lib/format'
+import { handleDailySummaryNavigation } from './lib/dailySummaryNavigation'
 import Onboarding from './views/Onboarding'
 import FeedbackModal from './components/FeedbackModal'
 import type { AppSettings, AppTheme, DayTimelinePayload, OnboardingState } from '@shared/types'
@@ -60,31 +61,24 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   const [wrappedThreadId, setWrappedThreadId] = useState<number | null>(null)
   const [wrappedArtifactId, setWrappedArtifactId] = useState<number | null>(null)
 
-  // Route to the correct view when a notification is tapped
-  useEffect(() => {
-    return ipc.navigation.onNavigate((route) => {
-      const url = new URL(route, 'http://x')
-      if (url.searchParams.get('source') === 'daily-summary') {
-        const threadId  = Number(url.searchParams.get('threadId'))  || null
-        const artifactId = Number(url.searchParams.get('artifactId')) || null
-        const wrappedDate = url.searchParams.get('date') || todayString()
-        void ipc.db.getTimelineDay(wrappedDate)
-          .then((payload) => {
-            if (payload.totalSeconds > 0) {
-              setWrappedDay(payload)
-              setWrappedThreadId(threadId)
-              setWrappedArtifactId(artifactId)
-              setWrappedOpen(true)
-            } else {
-              navigate(route)
-            }
-          })
-          .catch(() => navigate(route))
-      } else {
-        navigate(route)
-      }
+  const openDailySummaryRoute = useCallback((route: string) => {
+    void handleDailySummaryNavigation(route, {
+      getTimelineDay: ipc.db.getTimelineDay,
+      navigate,
+      todayString,
+      openWrapped: ({ day, threadId, artifactId }) => {
+        setWrappedDay(day)
+        setWrappedThreadId(threadId)
+        setWrappedArtifactId(artifactId)
+        setWrappedOpen(true)
+      },
     })
   }, [navigate])
+
+  // Route to the correct view when a notification is tapped
+  useEffect(() => {
+    return ipc.navigation.onNavigate(openDailySummaryRoute)
+  }, [openDailySummaryRoute])
 
   // Dev escape hatch: Cmd+Shift+Option+O / Ctrl+Shift+Alt+O resets onboarding without touching tracked data
   useEffect(() => {
@@ -127,6 +121,47 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [platform])
+
+  // Dev shortcut: Cmd+Shift+Option+B / Ctrl+Shift+Alt+B shows a test notification.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!isDevShortcut(e, 'KeyB', platform)) return
+      const route = `/ai?date=${todayString()}&source=daily-summary`
+
+      const openRoute = () => {
+        window.focus()
+        openDailySummaryRoute(route)
+      }
+
+      if (!('Notification' in window)) {
+        openRoute()
+        return
+      }
+
+      const showNotification = () => {
+        const notification = new Notification('Day Wrapped test', {
+          body: 'Tap to open Day Wrapped for today.',
+        })
+        notification.onclick = () => {
+          notification.close()
+          openRoute()
+        }
+      }
+
+      if (Notification.permission === 'granted') {
+        showNotification()
+      } else if (Notification.permission === 'denied') {
+        openRoute()
+      } else {
+        void Notification.requestPermission().then((permission) => {
+          if (permission === 'granted') showNotification()
+          else openRoute()
+        })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [openDailySummaryRoute, platform])
 
   // Track route changes
   useEffect(() => {

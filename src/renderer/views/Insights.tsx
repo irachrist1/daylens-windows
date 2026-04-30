@@ -210,71 +210,7 @@ function MarkdownMessage({ content }: { content: string }) {
   )
 }
 
-type AIAnswerKind = 'weekly_brief' | 'weekly_literal_list' | 'deterministic_stats' | 'day_summary_style' | 'generated_report' | 'freeform_chat' | 'error'
 
-function disclosureLabel(answerKind: AIAnswerKind | null | undefined, content: string): string {
-  if (!answerKind || answerKind === 'error') return ''
-  if (answerKind === 'deterministic_stats') return 'Direct from your tracked data'
-  const lower = content.slice(0, 160).toLowerCase()
-  if (
-    lower.startsWith("daylens doesn't") ||
-    lower.startsWith("daylens can't") ||
-    lower.startsWith("daylens does not") ||
-    lower.startsWith("daylens cannot") ||
-    lower.includes("doesn't capture") ||
-    lower.includes("does not capture") ||
-    lower.includes("not something daylens tracks") ||
-    lower.includes("outside what daylens tracks")
-  ) return 'Outside what Daylens tracks'
-  return 'AI synthesis over your evidence'
-}
-
-function RecapMetricCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string
-  value: string
-  detail: string
-}) {
-  return (
-    <div style={{
-      borderRadius: 16,
-      border: '1px solid var(--color-border-ghost)',
-      background: 'var(--color-recap-panel)',
-      padding: '14px 14px 12px',
-      minHeight: 96,
-    }}>
-      <div style={{
-        fontSize: 10.5,
-        fontWeight: 800,
-        letterSpacing: '0.10em',
-        textTransform: 'uppercase',
-        color: 'var(--color-text-tertiary)',
-      }}>
-        {label}
-      </div>
-      <div style={{
-        fontSize: 22,
-        fontWeight: 760,
-        letterSpacing: '-0.03em',
-        color: 'var(--color-text-primary)',
-        marginTop: 10,
-      }}>
-        {value}
-      </div>
-      <div style={{
-        fontSize: 12.5,
-        lineHeight: 1.55,
-        color: 'var(--color-text-secondary)',
-        marginTop: 6,
-      }}>
-        {detail}
-      </div>
-    </div>
-  )
-}
 
 function RecapList({
   title,
@@ -621,21 +557,6 @@ function RecapPanel({
       }}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
-          gap: 12,
-        }}>
-          {active.metrics.map((metric) => (
-            <RecapMetricCard
-              key={`${active.period}:${metric.label}`}
-              label={metric.label}
-              value={metric.value}
-              detail={metric.detail}
-            />
-          ))}
-        </div>
-
-        <div style={{
-          display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
           gap: 12,
         }}>
@@ -847,7 +768,7 @@ function IconActionButton({
 
 function summaryText(today: DayTimelinePayload | null): string {
   if (!today || today.totalSeconds === 0) {
-    return 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and focus patterns.'
+    return 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and patterns.'
   }
 
   const rankedBlocks = [...today.blocks]
@@ -865,9 +786,6 @@ function summaryText(today: DayTimelinePayload | null): string {
     `You tracked ${formatDuration(today.totalSeconds)} across ${today.blocks.length} block${today.blocks.length !== 1 ? 's' : ''} today.`,
     primaryIntent ? `The clearest thread was ${primaryIntent.summary.toLowerCase()}.` : null,
     topArtifacts.length > 0 ? `Key artifacts included ${topArtifacts.join(', ')}.` : null,
-    today.focusPct >= 70
-      ? `Focus held for ${formatDuration(today.focusSeconds)} (${today.focusPct}%).`
-      : `Focus was more fragmented, with ${formatDuration(today.focusSeconds)} counted as focused time (${today.focusPct}%).`,
   ]
 
   return parts.filter(Boolean).join(' ')
@@ -1040,7 +958,7 @@ export default function Insights() {
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
   const routedReportKeyRef = useRef<string | null>(null)
   const loadingRef = useRef(false)
-  const historyHydratedRef = useRef(false)
+  const historyHydratedThreadRef = useRef<number | null | undefined>(undefined)
   const actionFeedbackTimeoutsRef = useRef<Record<string, number>>({})
   const suggestionImpressionsRef = useRef<Record<string, boolean>>({})
   const aiScreenTrackedRef = useRef(false)
@@ -1051,6 +969,7 @@ export default function Insights() {
   const currentDate = todayString()
 
   const insightsResource = useProjectionResource<{
+    historyThreadId: number | null
     history: AIThreadMessage[]
     settings: AppSettings
     cliTools: { claude: string | null; codex: string | null }
@@ -1068,7 +987,9 @@ export default function Insights() {
       ]))
 
       const [history, cliToolsResult, apiProviderAccessChecks, today, activeFocusSession] = await Promise.all([
-        ipc.ai.getHistory().catch(() => []),
+        activeThreadId == null
+          ? Promise.resolve([])
+          : ipc.ai.getHistory({ threadId: activeThreadId }).catch(() => []),
         ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null })),
         Promise.all(providersToCheck
           .filter((provider) => provider !== 'claude-cli' && provider !== 'codex-cli')
@@ -1085,6 +1006,7 @@ export default function Insights() {
       ))
 
       return {
+        historyThreadId: activeThreadId,
         history: history as AIThreadMessage[],
         settings: currentSettings,
         cliTools: cliToolsResult as { claude: string | null; codex: string | null },
@@ -1093,12 +1015,12 @@ export default function Insights() {
         activeFocusSession: activeFocusSession as FocusSession | null,
       }
     },
+    dependencies: [activeThreadId],
   })
 
   const recapResource = useProjectionResource<DayTimelinePayload[]>({
     scope: 'timeline',
     dependencies: [currentDate],
-    intervalMs: 30_000,
     load: async () => {
       const dates = recapDateWindow(currentDate)
       const payloads = await Promise.all(dates.map((date) => ipc.db.getTimelineDay(date).catch(() => null)))
@@ -1111,11 +1033,12 @@ export default function Insights() {
     setSettings(insightsResource.data.settings)
     setCliTools(insightsResource.data.cliTools)
     setHasApiKey(insightsResource.data.hasProviderAccess)
-    if (!historyHydratedRef.current && !loadingRef.current) {
+    if (insightsResource.data.historyThreadId !== activeThreadId) return
+    if (historyHydratedThreadRef.current !== insightsResource.data.historyThreadId && !loadingRef.current) {
       setMessages(threadMessagesFromHistory(insightsResource.data.history))
-      historyHydratedRef.current = true
+      historyHydratedThreadRef.current = insightsResource.data.historyThreadId
     }
-  }, [insightsResource.data])
+  }, [activeThreadId, insightsResource.data])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -1144,7 +1067,9 @@ export default function Insights() {
   useEffect(() => {
     let cancelled = false
     ipc.ai.listThreads({ includeArchived: false }).then((rows) => {
-      if (!cancelled) setThreads(rows)
+      if (cancelled) return
+      setThreads(rows)
+      setActiveThreadId((current) => current ?? rows[0]?.id ?? null)
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
   }, [messages.length])
@@ -1543,13 +1468,13 @@ export default function Insights() {
     try {
       const detail = await ipc.ai.getThread(threadId)
       setMessages(threadMessagesFromHistory(detail.messages))
-      historyHydratedRef.current = true
+      historyHydratedThreadRef.current = threadId
     } catch {
       // best-effort; keep the current UI if the lookup fails
     }
   }
 
-  function resetThreadComposerState() {
+  function resetThreadComposerState(threadId: number | null) {
     setMessages([])
     setArtifacts([])
     setArtifactPreview(null)
@@ -1557,7 +1482,7 @@ export default function Insights() {
     setMessageActionState({})
     setFocusReviewDrafts({})
     suggestionImpressionsRef.current = {}
-    historyHydratedRef.current = true
+    historyHydratedThreadRef.current = threadId
   }
 
   function restoreThreadPickerAfterUpdate(shouldRestore: boolean) {
@@ -1582,8 +1507,7 @@ export default function Insights() {
           : activeThreadId
       if (nextActiveId == null) {
         setActiveThreadId(null)
-        resetThreadComposerState()
-        historyHydratedRef.current = false
+        resetThreadComposerState(null)
         setThreadPickerOpen(false)
         return
       }
@@ -1612,7 +1536,7 @@ export default function Insights() {
     const thread = await ipc.ai.createThread(null)
     setActiveThreadId(thread.id)
     setThreads((prev) => [thread, ...prev.filter((t) => t.id !== thread.id)])
-    resetThreadComposerState()
+    resetThreadComposerState(thread.id)
     setThreadPickerOpen(false)
   }
 
@@ -2311,14 +2235,6 @@ export default function Insights() {
                                 </div>
                               )}
                               <MarkdownMessage content={message.content} />
-                              {message.state === 'complete' && (() => {
-                                const label = disclosureLabel(message.answerKind, message.content)
-                                return label ? (
-                                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 8 }}>
-                                    {label}
-                                  </div>
-                                ) : null
-                              })()}
                               {(message.actions?.length ?? 0) > 0 && (
                                 <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
                                   {message.actions?.map((action) => {

@@ -75,6 +75,26 @@ test('system prompt forbids entity-free suggestions', () => {
   )
 })
 
+// ── Temporal stop-word filter ──────────────────────────────────────────────
+
+test('rejects "What drove Today?" — temporal word in entity slot', () => {
+  const raw = JSON.stringify({ suggestions: ['What drove Today?', 'Which windows mention Today?'] })
+  const result = parseFollowUpSuggestions(raw, fallback)
+  assert.ok(result.every((s) => s.source === 'deterministic'), 'temporal words must not pass as entities')
+})
+
+test('rejects "What overlapped with Yesterday?" — temporal word in entity slot', () => {
+  const raw = JSON.stringify({ suggestions: ['What overlapped with Yesterday?', 'How long on Monday?'] })
+  const result = parseFollowUpSuggestions(raw, fallback)
+  assert.ok(result.every((s) => s.source === 'deterministic'), 'day-of-week must not pass as entities')
+})
+
+test('rejects "What happened this Morning?" — time-of-day in entity slot', () => {
+  const raw = JSON.stringify({ suggestions: ['What happened this Morning?', 'What happened this Evening?'] })
+  const result = parseFollowUpSuggestions(raw, fallback)
+  assert.ok(result.every((s) => s.source === 'deterministic'), 'time-of-day words must not pass as entities')
+})
+
 test('deterministic fallback suggestions name an answer entity', () => {
   const result = buildDeterministicFollowUpCandidates(
     'deterministic_stats',

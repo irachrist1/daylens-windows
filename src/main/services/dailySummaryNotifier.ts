@@ -6,6 +6,11 @@ import { localDateString, localDayBounds } from '../lib/localDate'
 import { getDb } from './database'
 import { getSettings } from './settings'
 import { prepareDailyReport } from './ai'
+import {
+  buildDailyReportRoute,
+  openDailySummaryRoute,
+  setDailySummaryNavigationWindow,
+} from './dailySummaryNavigation'
 
 interface DailyNotifierState {
   lastDailySummaryDate?: string
@@ -13,7 +18,6 @@ interface DailyNotifierState {
 }
 
 let notifierTimer: ReturnType<typeof setInterval> | null = null
-let navigationWindow: BrowserWindow | null = null
 let dailySummaryPreparing = false
 
 function statePath(): string {
@@ -39,13 +43,7 @@ function notifyWithNavigation(title: string, body: string, route: string, option
     body,
     actions: options.actionText ? [{ type: 'button', text: options.actionText }] : undefined,
   })
-  const openRoute = () => {
-    if (!navigationWindow || navigationWindow.isDestroyed()) return
-    if (navigationWindow.isMinimized()) navigationWindow.restore()
-    navigationWindow.show()
-    navigationWindow.focus()
-    navigationWindow.webContents.send('navigate', route)
-  }
+  const openRoute = () => { openDailySummaryRoute(route) }
   notification.on('click', openRoute)
   notification.on('action', openRoute)
   notification.show()
@@ -58,16 +56,6 @@ function hasTrackedActivityOn(date: string): boolean {
 
 function hasReachedLocalTime(now: Date, hour: number, minute = 0): boolean {
   return now.getHours() > hour || (now.getHours() === hour && now.getMinutes() >= minute)
-}
-
-function dailyReportRoute(report: { threadId: number | null; artifactId: number | null }): string {
-  const params = new URLSearchParams()
-  if (report.threadId != null) params.set('threadId', String(report.threadId))
-  if (report.artifactId != null) params.set('artifactId', String(report.artifactId))
-  if ('date' in report && typeof report.date === 'string') params.set('date', report.date)
-  params.set('source', 'daily-summary')
-  const query = params.toString()
-  return query ? `/ai?${query}` : '/ai'
 }
 
 async function checkDailySummary(): Promise<void> {
@@ -86,7 +74,7 @@ async function checkDailySummary(): Promise<void> {
   try {
     const report = await prepareDailyReport(today)
     if (report.status !== 'ready') return
-    notifyWithNavigation('Daylens', 'Your day report is ready.', dailyReportRoute(report))
+    notifyWithNavigation('Daylens', 'Your day report is ready.', buildDailyReportRoute(report))
     writeState({ ...state, lastDailySummaryDate: today })
   } finally {
     dailySummaryPreparing = false
@@ -114,7 +102,7 @@ async function checkMorningNudge(): Promise<void> {
     notifyWithNavigation(
       'Morning Brief is ready',
       "Open yesterday's recap and carry the best signal into today.",
-      dailyReportRoute(report),
+      buildDailyReportRoute(report),
       { actionText: 'Open' },
     )
     writeState({ ...state, lastMorningNudgeDate: today })
@@ -124,12 +112,12 @@ async function checkMorningNudge(): Promise<void> {
 }
 
 export function setDailySummaryNotificationWindow(window: BrowserWindow | null): void {
-  navigationWindow = window
+  setDailySummaryNavigationWindow(window)
 }
 
 export function startDailySummaryNotifier(window?: BrowserWindow | null): void {
   if (window) {
-    navigationWindow = window
+    setDailySummaryNavigationWindow(window)
   }
   if (notifierTimer) return
 

@@ -1,6 +1,6 @@
 # Issues
 
-Status last updated 2026-04-29 (post-v1.0.34 release-quality fix candidate for v1.0.35). Prior audit: 2026-04-23.
+Status last updated 2026-04-30 (v1.0.35 release candidate after the Timeline, Apps, AI, notification, and update-safety pass). Prior audit: 2026-04-29.
 
 This file is the implementation-status ledger. Items below are separated into code-proven, `implemented pending verification`, and still-partial/open. Older docs and summaries were treated as hypotheses during this refresh.
 
@@ -10,18 +10,22 @@ This file is the implementation-status ledger. Items below are separated into co
 
 - Foreground tracking persists real sessions to SQLite and recovers a persisted live-session snapshot after restart (`src/main/services/tracking.ts:981-1071`, `src/main/services/tracking.ts:1395-1470`).
 - Linux tracking diagnostics explicitly report `ready`, `limited`, or `unsupported` depending on session/backend availability (`src/main/services/tracking.ts:196-299`).
+- Foreground tracking filters Daylens self-capture and Daylens project-title sessions before persistence, so Daylens debugging windows do not become user work evidence (`src/main/services/tracking.ts`, `tests/trackingSelfCapture.test.ts`).
 - Timeline day payloads are rebuilt from persisted sessions plus the live session, not renderer memory (`src/main/services/workBlocks.ts:1849-1880`).
 - Timeline blocks, members, labels, artifact mentions, and workflow occurrences are persisted in dedicated tables (`src/main/services/workBlocks.ts:1438-1607`).
+- Timeline block splitting now preserves same-app window-title changes, splits sustained content-context shifts after 5 minutes, caps deterministic blocks at 60 minutes, and prefers deterministic title/artifact labels over stale AI or raw app labels (`src/main/db/queries.ts`, `src/main/services/workBlocks.ts`, `tests/workBlockSplitting.test.ts`).
 
 ### Timeline Surface
 
 - Desktop Timeline has day/week modes, explicit gap rendering, block inspection, and a week-review slot (`src/renderer/views/Timeline.tsx:834-1182`, `src/renderer/views/Timeline.tsx:1184-1545`).
 - Empty-state copy is truthful about relying on persisted local activity (`src/renderer/views/Timeline.tsx:1478-1491`).
 - The right-side day summary and block inspectors stay sticky and hide their own scrollbars while remaining scrollable when content overflows, so the visible nested scrollbar no longer fights the timeline list scroll (`src/renderer/views/Timeline.tsx`, `src/renderer/styles/globals.css`).
+- Timeline day and week surfaces now avoid focus-percentage copy and emphasize tracked time, blocks, active days, artifacts, and categories instead (`src/renderer/views/Timeline.tsx`, `tests/focusMetricCopy.test.ts`).
 
 ### Apps Surface
 
 - Desktop Apps merges live-session time into summaries and loads contextual app detail plus app narrative (`src/renderer/views/Apps.tsx:36-73`, `src/renderer/views/Apps.tsx:144-245`).
+- Desktop Apps now defaults to today, deduplicates category labels, filters app-name-only block appearances, separates files/documents from pages, and keeps app detail focused on what the tool helped with rather than vanity totals (`src/renderer/views/Apps.tsx`, `src/main/services/workBlocks.ts`, `tests/appDetailPayload.test.ts`).
 
 ### AI Surface
 
@@ -35,7 +39,11 @@ This file is the implementation-status ledger. Items below are separated into co
 - Thinking… indicator is guarded against re-appearing once streaming content has started, using a message-ID ref set populated by the stream handler (`src/renderer/views/Insights.tsx:streamedContentIdsRef`).
 - The "Which files, docs, or pages did I touch today?" prompt shape now routes to local evidence first and answers from artifacts, page titles, window titles, and apps instead of returning a filename-token fallback (`src/main/lib/insightsQueryRouter.ts`, `tests/touchedEvidenceRouter.test.ts`, `tests/shouldUseRouter.test.ts`).
 - Day summary parsing refuses malformed raw JSON-looking model output instead of rendering `{ "summary": ... }` in the Timeline, and the deterministic fallback now uses more cautious evidence wording when intent is low-confidence (`src/main/lib/daySummarySuggestions.ts`, `src/main/services/ai.ts`, `tests/followUpChat.test.ts`).
+- AI prompts for daily summaries, week reviews, app narratives, generated reports, router prose, and provider-backed chat now prohibit raw app names as activity nouns, keeping answers focused on work threads, artifacts, pages, and context (`src/main/services/ai.ts`, `tests/aiPromptPolicy.test.ts`).
+- Thread follow-up routing restores conversation state from the active AI thread instead of leaking context across local threads (`src/main/services/ai.ts`, `src/main/db/queries.ts`, `tests/followUpChat.test.ts`).
+- Follow-up suggestion parsing now rejects temporal words such as Today, Yesterday, Monday, Morning, and Evening when they appear in the entity slot (`src/main/lib/followUpSuggestions.ts`, `tests/followUpSuggestions.test.ts`).
 - Microsoft 365 aliases and fallback icon tiles are normalized for Excel, Word, PowerPoint, Outlook, and Teams so renderer app rows, block app lists, and artifact tiles use consistent branded fallback icons when native icons are unavailable (`shared/app-normalization.v1.json`, `src/renderer/lib/apps.ts`, `src/renderer/components/AppIcon.tsx`, `src/renderer/components/EntityIcon.tsx`, `tests/appIdentityBranding.test.ts`).
+- WhatsApp, GitHub, ChatGPT, OneDrive, LinkedIn, and FaceTime aliases preserve their marketed display names across canonical app resolution and renderer fallback formatting (`shared/app-normalization.v1.json`, `src/renderer/lib/apps.ts`, `tests/appIdentityBranding.test.ts`).
 
 ### Settings And Sync Controls
 
@@ -45,8 +53,9 @@ This file is the implementation-status ledger. Items below are separated into co
 - Workspace sync failures shown in Settings are sanitized into short user-facing guidance such as "Workspace link expired. Reconnect this device." while raw server details remain out of the main UI (`src/shared/syncMessages.ts`, `src/renderer/views/Settings.tsx`, `tests/syncMessages.test.ts`).
 - Update downloads no longer initialize the banner at a fake `0%`; progress stays unknown until progress is measurable, then reports bounded 1-99% download progress before the install-ready state (`src/main/services/updater.ts`, `src/shared/updaterReleaseFeed.ts`, `tests/updaterReleaseFeed.test.ts`).
 - Update banner highlights now ignore internal release-body sections and implementation jargon, returning at most two short user-facing highlights (`src/renderer/lib/releaseNotes.ts`, `tests/releaseNotes.test.ts`).
-- The paired public update/download routes in `daylens-web` now refuse Windows `.exe` assets below the signed release floor, so the web feed stops offering the old unsigned v1.0.33 installer once that web change is deployed (`/Users/tonny/Dev-Personal/daylens-web/app/api/update-feed/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/windows/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/_releaseAsset.ts`).
-- `package.json`, `package-lock.json`, and `CHANGELOG.md` are prepared for v1.0.35 so the already-published v1.0.34 release is not confused with this unreleased fix candidate.
+- Daily summary and Morning Brief notification routes now include the target report date, show/focus a hidden app window before navigation, and open Day Wrapped for that date even when the local day payload is empty (`src/main/services/dailySummaryNavigation.ts`, `src/main/services/dailySummaryNotifier.ts`, `src/renderer/lib/dailySummaryNavigation.ts`, `src/renderer/App.tsx`, `tests/notificationNavigation.test.ts`).
+- The paired public update/download routes in `daylens-web` now refuse Windows `.exe` assets below the signed release floor; a live production check on 2026-04-30 returned `404` with "No signed Windows update is available right now" for `platform=win32&arch=x64` (`/Users/tonny/Dev-Personal/daylens-web/app/api/update-feed/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/windows/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/_releaseAsset.ts`).
+- `package.json`, `package-lock.json`, and `CHANGELOG.md` are prepared for v1.0.35 so the already-published v1.0.34 release is not confused with this unreleased release candidate.
 
 ### Remote Foundation
 
@@ -67,14 +76,14 @@ These features exist in code and, in several cases, have focused test coverage, 
 - Focus-session start/stop/review flows from AI messages in normal usage (`src/renderer/views/Insights.tsx:1229-1282`).
 - Linked remote freshness, stale-state UX, and session-repair behavior under real multi-device use (`src/main/services/syncUploader.ts:232-284`).
 - Packaged runtime validation across macOS, Windows, and Linux.
-- End-to-end updater recovery from older installed builds after the next packaged release is published and installed. The v1.0.35 candidate code path avoids fake `0%` progress and uses the public feed, but this audit did not prove an older packaged macOS or Windows app successfully downloads, installs, and relaunches into the next build.
+- End-to-end updater recovery from older installed builds after the v1.0.35 packaged release is published and installed. The candidate code path avoids fake `0%` progress and uses the public feed, but this audit did not prove an older packaged macOS or Windows app successfully downloads, installs, and relaunches into the next build.
 
 ## Still Partial Or Open
 
 ### Windows Signing And SmartScreen
 
 - v1.0.33 and earlier Windows installers were published unsigned because `release-windows.yml` allowed empty signing secrets and electron-builder skipped signing. The workflow now fails without signing credentials and verifies Authenticode signatures before upload (`.github/workflows/release-windows.yml`). The next Windows release still requires a trusted certificate to be added as GitHub Actions secrets before it can publish.
-- The v1.0.34 public GitHub release currently has no Windows installer asset because the signed-release gate withheld unsigned Windows output. Before this pass, the live Windows update feed still selected the old unsigned v1.0.33 installer because it was the newest Windows `.exe` asset. The paired `daylens-web` update/download routes are now code-fixed to require Windows assets at or above the signed-release floor (`1.0.35` by default), but that must still be deployed before the production feed can be considered fixed.
+- The v1.0.34 public GitHub release currently has no Windows installer asset because the signed-release gate withheld unsigned Windows output. Before the web-gate pass, the live Windows update feed selected the old unsigned v1.0.33 installer because it was the newest Windows `.exe` asset. The production feed now refuses Windows assets below the signed-release floor (`1.0.35` by default) and returns 404 until a signed v1.0.35+ Windows installer exists.
 - Even after Authenticode signing, brand-new Windows installer file hashes can still show SmartScreen reputation warnings until Microsoft reputation accumulates. This is a distribution trust/reputation issue, not evidence that the packaged app contains malware.
 
 ### Browser Evidence
@@ -110,12 +119,13 @@ These features exist in code and, in several cases, have focused test coverage, 
 - `tests/syncStatus.test.ts`: sync-state derivation logic.
 - `tests/blockCleanup.test.ts`: selective cleanup/relabel behavior.
 - `tests/updaterReleaseFeed.test.ts`, `tests/releaseNotes.test.ts`, `tests/syncMessages.test.ts`, `tests/touchedEvidenceRouter.test.ts`, and `tests/appIdentityBranding.test.ts`: release-quality regressions for updater progress, visible update notes, sync-error sanitization, touched-evidence answers, and Microsoft 365 icon normalization.
+- `tests/workBlockSplitting.test.ts`, `tests/trackingSelfCapture.test.ts`, `tests/notificationNavigation.test.ts`, `tests/appDetailPayload.test.ts`, `tests/focusMetricCopy.test.ts`, `tests/aiPromptPolicy.test.ts`, and `tests/followUpSuggestions.test.ts`: v1.0.35 regressions for self-capture filtering, timeline block splits, daily-notification navigation, app-detail context, focus-copy removal, AI prompt policy, and follow-up suggestion filtering.
 
 ## Real Runtime Or User Verification Still Needed
 
 - Windows packaged runtime validation on a real machine.
 - Windows Authenticode-signed release validation on a real machine after signing secrets are added.
-- Production `daylens-web` deploy validation that `/api/update-feed?platform=win32&arch=x64` no longer serves the old unsigned v1.0.33 installer when no signed v1.0.35+ Windows asset exists.
+- Confirm the production Windows update feed returns a signed v1.0.35+ installer after Windows signing secrets are added and a signed Windows release is published.
 - Windows/macOS in-app update validation from an older installed build to the newly published public-feed build.
 - Linux packaged runtime validation on real desktops, including X11 and Wayland/XWayland scenarios.
 - End-to-end linked workspace creation, browser linking, heartbeat/day-sync freshness, and stale/failure recovery in normal use.
