@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased - week of 2026-05-01
+
+### Changed
+- **A no-warning Windows install path is in progress.** Daylens now has a Microsoft Store packaging lane so a future Windows build can be Microsoft-signed during Store certification, avoiding SmartScreen warnings on first launch. The Store listing is not live yet — Windows users should keep using the existing signed installer guidance in [INSTALL.md](docs/INSTALL.md) until the Store entry is published. Status is tracked in [docs/ISSUES.md](docs/ISSUES.md).
+
 ## v1.0.35 - 2026-04-30
 
 ### Added
