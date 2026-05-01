@@ -1,6 +1,6 @@
 # Issues
 
-Status last updated 2026-04-30 (post-v1.0.35 macOS/Linux publication after the Timeline, Apps, AI, notification, and update-safety pass). Prior audit: 2026-04-29.
+Status last updated 2026-05-01 (post-v1.0.35 macOS/Linux publication, plus Windows Store packaging lane for a Microsoft-signed no-danger-screen path). Prior audit: 2026-04-30.
 
 This file is the implementation-status ledger. Items below are separated into code-proven, `implemented pending verification`, and still-partial/open. Older docs and summaries were treated as hypotheses during this refresh.
 
@@ -56,6 +56,7 @@ This file is the implementation-status ledger. Items below are separated into co
 - Daily summary and Morning Brief notification routes now include the target report date, show/focus a hidden app window before navigation, and open Day Wrapped for that date even when the local day payload is empty (`src/main/services/dailySummaryNavigation.ts`, `src/main/services/dailySummaryNotifier.ts`, `src/renderer/lib/dailySummaryNavigation.ts`, `src/renderer/App.tsx`, `tests/notificationNavigation.test.ts`).
 - The paired public update/download routes in `daylens-web` now refuse Windows `.exe` assets below the signed release floor; a live production check on 2026-04-30 returned `404` with "No signed Windows update is available right now" for `platform=win32&arch=x64` (`/Users/tonny/Dev-Personal/daylens-web/app/api/update-feed/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/windows/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/_releaseAsset.ts`).
 - v1.0.35 is published for macOS and Linux with GitHub release assets and updater metadata. The release contains `Daylens-1.0.35-arm64.dmg`, `Daylens-1.0.35-arm64.zip`, `latest-mac.yml`, `Daylens-1.0.35.AppImage`, `Daylens-1.0.35.deb`, `Daylens-1.0.35.rpm`, `Daylens-1.0.35.tar.gz`, and `latest-linux.yml`. No Windows v1.0.35 installer was published because signing secrets were not visible locally and public Windows installers must be signed.
+- A Windows Store package lane now exists for the no-danger-screen Windows path: `npm run dist:win:store` builds the AppX target, and `.github/workflows/release-windows-store.yml` packages a Partner Center identity-specific Store submission artifact on `windows-latest`. This is code-proven as configuration only until a real Partner Center app identity is provided and the workflow succeeds.
 
 ### Remote Foundation
 
@@ -77,6 +78,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 - Linked remote freshness, stale-state UX, and session-repair behavior under real multi-device use (`src/main/services/syncUploader.ts:232-284`).
 - Packaged runtime validation across macOS, Windows, and Linux.
 - End-to-end updater recovery from older installed builds. The v1.0.35 macOS update feed now returns v1.0.35 and the candidate code path avoids fake `0%` progress, but this audit did not prove an older packaged macOS app successfully downloads, installs, and relaunches into the new build. Windows still has no signed v1.0.35 installer.
+- Windows Store packaging and Microsoft Store certification. The Store lane exists in code, but it still needs a real Partner Center package identity, a successful `release-windows-store.yml` run, Store submission, Microsoft certification, and publication before it is a real user-installable Windows path.
 
 ## Still Partial Or Open
 
@@ -85,6 +87,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 - v1.0.33 and earlier Windows installers were published unsigned because `release-windows.yml` allowed empty signing secrets and electron-builder skipped signing. The workflow now fails without signing credentials and verifies Authenticode signatures before upload (`.github/workflows/release-windows.yml`). The next Windows release still requires a trusted certificate to be added as GitHub Actions secrets before it can publish.
 - The v1.0.34 public GitHub release currently has no Windows installer asset because the signed-release gate withheld unsigned Windows output. Before the web-gate pass, the live Windows update feed selected the old unsigned v1.0.33 installer because it was the newest Windows `.exe` asset. The production feed now refuses Windows assets below the signed-release floor (`1.0.35` by default) and returns 404 until a signed v1.0.35+ Windows installer exists.
 - Even after Authenticode signing, brand-new Windows installer file hashes can still show SmartScreen reputation warnings until Microsoft reputation accumulates. This is a distribution trust/reputation issue, not evidence that the packaged app contains malware.
+- Microsoft Store distribution is the no-danger-screen path that does not require a purchased Authenticode certificate. Store-submitted AppX/MSIX packages are signed by Microsoft during certification; the pre-certification workflow artifact must not be served directly to users.
 
 ### Browser Evidence
 
@@ -125,6 +128,8 @@ These features exist in code and, in several cases, have focused test coverage, 
 
 - Windows packaged runtime validation on a real machine.
 - Windows Authenticode-signed release validation on a real machine after signing secrets are added.
+- Windows Store package build validation after Partner Center identity values are available.
+- Microsoft Store certification and publication for the no-danger-screen Windows install path.
 - Confirm the production Windows update feed returns a signed v1.0.35+ installer after Windows signing secrets are added and a signed Windows release is published.
 - macOS in-app update validation from an older installed build to the newly published v1.0.35 public-feed build.
 - Windows in-app update validation after a signed v1.0.35+ Windows installer exists.

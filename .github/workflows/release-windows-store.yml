@@ -1,0 +1,103 @@
+name: Build Windows Store Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Store package version number
+        required: true
+      ref:
+        description: Git ref to package, for example main or v1.0.35
+        required: true
+        default: main
+      identity_name:
+        description: Partner Center Package/Identity/Name
+        required: true
+      publisher:
+        description: Partner Center Publisher value, for example CN=...
+        required: true
+      publisher_display_name:
+        description: Store publisher display name
+        required: true
+        default: Daylens
+      application_id:
+        description: AppUserModelID application id
+        required: true
+        default: Daylens
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-store:
+    timeout-minutes: 90
+    runs-on: windows-latest
+    env:
+      DAYLENS_APPX_IDENTITY_NAME: ${{ inputs.identity_name }}
+      DAYLENS_APPX_PUBLISHER: ${{ inputs.publisher }}
+      DAYLENS_APPX_PUBLISHER_DISPLAY_NAME: ${{ inputs.publisher_display_name }}
+      DAYLENS_APPX_APPLICATION_ID: ${{ inputs.application_id }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Stamp version into package.json
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ inputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package Windows Store AppX
+        run: npx electron-builder --win appx --publish never --config electron-builder.config.js
+
+      - name: Verify package output
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -Path 'dist-release' -Recurse -Include '*.appx','*.appxbundle','*.msix','*.msixbundle' -File)
+          if ($packages.Count -eq 0) {
+            Write-Error "No Store package was created."
+            exit 1
+          }
+
+          foreach ($package in $packages) {
+            Write-Host "Created Store package: $($package.FullName)"
+          }
+
+      - name: Upload Store submission package
+        uses: actions/upload-artifact@v6
+        with:
+          name: daylens-windows-store-${{ inputs.version }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/*.appx
+            dist-release/*.appxbundle
+            dist-release/*.msix
+            dist-release/*.msixbundle

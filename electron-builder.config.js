@@ -9,6 +9,17 @@ const win = {
   artifactName: 'Daylens-${version}-Setup.${ext}',
 }
 
+const appx = {
+  artifactName: 'Daylens-${version}-Store.${ext}',
+  displayName: 'Daylens',
+  publisherDisplayName: process.env.DAYLENS_APPX_PUBLISHER_DISPLAY_NAME || 'Daylens',
+  identityName: process.env.DAYLENS_APPX_IDENTITY_NAME || 'Daylens.Desktop',
+  applicationId: process.env.DAYLENS_APPX_APPLICATION_ID || 'Daylens',
+  publisher: process.env.DAYLENS_APPX_PUBLISHER || 'CN=Daylens',
+  languages: ['en-US'],
+  backgroundColor: '#111827',
+}
+
 const mac = {
   target: ['zip', 'dmg'],
   icon: 'build/icon.icns',
@@ -98,6 +109,7 @@ module.exports = {
   afterPack: './scripts/afterPack-native-modules.js',
   afterSign: macAfterSign,
   win,
+  appx,
   linux,
   deb: {
     depends: ['libgtk-3-0', 'libnotify4', 'libnss3', 'libxss1', 'libxtst6', 'xdg-utils', 'libatspi2.0-0', 'libuuid1', 'libsecret-1-0'],

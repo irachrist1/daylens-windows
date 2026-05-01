@@ -118,6 +118,25 @@ Unsigned internal test builds belong in `preview-builds.yml`, not the public rel
 
 The public website update/download proxy must not serve old unsigned Windows installers. `daylens-web` gates Windows `.exe` assets with `DAYLENS_MIN_SIGNED_WINDOWS_VERSION` (defaulting to the first signed release train). After shipping a Windows signing fix, deploy the web proxy change before telling users to update, then confirm the Windows update feed either returns the new signed version or a 404 when no signed Windows asset exists.
 
+### Windows Store no-warning path
+
+The no-danger-screen path that does not require buying or managing an Authenticode certificate is Microsoft Store distribution with an AppX/MSIX-style package. Microsoft signs Store-submitted MSIX/AppX packages during certification. Do not upload this Store package as a public GitHub release asset; before Store certification it is only a submission package, not a user-downloadable installer.
+
+Use the dedicated Store workflow after a Microsoft Partner Center app identity exists:
+
+```bash
+gh workflow run release-windows-store.yml \
+  --ref main \
+  -f version=1.0.35 \
+  -f ref=v1.0.35 \
+  -f identity_name='<Partner Center Package/Identity/Name>' \
+  -f publisher='<Partner Center Publisher, for example CN=...>' \
+  -f publisher_display_name='<Store publisher display name>' \
+  -f application_id=Daylens
+```
+
+Then download the `daylens-windows-store-{VERSION}` workflow artifact and upload it to Partner Center. After Microsoft certification publishes the Store listing, configure the website Windows download path to send users to the Store listing. The GitHub NSIS updater path remains blocked until a trusted Authenticode signer exists.
+
 ---
 
 ## Why previous releases failed (historical)
@@ -204,6 +223,7 @@ For persistent notifications, enable GitHub email notifications for "Failed work
 [ ] npm run typecheck — zero errors
 [ ] npm run test:ai-chat — all pass
 [ ] Confirm Windows signing secrets exist before pushing v{VERSION}-win
+[ ] If using the no-danger-screen Store path, reserve the Partner Center app identity and run `release-windows-store.yml`
 [ ] Deploy/verify the website update-feed gate if DAYLENS_MIN_SIGNED_WINDOWS_VERSION changed
 [ ] git add + commit + push to main
 [ ] git tag v{VERSION}-mac && git tag v{VERSION}-win
