@@ -5,6 +5,9 @@
 ### Changed
 - **Silent Windows updates.** Daylens on Windows now downloads new releases quietly in the background and applies them the next time you quit the app — no manual install step, no second SmartScreen prompt for already-installed users. macOS continues to use its existing in-place update path. See [INSTALL.md](docs/INSTALL.md) for the current install and update flow.
 
+### Fixed
+- **Windows downloads work again.** New Windows installers are publishing to the download page after a stretch where the build pipeline was blocked. Until a code-signing certificate is in place, first launch on Windows still shows a SmartScreen "Windows protected your PC" prompt — click **More info** then **Run anyway** to continue. Setup details are tracked in [INSTALL.md](docs/INSTALL.md).
+
 ## v1.0.36 - 2026-05-04
 
 ### Added
