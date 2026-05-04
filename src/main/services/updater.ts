@@ -104,7 +104,7 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
   if (process.platform === 'win32') {
     return {
       supported: true,
-      message: 'Packaged Windows installs can check for updates in app and install a newer build in place when you choose it. Unsigned installers may still trigger SmartScreen until Daylens ships with a trusted code-signing certificate and reputation.',
+      message: 'Daylens downloads updates silently in the background and applies them the next time you quit the app.',
       packageType: null,
     }
   }
@@ -179,7 +179,13 @@ function supportsAutoUpdates(): boolean {
 }
 
 function usesRemoteUpdateFeed(): boolean {
-  return process.platform === 'darwin' || process.platform === 'win32'
+  // macOS needs the remote feed because Squirrel.Mac validates the bundle against
+  // the running app's designated requirement. Ad-hoc builds (no Developer ID) always
+  // fail that check, so we bypass Squirrel entirely and do the swap ourselves.
+  // Windows uses electron-updater's native NSIS update path, which silently downloads
+  // the new installer in the background and applies it on the next app quit — no remote
+  // feed needed there.
+  return process.platform === 'darwin'
 }
 
 function normalizeUpdaterErrorMessage(message: string): string {

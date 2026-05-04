@@ -78,12 +78,29 @@ jobs:
         run: npm run build:all
 
       # ── Code signing ──────────────────────────────────────────────────────
-      # Requires GitHub Actions secrets:
-      #   WIN_CERTIFICATE_FILE      — base64-encoded PFX (OV or EV certificate)
+      # Requires three GitHub Actions secrets on this repository:
+      #
+      #   WIN_CERTIFICATE_FILE      — base64-encoded PFX file
       #   WIN_CERTIFICATE_PASSWORD  — PFX password
-      #   WIN_CERT_SUBJECT_NAME     — e.g. "Daylens Inc."
-      # Obtain an OV or EV code-signing certificate from a trusted CA
-      # (e.g. DigiCert, Sectigo) and store the PFX as a base64 secret.
+      #   WIN_CERT_SUBJECT_NAME     — Authenticode subject, e.g. "Daylens"
+      #
+      # Certificate options (pick one):
+      #   • EV certificate (recommended) — clears SmartScreen immediately on
+      #     first install; hardware token required; ~$300-500/yr.
+      #     Vendors: DigiCert, Sectigo, GlobalSign.
+      #   • OV certificate — cheaper (~$100-200/yr), but SmartScreen shows a
+      #     warning until the installer builds reputation (weeks of downloads).
+      #   • Microsoft Store — Store-certified apps bypass SmartScreen entirely
+      #     and self-update via the Store. The Windows Store lane is already
+      #     set up in release-windows-store.yml.
+      #
+      # To add the certificate to this repo:
+      #   base64 -i your-cert.pfx | pbcopy   # macOS — copies base64 to clipboard
+      #   gh secret set WIN_CERTIFICATE_FILE  --repo irachrist1/daylens  # paste when prompted
+      #   gh secret set WIN_CERTIFICATE_PASSWORD --repo irachrist1/daylens
+      #   gh secret set WIN_CERT_SUBJECT_NAME --repo irachrist1/daylens
+      #
+      # See docs/WINDOWS_SIGNING.md for the full setup guide.
       - name: Require Windows code-signing credentials
         shell: pwsh
         run: |
