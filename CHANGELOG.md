@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Silent Windows updates.** Daylens on Windows now downloads new releases quietly in the background and applies them the next time you quit the app — no manual install step, no second SmartScreen prompt for already-installed users. macOS continues to use its existing in-place update path. See [INSTALL.md](docs/INSTALL.md) for the current install and update flow.
+
 ## v1.0.36 - 2026-05-04
 
 ### Added
