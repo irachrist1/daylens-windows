@@ -54,6 +54,7 @@ export interface ActiveBrowserContextSample {
   isPrivate: boolean
   passivePresence: boolean
   captureBlockReason?: CaptureBlockReason
+  redactWindowTitle?: boolean
 }
 
 interface InFlightBrowserContext {
@@ -536,6 +537,7 @@ export class ActiveBrowserContextTracker {
       return {
         isPrivate: false,
         passivePresence: passivePresenceForDomain(domain, snapshot),
+        redactWindowTitle: true,
       }
     }
 

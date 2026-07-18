@@ -6,7 +6,6 @@ import {
   type ActiveBrowserWindowSnapshot,
 } from '../src/main/services/browserContext.ts'
 import {
-  clipWebsiteVisitDurationToBrowserForeground,
   getBrowserHistoryCursor,
   insertWebsiteVisit,
   setBrowserHistoryCursor,
@@ -138,7 +137,7 @@ test('sensitive query values and fragments are stripped before persistence', () 
   }
 })
 
-test('page duration is clipped to the owning browser foreground interval', () => {
+test('source duration survives storage so reconciliation can recover capture gaps', () => {
   const db = createProductionTestDatabase()
   try {
     db.prepare(`
@@ -158,14 +157,6 @@ test('page duration is clipped to the owning browser foreground interval', () =>
       'com.google.Chrome',
     )
 
-    const clipped = clipWebsiteVisitDurationToBrowserForeground(db, {
-      visitTime: BASE,
-      durationSec: 120,
-      browserBundleId: 'com.google.Chrome',
-      canonicalBrowserId: 'chrome',
-    })
-    assert.equal(clipped, 20)
-
     insertWebsiteVisit(db, {
       domain: 'example.com',
       pageTitle: 'Example',
@@ -181,7 +172,7 @@ test('page duration is clipped to the owning browser foreground interval', () =>
       source: 'chrome_history',
     })
     const row = db.prepare('SELECT duration_sec FROM website_visits').get() as { duration_sec: number }
-    assert.equal(row.duration_sec, 20)
+    assert.equal(row.duration_sec, 120)
   } finally {
     db.close()
   }

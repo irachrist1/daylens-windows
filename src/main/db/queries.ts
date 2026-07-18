@@ -25,7 +25,6 @@ import {
   normalizeUrlForStorage,
   pageKeyForUrl,
   resolveCanonicalApp,
-  resolveCanonicalBrowser,
   sanitizeUrlForPersistence,
   type CanonicalAppIdentity,
 } from '../lib/appIdentity'
@@ -2131,13 +2130,6 @@ export function insertWebsiteVisit(
   if (!url) return false
   const normalizedUrl = visit.normalizedUrl ?? normalizeUrlForStorage(visit.url)
   const pageKey = visit.pageKey ?? pageKeyForUrl(visit.url)
-  const durationSec = clipWebsiteVisitDurationToBrowserForeground(db, {
-    visitTime: visit.visitTime,
-    durationSec: visit.durationSec,
-    browserBundleId: visit.browserBundleId,
-    canonicalBrowserId: visit.canonicalBrowserId,
-  })
-
   const result = db.prepare(`
     INSERT OR IGNORE INTO website_visits
       (
@@ -2161,7 +2153,7 @@ export function insertWebsiteVisit(
     url,
     visit.visitTime,
     visit.visitTimeUs,
-    durationSec,
+    visit.durationSec,
     visit.browserBundleId,
     visit.canonicalBrowserId,
     visit.browserProfileId,
@@ -2170,63 +2162,6 @@ export function insertWebsiteVisit(
     visit.source,
   )
   return result.changes > 0
-}
-
-/** Clip page duration to overlapping foreground browser time when any exists. */
-export function clipWebsiteVisitDurationToBrowserForeground(
-  db: Database.Database,
-  visit: {
-    visitTime: number
-    durationSec: number
-    browserBundleId: string
-    canonicalBrowserId: string | null
-  },
-): number {
-  if (visit.durationSec <= 0) return 0
-  const visitEnd = visit.visitTime + visit.durationSec * 1000
-  const visitCanonical =
-    visit.canonicalBrowserId ?? resolveCanonicalBrowser(visit.browserBundleId).canonicalBrowserId
-  const visitBundleBase = visit.browserBundleId.split(':', 1)[0]?.toLowerCase() ?? ''
-
-  let rows: Array<{
-    start_time: number
-    end_time: number | null
-    duration_sec: number
-    bundle_id: string | null
-    canonical_app_id: string | null
-  }>
-  try {
-    rows = db.prepare(`
-      SELECT start_time, end_time, duration_sec, bundle_id, canonical_app_id
-      FROM app_sessions
-      WHERE start_time < ?
-        AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
-    `).all(visitEnd, visit.visitTime) as typeof rows
-  } catch {
-    return visit.durationSec
-  }
-
-  let overlapMs = 0
-  for (const row of rows) {
-    const bundle = (row.bundle_id ?? '').toLowerCase()
-    const bundleBase = bundle.split(':', 1)[0] ?? ''
-    const canonical = (row.canonical_app_id ?? '').toLowerCase()
-    const sameBrowser =
-      (visitCanonical != null && canonical !== '' && canonical === visitCanonical.toLowerCase())
-      || (bundleBase !== '' && bundleBase === visitBundleBase)
-      || bundle === visit.browserBundleId.toLowerCase()
-    if (!sameBrowser) continue
-
-    const sessionEnd = row.end_time ?? row.start_time + row.duration_sec * 1000
-    const overlapStart = Math.max(visit.visitTime, row.start_time)
-    const overlapEnd = Math.min(visitEnd, sessionEnd)
-    if (overlapEnd > overlapStart) overlapMs += overlapEnd - overlapStart
-  }
-
-  // No foreground overlap: keep the source duration for retrieval; active-time
-  // reconciliation still refuses to credit it against browser ownership.
-  if (overlapMs <= 0) return visit.durationSec
-  return Math.max(1, Math.round(overlapMs / 1000))
 }
 
 export function getBrowserHistoryCursor(

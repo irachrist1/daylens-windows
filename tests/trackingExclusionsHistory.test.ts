@@ -61,11 +61,19 @@ test('excluding a site removes old URL evidence from history and projections', (
   setTestDb(db)
 
   try {
+    db.prepare(`
+      INSERT INTO browser_history_cursors (browser_bundle_id, cursor_us, updated_at)
+      VALUES ('com.google.Chrome', '123456789', 1)
+    `).run()
     const result = deleteHistoryForSite({ domain: 'example.com' })
     assert.ok(result.deletedRows >= 2)
     assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM website_visits`).get() as { count: number }).count, 0)
     assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM focus_events`).get() as { count: number }).count, 0)
     assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM app_sessions`).get() as { count: number }).count, 1)
+    assert.deepEqual(
+      db.prepare(`SELECT browser_bundle_id, cursor_us FROM browser_history_cursors`).all(),
+      [{ browser_bundle_id: 'com.google.Chrome', cursor_us: '123456789' }],
+    )
   } finally {
     clearTestDb()
     db.close()

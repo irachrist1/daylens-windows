@@ -253,6 +253,70 @@ test('private and excluded observations cannot reach storage or downstream produ
   }
 })
 
+test('an unverifiable browser window keeps timing but redacts its page title', async () => {
+  const db = createProductionTestDatabase()
+  setTestDb(db)
+  __setSettings({ trackingControlsEnabled: true })
+  const clock = { now: BASE }
+  let browserActive = true
+
+  __setActiveBrowserContextTrackerForTest(
+    new ActiveBrowserContextTracker(
+      () => ({
+        url: 'https://example.com/private-title',
+        title: 'Sensitive page title',
+        modeKnown: false,
+      }),
+      (snapshot) => snapshot.appName === 'Google Chrome',
+    ),
+  )
+  __setTrackingFsmTestHarness({
+    platform: 'darwin',
+    now: () => clock.now,
+    idleSeconds: () => 0,
+    activeWindow: () => browserActive
+      ? {
+          title: 'Sensitive page title',
+          application: 'Google Chrome',
+          path: '/Applications/Google Chrome.app',
+          pid: 4,
+          icon: '',
+        }
+      : {
+          title: 'daylens — main.ts',
+          application: 'Cursor',
+          path: '/Applications/Cursor.app',
+          pid: 1,
+          icon: '',
+        },
+  })
+
+  try {
+    await __pollForTest()
+    clock.now += 30_000
+    await __pollForTest()
+    clock.now += 30_000
+    browserActive = false
+    await __pollForTest()
+
+    const browserSession = db.prepare(`
+      SELECT window_title FROM app_sessions WHERE app_name = 'Google Chrome'
+    `).get() as { window_title: string | null }
+    assert.equal(browserSession.window_title, null)
+    assert.doesNotMatch(JSON.stringify(db.prepare('SELECT * FROM focus_events').all()), /Sensitive page title/)
+    assert.equal(
+      (db.prepare('SELECT COUNT(*) AS count FROM website_visits').get() as { count: number }).count,
+      0,
+    )
+  } finally {
+    __setTrackingFsmTestHarness(null)
+    __setActiveBrowserContextTrackerForTest(null)
+    __resetSettings()
+    clearTestDb()
+    db.close()
+  }
+})
+
 test('an excluded site with unknown browser mode never enters page evidence', () => {
   const db = createProductionTestDatabase()
   __setSettings({

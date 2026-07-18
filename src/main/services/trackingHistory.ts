@@ -227,7 +227,7 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
         browser_context_events: 'started_at',
         activity_segments: 'started_at',
       }
-      const skipTables = new Set(['schema_version'])
+      const skipTables = new Set(['schema_version', 'browser_history_cursors'])
 
       // Exported AI artifacts can embed the rows themselves (a CSV of site
       // visits): capture their file paths before the row delete, remove after.

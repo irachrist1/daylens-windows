@@ -1933,7 +1933,7 @@ async function poll(): Promise<void> {
     // website_visits.url via the browser-history reader.
     const isBrowserApp = Boolean(browserApplication)
       || resolveCanonicalApp(bundleId, appName).defaultCategory === 'browsing'
-    const resolvedWindowTitle = stripBrowserUrlFromTitle(rawResolvedTitle, isBrowserApp)
+    let resolvedWindowTitle = stripBrowserUrlFromTitle(rawResolvedTitle, isBrowserApp)
     trackingStatus.lastResolvedWindow = {
       backend,
       bundleId,
@@ -2027,6 +2027,11 @@ async function poll(): Promise<void> {
       if (currentSession) flushCurrent(undefined, `tracking_controls:${browserSample.captureBlockReason}`)
       clearPersistedLiveSnapshot()
       return
+    }
+    if (browserSample.redactWindowTitle) {
+      resolvedWindowTitle = null
+      if (trackingStatus.lastRawWindow) trackingStatus.lastRawWindow.title = ''
+      if (trackingStatus.lastResolvedWindow) trackingStatus.lastResolvedWindow.title = ''
     }
 
     // Consume the one-shot return-from-idle signal set earlier this poll. It
