@@ -5,6 +5,7 @@ import type {
   AppSettings,
 } from '@shared/types'
 import { sanitizeActivityColorOverrides } from '@shared/activityColors'
+import { DEFAULT_CAPTURE_CONSENT, normalizeCaptureConsent } from '@shared/captureConsent'
 import { createDefaultOnboardingState, normalizeOnboardingState } from '../lib/onboardingState'
 import { ensureSecureStore, getSecureStore } from './secureStore'
 
@@ -25,6 +26,7 @@ const DEFAULTS: AppSettings = {
   theme: 'system',
   onboardingComplete: false,
   onboardingState: createDefaultOnboardingState(),
+  captureConsent: { ...DEFAULT_CAPTURE_CONSENT },
   userName: '',
   userGoals: [],
   userIntent: '',
@@ -96,6 +98,7 @@ export function getSettings(): AppSettings {
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
     onboardingComplete,
     onboardingState,
+    captureConsent: normalizeCaptureConsent(_store.get('captureConsent', null)),
     userName: (_store.get('userName', '') as string),
     userGoals: (_store.get('userGoals', []) as string[]),
     userIntent: (_store.get('userIntent', '') as string),
@@ -166,6 +169,9 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
   }
   if ('activityColorOverrides' in entries) {
     entries.activityColorOverrides = sanitizeActivityColorOverrides(entries.activityColorOverrides)
+  }
+  if ('captureConsent' in entries) {
+    entries.captureConsent = normalizeCaptureConsent(entries.captureConsent)
   }
   if (entries.onboardingState) {
     entries.onboardingState = normalizeOnboardingState(entries.onboardingState, entries.onboardingState.stage === 'complete')

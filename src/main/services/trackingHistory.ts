@@ -321,12 +321,6 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
       // Derived projection tables are optional on older installs.
     }
 
-    try {
-      deletedRows += db.prepare(`DELETE FROM website_visits_pending ${where}`).run(...params).changes
-    } catch {
-      // Pending-visit table arrives with migration v45.
-    }
-
     // A browser window title is the page title, so the site's name can sit in
     // ANY text column of ANY table: titles, urls, block labels, chat tool
     // traces, narrative JSON, work-memory observations. A hand-maintained

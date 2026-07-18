@@ -4,6 +4,7 @@ import type {
   OnboardingState,
   TrackingPermissionState,
 } from '@shared/types'
+import { isCaptureConsentCurrent, normalizeCaptureConsent } from '@shared/captureConsent'
 
 const ONBOARDING_FLOW_VERSION = 3
 
@@ -66,6 +67,10 @@ export function normalizeOnboardingState(raw: unknown, legacyComplete: boolean):
 }
 
 export function shouldStartTrackingForSettings(settings: AppSettings, platform = currentOnboardingPlatform()): boolean {
+  // Consent gates capture on every platform — before consent, no capture
+  // adapter starts at all. Only after consent does the platform permission
+  // question (macOS Accessibility) matter.
+  if (!isCaptureConsentCurrent(normalizeCaptureConsent(settings.captureConsent))) return false
   if (platform !== 'macos') return true
   return settings.onboardingState.trackingPermissionState === 'granted'
 }

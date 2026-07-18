@@ -23,7 +23,7 @@ export const PROJECTION_VERSION = 1
 const IDLE_GAP_MS = 15 * 60 * 1000   // 15 min boundary between blocks
 const MIN_SESSION_MS = 1000          // drop sub-second flicker
 
-interface DerivedSessionRow {
+export interface DerivedSessionRow {
   start_ts_ms: number
   end_ts_ms: number
   active_seconds: number
@@ -110,7 +110,15 @@ interface OpenSession {
   confidence: 'observed' | 'uncertain'
 }
 
-function foldSessions(events: StoredFocusEvent[], dayEnd: number): DerivedSessionRow[] {
+/** Pure session fold over focus_events. Live and historical reads share this. */
+export function projectSessionsFromFocusEvents(
+  events: readonly StoredFocusEvent[],
+  rangeEndMs: number,
+): DerivedSessionRow[] {
+  return foldSessions(events, rangeEndMs)
+}
+
+function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): DerivedSessionRow[] {
   const out: DerivedSessionRow[] = []
   let open: OpenSession | null = null
 

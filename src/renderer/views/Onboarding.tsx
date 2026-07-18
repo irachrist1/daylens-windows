@@ -1208,20 +1208,32 @@ export default function Onboarding({
     }
   }
 
+  // Leaving the capture explainer toward permission/proof is the consent act:
+  // record it before advancing so capture (and the proof step's live data) is
+  // allowed to start. The redesigned consent screen (separate issue) will own
+  // this decision; the recorded state and gate are already in force.
+  async function consentAndLeaveWhy() {
+    try {
+      await ipc.app.setCaptureConsent(true)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+      return
+    }
+    await persistOnboarding(isMac ? 'permission' : 'proof', {
+      proofState: isMac ? 'idle' : 'collecting',
+    })
+  }
+
   function advanceWhy() {
     if (whyIndex < WHY_BEATS.length - 1) {
       setWhyIndex((i) => i + 1)
       return
     }
-    void persistOnboarding(isMac ? 'permission' : 'proof', {
-      proofState: isMac ? 'idle' : 'collecting',
-    })
+    void consentAndLeaveWhy()
   }
 
   function skipWhy() {
-    void persistOnboarding(isMac ? 'permission' : 'proof', {
-      proofState: isMac ? 'idle' : 'collecting',
-    })
+    void consentAndLeaveWhy()
   }
 
   async function continueFromProof() {

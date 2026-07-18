@@ -18,6 +18,7 @@ This changelog explains released and upcoming improvements in language meant for
 - Browser support is discovered from the application catalog and operating system instead of depending on a short hardcoded list.
 - Capture health provides clearer information when permissions prevent browser evidence from being read.
 - Website exclusions and foreground-time reconciliation now apply consistently to downstream summaries.
+- Uninstalling actually uninstalls: removing the app on Windows and Linux clears the launch-at-login entry, and a new "Reset and uninstall" action in Settings removes the login item and asks whether to delete or keep your local data — nothing is ever deleted silently.
 
 ### Safer and more predictable AI
 

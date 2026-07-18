@@ -1,0 +1,55 @@
+name: Promote Linear Frontier
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Optional DEV issue identifier to evaluate by itself
+        required: false
+        type: string
+      dry_run:
+        description: Report eligible issues without changing Linear
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-linear-frontier
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Linear credential
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::error::Missing repository secret LINEAR_API_KEY"
+            exit 1
+          fi
+      - name: Promote newly unblocked issues
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_PROJECT_ID: f0ed91fc-83f1-4dc4-9294-4817efd9971a
+          LINEAR_TEAM_ID: 6ab512ef-6b06-48a3-bff9-2e4a951fdcef
+          SELECTED_ISSUE: ${{ inputs.issue }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ -n "$SELECTED_ISSUE" ]; then args+=(--issue "$SELECTED_ISSUE"); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          node scripts/promote-linear-frontier.mjs "${args[@]}"

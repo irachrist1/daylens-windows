@@ -26,7 +26,7 @@ function insertTabEvent(
     INSERT INTO focus_events (
       ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
       window_title, url, page_title, source, confidence, platform, schema_ver
-    ) VALUES (?, ?, 'tab_changed', ?, ?, 1, ?, ?, ?, 'apple_events_tab', 'observed', 'darwin', 1)
+    ) VALUES (?, ?, 'tab_changed', ?, ?, 1, ?, ?, ?, 'apple_events_tab', 'observed', 'darwin', 2)
   `).run(o.tsMs, o.tsMs, o.bundleId, o.appName, o.pageTitle, o.url, o.pageTitle)
 }
 

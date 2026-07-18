@@ -1654,6 +1654,9 @@ export interface AppSettings {
   theme: AppTheme
   onboardingComplete: boolean
   onboardingState: OnboardingState
+  /** Explicit capture consent — the state that gates every capture adapter.
+   *  See src/shared/captureConsent.ts. */
+  captureConsent: import('./captureConsent').CaptureConsentState
   userName: string
   userGoals: string[]
   userIntent: string            // why the user is here, captured in onboarding; fed to AI suggestions
@@ -1930,6 +1933,9 @@ export interface TrackingDiagnosticsPayload {
       safariHistoryAccess: SafariHistoryAccessStatus
     }
     captureHelperRunning?: boolean | null
+    // Events dropped before persistence (malformed payloads, unsupported
+    // schema versions), keyed by adapter. Counts only — never event content.
+    rejectedEvents?: Record<string, { total: number; byReason: Record<string, number> }>
   }
   linuxTracking: LinuxTrackingDiagnostics | null
   linuxDesktop: LinuxDesktopDiagnostics | null
@@ -2226,7 +2232,9 @@ export const IPC = {
   APP: {
     RELAUNCH: 'app:relaunch',
     COMPLETE_ONBOARDING: 'app:complete-onboarding',
+    SET_CAPTURE_CONSENT: 'app:set-capture-consent',
     GET_COMPUTER_NAME: 'app:get-computer-name',
+    RESET_AND_UNINSTALL: 'app:reset-and-uninstall',
   },
   INTERCOM: {
     GET_IDENTITY: 'intercom:get-identity',
@@ -2266,7 +2274,21 @@ export const IPC = {
   MCP: {
     GET_CONFIG: 'mcp:get-config',
   },
+  ERRORS: {
+    RENDERER_CRASH: 'errors:renderer-crash',
+  },
   SYSTEM: {
     THEME_CHANGED: 'system:theme-changed',
   },
 } as const
+
+// A render crash caught by the renderer's ErrorBoundary, forwarded to the main
+// process for Sentry reporting. Code-level context only (error identity plus
+// React component names) — never captured activity, titles, or page content.
+export interface RendererCrashReport {
+  name: string
+  message: string
+  stack: string | null
+  componentStack: string | null
+  boundary: string
+}

@@ -147,6 +147,7 @@ module.exports = {
   },
   nsis: {
     oneClick: true,
+    include: 'build/win/uninstall.nsh',
     perMachine: false,
     allowToChangeInstallationDirectory: false,
     deleteAppDataOnUninstall: false,

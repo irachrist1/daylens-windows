@@ -1,25 +1,9 @@
 ---
-description: Role-based model routing for Daylens agents
+description: Sub-agent model for Daylens
 alwaysApply: true
 ---
 
 # Model Routing
 
-Use the cheapest model that can meet the bar, but cost is only a tie-breaker.
-For shipped work: intelligence > taste > cost. If output is weak, rerun or redo
-with a stronger model without asking.
-
-- Mechanical edits, file mapping, boilerplate, formatting, and clear tests:
-  use `fast-worker` or a cheap fast lane.
-- Architecture, root cause, ambiguous bugs, algorithms, and correctness calls:
-  use `deep-reasoner`.
-- User-facing UI, copy, API design, or product taste: use Opus/Fable-class
-  reasoning; do not let a mechanical worker invent the look or voice.
-- GPT-5.5 is the Codex lane, not a native Cursor subagent here. Use `gpt-peer`
-  only as a thin wrapper that runs `codex exec --model gpt-5.5 --effort xhigh`.
-- Review-only GPT passes must use `codex exec -s read-only` with a
-  self-contained prompt.
-- High-stakes decisions get two blind passes; resolve disagreement with specs,
-  real data, tests, or a founder question, not vibes.
-
-Never use Haiku for this repo.
+When launching Cursor sub-agents (the Task tool), use Grok 4.5
+(`cursor-grok-4.5-high-fast`).

@@ -227,7 +227,7 @@ test('a timeline block persists one rich evidence object with titles, sites, URL
     INSERT INTO focus_events (
       ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
       window_title, url, page_title, source, confidence, platform, schema_ver
-    ) VALUES (?, ?, 'window_changed', ?, 'Cursor', 42, ?, NULL, NULL, 'nsworkspace_event', 'observed', 'darwin', 1)
+    ) VALUES (?, ?, 'window_changed', ?, 'Cursor', 42, ?, NULL, NULL, 'nsworkspace_event', 'observed', 'darwin', 2)
   `).run(start, start, 'com.microsoft.VSCode', 'capture-foundation.ts — daylens')
   db.prepare(`
     INSERT INTO website_visits (

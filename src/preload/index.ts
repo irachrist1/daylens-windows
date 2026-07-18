@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import os from 'node:os'
 import type { PaywallTrigger } from '@shared/analytics'
+import type { CaptureConsentState } from '@shared/captureConsent'
 import type { ProjectionInvalidationEvent } from '@shared/core'
 import type {
   AppCategory,
@@ -70,6 +71,7 @@ import type {
   WrapPreflightResult,
   WrapProviderState,
   EnrichmentSourcesState,
+  RendererCrashReport,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 import type { McpServerConfig } from '../main/services/mcpServer'
@@ -358,7 +360,12 @@ const api = {
     getDefaultUserName: (): Promise<string> => Promise.resolve(os.userInfo().username),
     getComputerName: (): Promise<string> => ipcRenderer.invoke(IPC.APP.GET_COMPUTER_NAME),
     relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.APP.RELAUNCH),
+    resetAndUninstall: (): Promise<{ started: boolean }> => ipcRenderer.invoke(IPC.APP.RESET_AND_UNINSTALL),
     completeOnboarding: (): Promise<void> => ipcRenderer.invoke(IPC.APP.COMPLETE_ONBOARDING),
+    // Record the explicit capture-consent decision; granting starts capture,
+    // declining leaves the app running with capture off.
+    setCaptureConsent: (granted: boolean): Promise<CaptureConsentState> =>
+      ipcRenderer.invoke(IPC.APP.SET_CAPTURE_CONSENT, granted),
   },
   sync: {
     getStatus: (): Promise<SyncStatus> => ipcRenderer.invoke(IPC.SYNC.GET_STATUS),
@@ -401,6 +408,12 @@ const api = {
   analytics: {
     capture: (event: string, properties: Record<string, unknown>) =>
       ipcRenderer.send('analytics:capture', event, properties),
+  },
+  errors: {
+    // Forward a render crash caught by an ErrorBoundary to the main process,
+    // which reports it to Sentry the same way main-process errors are.
+    reportRenderCrash: (report: RendererCrashReport) =>
+      ipcRenderer.send(IPC.ERRORS.RENDERER_CRASH, report),
   },
   navigation: {
     // Subscribe to main-process navigation requests (e.g. notification click → route).

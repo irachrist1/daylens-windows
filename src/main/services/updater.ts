@@ -65,6 +65,16 @@ let _state: UpdaterState = {
 }
 
 export function isInstallingUpdate(): boolean { return _installingUpdate }
+
+// Reset-and-uninstall quits with a downloaded update possibly staged;
+// autoInstallOnAppQuit would reinstall the app the person just removed.
+export function cancelPendingAutoInstall(): void {
+  try {
+    autoUpdater.autoInstallOnAppQuit = false
+  } catch {
+    // If electron-updater is unavailable there is nothing staged to cancel.
+  }
+}
 export function registerUpdaterShutdown(fn: () => Promise<void>): void { _beforeInstall = fn }
 export function getUpdaterState(): UpdaterState { return { ..._state } }
 

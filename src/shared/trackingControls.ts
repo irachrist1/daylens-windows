@@ -6,8 +6,18 @@
 // opt-in (plus an ad-hoc pause that works regardless of the switch) changes
 // behavior. This is the hermetic core — no DB, no settings store — so it can be
 // exhaustively unit-tested and reused by the foreground-app and website paths.
+//
+// One rule sits above the opt-in design: explicit capture consent
+// (src/shared/captureConsent.ts). Without current consent, every decision here
+// is a refusal — capture observes nothing until the person has agreed.
+
+import { isCaptureConsentCurrent, normalizeCaptureConsent } from './captureConsent'
 
 export interface TrackingControlsState {
+  /** Explicit capture consent for the current policy version. Unlike the
+   *  opt-in controls below, this gate is ALWAYS in force: without consent no
+   *  capture decision passes, regardless of every other setting. */
+  consented: boolean
   enabled: boolean
   paused: boolean
   excludedApps: string[] // bundle ids and/or app names (free-form, case-insensitive)
@@ -30,7 +40,7 @@ export interface SiteCaptureCandidate {
   isPrivate?: boolean | null
 }
 
-type CaptureBlockReason = 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
+export type CaptureBlockReason = 'no_consent' | 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
 
 export interface CaptureDecision {
   capture: boolean
@@ -96,8 +106,10 @@ export function isSiteExcluded(state: TrackingControlsState, candidate: SiteCapt
 // Private/incognito windows are never captured — this check runs before
 // paused/enabled, independent of every setting.
 
-// Foreground app-session gate.
+// Foreground app-session gate. Consent is checked before everything else:
+// pre-consent there is no capture at all, so no other rule can matter.
 export function decideAppCapture(state: TrackingControlsState, candidate: AppCaptureCandidate): CaptureDecision {
+  if (!state.consented) return { capture: false, reason: 'no_consent' }
   if (isPrivateWindow(candidate)) return { capture: false, reason: 'incognito' }
   if (state.paused) return { capture: false, reason: 'paused' }
   if (!state.enabled) return ALLOW
@@ -109,6 +121,7 @@ export function decideAppCapture(state: TrackingControlsState, candidate: AppCap
 // decideAppCapture; this drops a specific excluded domain (or private-window
 // visit) while a non-excluded browser app keeps being tracked.
 export function decideSiteCapture(state: TrackingControlsState, candidate: SiteCaptureCandidate): CaptureDecision {
+  if (!state.consented) return { capture: false, reason: 'no_consent' }
   if (isPrivateWindow(candidate)) return { capture: false, reason: 'incognito' }
   if (state.paused) return { capture: false, reason: 'paused' }
   if (!state.enabled) return ALLOW
@@ -118,8 +131,10 @@ export function decideSiteCapture(state: TrackingControlsState, candidate: SiteC
 
 // Adapt AppSettings into the gate state (keeps this module free of the wider
 // settings shape). Defaults match the opt-in contract: disabled, unpaused,
-// empty lists, incognito-skip on (effective only once enabled).
+// empty lists, incognito-skip on (effective only once enabled). Consent has
+// the opposite default — absent or malformed consent means NOT consented.
 export function trackingControlsStateFromSettings(s: {
+  captureConsent?: unknown
   trackingControlsEnabled?: boolean
   trackingPaused?: boolean
   trackingExcludedApps?: string[]
@@ -127,6 +142,7 @@ export function trackingControlsStateFromSettings(s: {
   trackingSkipIncognito?: boolean
 }): TrackingControlsState {
   return {
+    consented: isCaptureConsentCurrent(normalizeCaptureConsent(s.captureConsent)),
     enabled: Boolean(s.trackingControlsEnabled),
     paused: Boolean(s.trackingPaused),
     excludedApps: s.trackingExcludedApps ?? [],

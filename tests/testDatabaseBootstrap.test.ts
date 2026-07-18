@@ -12,7 +12,7 @@ test('production test database applies every migration and startup schema repair
     assert.equal(version.version, LATEST_SCHEMA_VERSION)
 
     const requiredTables = [
-      'website_visits_pending',
+      'browser_history_cursors',
       'focus_events',
       'derived_sessions',
       'derived_blocks',

@@ -4,6 +4,7 @@ import { filterTrackingExcludedEvidence } from '../src/shared/evidencePrivacy.ts
 import type { TrackingControlsState } from '../src/shared/trackingControls.ts'
 
 const controls: TrackingControlsState = {
+  consented: true,
   enabled: true,
   paused: false,
   excludedApps: ['app.zen-browser.zen'],

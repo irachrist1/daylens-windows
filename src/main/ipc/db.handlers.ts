@@ -86,6 +86,7 @@ import type {
 } from '@shared/types'
 import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
 import { isRealDayHarness } from '../lib/realDayHarness'
+import { getCaptureEventRejections } from '../lib/captureRejections'
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -968,6 +969,7 @@ export function registerDbHandlers(): void {
           safariHistoryAccess: browserStatus.safariHistoryAccess,
         },
         captureHelperRunning,
+        rejectedEvents: getCaptureEventRejections(),
       },
       linuxTracking: getLinuxTrackingDiagnostics(),
       linuxDesktop: getLinuxDesktopDiagnostics(),

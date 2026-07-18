@@ -126,7 +126,7 @@ test('get_day_overview distinguishes locked time from unexplained capture gaps',
   const insert = db.prepare(`
     INSERT INTO focus_events (
       ts_ms, mono_ns, event_type, source, confidence, platform, schema_ver
-    ) VALUES (?, ?, ?, 'nsworkspace_event', 'observed', 'darwin', 1)
+    ) VALUES (?, ?, ?, 'nsworkspace_event', 'observed', 'darwin', 2)
   `)
   const date = '2026-06-10'
   insert.run(localMs(2026, 6, 10, 8, 55), 1, 'app_activated')

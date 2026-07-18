@@ -22,10 +22,10 @@ const EXCLUDED_SITE = 'youtube.com'  // real top domain that day
 const db = new Database(dbPath, { readonly: true })
 
 const OFF: TrackingControlsState = {
-  enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true,
+  consented: true, enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true,
 }
 const ON: TrackingControlsState = {
-  enabled: true, paused: false,
+  consented: true, enabled: true, paused: false,
   excludedApps: [EXCLUDED_APP], excludedSites: [EXCLUDED_SITE], skipIncognito: true,
 }
 

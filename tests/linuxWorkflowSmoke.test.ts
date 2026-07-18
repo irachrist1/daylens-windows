@@ -38,6 +38,8 @@ test('linux smoke workflows launch Electron inside a DBus session', () => {
     assert.match(source, /DAYLENS_SMOKE_EXPECT_FOREGROUND_TITLE="Runtime Capture Foreground"/)
     assert.match(source, /DAYLENS_SMOKE_EXPECT_FULLSCREEN_TITLE="Runtime Capture Fullscreen"/)
     assert.match(source, /--window-state/)
+    assert.match(source, /apt-get install -y[^\n]*\bwmctrl\b/)
+    assert.match(source, /dnf install -y[^\n]*\bwmctrl\b/)
     assert.doesNotMatch(source, /xorg-x11-apps/)
     assert.match(source, /dnf install[^\n]*\bxmessage\b[^\n]*\bxwininfo\b/)
     assert.match(RUN_SCRIPT, /wmctrl -m[\s\S]*?"\$app_path" "\$@"/)

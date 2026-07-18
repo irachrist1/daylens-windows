@@ -325,6 +325,12 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
       { resolveDayEnrichment },
       { getWorkMemoryProfile, chatMemoryPromptBlock },
       { executeTool },
+      { queryCorrectedActivityFactsForDay },
+      {
+        compareCanonicalAndLegacyDay,
+        formatCanonicalLegacyParitySideBySide,
+        writeLocalCanonicalLegacyParityReport,
+      },
     ] = await Promise.all([
       import('../../src/main/core/query/projections'),
       import('../../src/main/services/workBlocks'),
@@ -334,12 +340,25 @@ async function evaluate(args: Args): Promise<RealDayObservation> {
       import('../../src/main/services/enrichmentResolve'),
       import('../../src/main/services/workMemoryProfile'),
       import('../../src/main/services/aiTools'),
+      import('../../src/main/core/query/activityFactsQuery'),
+      import('../../src/main/core/query/canonicalLegacyParity'),
     ])
     const [fromMs, toMs] = dayBounds(manifest.date)
     const projection = getTimelineDayProjection(db, manifest.date, null, { materialize: false })
     const direct = getTimelineDayPayload(db, manifest.date, null, { materialize: false })
     const apps = getCorrectedAppSummariesForRange(db, fromMs, toMs)
     const capturedSessions = getCorrectedSessionsForRange(db, fromMs, toMs)
+    const sharedFacts = queryCorrectedActivityFactsForDay(db, manifest.date, { asOfMs: toMs })
+    const parity = compareCanonicalAndLegacyDay(db, manifest.date, { asOfMs: toMs })
+    const parityPath = writeLocalCanonicalLegacyParityReport(
+      parity,
+      path.join(fixtureDir, 'local-parity'),
+    )
+    console.log(formatCanonicalLegacyParitySideBySide(parity))
+    console.log(
+      `Shared query: ${formatDuration(sharedFacts.totalSeconds)} tracked / ${formatDuration(sharedFacts.focusSeconds)} focused (${sharedFacts.evidenceSource}, ${sharedFacts.sessions.length} sessions) — side by side with today's production path: Timeline ${formatDuration(Math.round(projection.totalSeconds))}, Apps ${formatDuration(apps.reduce((sum, item) => sum + Math.round(item.totalSeconds), 0))}`,
+    )
+    console.log(`Local parity report (not analytics): ${parityPath}`)
     const projectionEpisodes = projection.blocks.map(episode)
     const directEpisodes = direct.blocks.map(episode)
     const appItems = apps.map((item) => ({

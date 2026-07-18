@@ -6,6 +6,7 @@ import path from 'node:path'
 import { getLinuxSessionBusInfo, getSecureStoreDiagnostics } from './secureStore'
 
 const AUTOSTART_FILE = 'daylens.desktop'
+const AUTOSTART_MARKER_FILE = '.daylens-autostart-path'
 const EXEC_WRAPPERS = new Set(['env', 'flatpak', 'snap', 'gtk-launch', 'sh', 'bash'])
 const PACKAGE_DIAGNOSTICS_CACHE_MS = 30_000
 
@@ -423,20 +424,44 @@ function getLinuxAutostartFilePath(): string {
   return path.join(configHome, 'autostart', AUTOSTART_FILE)
 }
 
+function getLinuxAutostartMarkerPath(): string {
+  return path.join(os.homedir(), AUTOSTART_MARKER_FILE)
+}
+
+function removeRecordedLinuxAutostart(markerPath: string): void {
+  try {
+    const recordedPath = fs.readFileSync(markerPath, 'utf8').trim()
+    if (
+      recordedPath
+      && path.basename(recordedPath) === AUTOSTART_FILE
+      && path.basename(path.dirname(recordedPath)) === 'autostart'
+    ) {
+      fs.rmSync(recordedPath, { force: true })
+    }
+  } catch {
+    // No previously recorded path.
+  }
+  fs.rmSync(markerPath, { force: true })
+}
+
 async function setLinuxLaunchOnLogin(enabled: boolean): Promise<boolean> {
   if (process.platform !== 'linux' || !app.isPackaged) return false
 
   const autostartPath = getLinuxAutostartFilePath()
+  const markerPath = getLinuxAutostartMarkerPath()
   try {
     if (enabled) {
+      removeRecordedLinuxAutostart(markerPath)
       const content = buildAutostartDesktopFile()
       if (!content) return false
       fs.mkdirSync(path.dirname(autostartPath), { recursive: true })
       fs.writeFileSync(autostartPath, content, 'utf8')
+      fs.writeFileSync(markerPath, `${autostartPath}\n`, { mode: 0o600 })
       return true
     }
 
     fs.rmSync(autostartPath, { force: true })
+    removeRecordedLinuxAutostart(markerPath)
     return true
   } catch (error) {
     console.warn('[linux-desktop] failed to set launch-on-login:', error)

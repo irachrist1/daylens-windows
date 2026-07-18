@@ -2073,6 +2073,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     return isSectionId(requested) ? requested : 'general'
   })
   const [sectionSearch, setSectionSearch] = useState('')
+  const [resetAndUninstallBusy, setResetAndUninstallBusy] = useState(false)
   const [navOrigin, setNavOrigin] = useState<SectionId | null>(null)
   const [hasApiKey, setHasApiKey] = useState(false)
   const [cliTools, setCliTools] = useState<CLIToolDetection>({ claude: null, chatgpt: null, gemini: null, codex: null })
@@ -2558,6 +2559,18 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
       setWorkMemoryBusy(null)
+    }
+  }
+
+  async function startResetAndUninstall() {
+    setResetAndUninstallBusy(true)
+    try {
+      // Main owns the confirmation dialogs and, when confirmed, quits the app —
+      // this only resolves with started: false when the person cancels.
+      const { started } = await ipc.app.resetAndUninstall()
+      if (!started) setResetAndUninstallBusy(false)
+    } catch {
+      setResetAndUninstallBusy(false)
     }
   }
 
@@ -3678,6 +3691,26 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 title="Local data"
                 description="Tracked history lives in the local Daylens database."
                 control={<StatusPill label="Local only" />}
+              />
+              <SettingsRow
+                title="Reset and uninstall"
+                description="Remove Daylens from this computer: the launch-at-login entry is cleared, and you choose whether your local data is deleted or kept."
+                control={(
+                  <button
+                    type="button"
+                    disabled={resetAndUninstallBusy}
+                    onClick={() => void startResetAndUninstall()}
+                    style={{
+                      ...inlineButtonStyle,
+                      borderColor: 'rgba(248, 113, 113, 0.28)',
+                      color: '#f87171',
+                      opacity: resetAndUninstallBusy ? 0.6 : 1,
+                      cursor: resetAndUninstallBusy ? 'default' : 'pointer',
+                    }}
+                  >
+                    {resetAndUninstallBusy ? 'Uninstalling…' : 'Reset and uninstall…'}
+                  </button>
+                )}
               />
             </div>
           </div>

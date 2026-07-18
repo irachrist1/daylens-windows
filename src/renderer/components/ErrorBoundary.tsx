@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from 'react'
+import { Component, type ErrorInfo, type ReactNode } from 'react'
 
 interface Props { children: ReactNode; name: string }
 interface State { error: Error | null }
@@ -8,6 +8,22 @@ export class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    // Forward to main for Sentry — getDerivedStateFromError only shows the
+    // fallback screen; without this the crash never leaves the renderer.
+    try {
+      window.daylens?.errors?.reportRenderCrash({
+        name: error.name,
+        message: error.message,
+        stack: error.stack ?? null,
+        componentStack: errorInfo.componentStack ?? null,
+        boundary: this.props.name,
+      })
+    } catch {
+      // Reporting must never take down the fallback UI.
+    }
   }
 
   render() {

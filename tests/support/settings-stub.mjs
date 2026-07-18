@@ -5,6 +5,13 @@ const DEFAULT_SETTINGS = Object.freeze({
   onboardingState: {
     trackingPermissionState: 'missing',
   },
+  // Most tests model a person who already consented to capture; the consent
+  // regression tests override this explicitly.
+  captureConsent: {
+    status: 'granted',
+    policyVersion: 1,
+    decidedAt: 0,
+  },
 })
 
 let settings = cloneDefaultSettings()

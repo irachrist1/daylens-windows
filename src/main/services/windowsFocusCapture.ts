@@ -15,11 +15,13 @@ import {
   FOCUS_EVENT_SCHEMA_VERSION,
   isFocusEventConfidence,
   isFocusEventType,
+  isSupportedFocusEventSchemaVersion,
   isWindowsFocusEventSource,
   sourceAcceptsFocusEventType,
   type FocusEvent,
   type WindowsFocusEventSource,
 } from '../core/evidence/focusEvent'
+import { recordCaptureEventRejection } from '../lib/captureRejections'
 
 type HelperEvent = FocusEvent<WindowsFocusEventSource> & { is_private: boolean }
 
@@ -114,35 +116,40 @@ export function __setRecentWindowsPrivateWindowSignalForTest(signal: WindowsPriv
   recentPrivateWindowSignal = signal
 }
 
+function reject(reason: 'malformed' | 'unsupported_schema_version'): null {
+  recordCaptureEventRejection('windows_focus_helper', reason)
+  return null
+}
+
 export function normalizeWindowsHelperEvent(raw: unknown): HelperEvent | null {
-  if (!isObject(raw)) return null
+  if (!isObject(raw)) return reject('malformed')
   const eventType = raw.event_type
   const source = raw.source
   const confidence = raw.confidence
   const schemaVersion = raw.schema_ver ?? FOCUS_EVENT_SCHEMA_VERSION
-  if (typeof raw.ts_ms !== 'number' || !Number.isFinite(raw.ts_ms)) return null
-  if (typeof raw.mono_ns !== 'number' || !Number.isFinite(raw.mono_ns)) return null
-  if (!isFocusEventType(eventType)) return null
-  if (!isWindowsFocusEventSource(source)) return null
-  if (!isFocusEventConfidence(confidence)) return null
-  if (schemaVersion !== FOCUS_EVENT_SCHEMA_VERSION) return null
-  if (!isNullableString(raw.app_bundle_id)) return null
-  if (!isNullableString(raw.app_name)) return null
-  if (!isNullableNumber(raw.pid)) return null
-  if (!isNullableString(raw.window_title)) return null
-  if (!isNullableString(raw.url)) return null
-  if (!isNullableString(raw.page_title)) return null
-  if (!isNullableBoolean(raw.is_private)) return null
-  if (!isNullableString(raw.platform)) return null
+  if (!isSupportedFocusEventSchemaVersion(schemaVersion)) return reject('unsupported_schema_version')
+  if (typeof raw.ts_ms !== 'number' || !Number.isFinite(raw.ts_ms)) return reject('malformed')
+  if (typeof raw.mono_ns !== 'number' || !Number.isFinite(raw.mono_ns)) return reject('malformed')
+  if (!isFocusEventType(eventType)) return reject('malformed')
+  if (!isWindowsFocusEventSource(source)) return reject('malformed')
+  if (!isFocusEventConfidence(confidence)) return reject('malformed')
+  if (!isNullableString(raw.app_bundle_id)) return reject('malformed')
+  if (!isNullableString(raw.app_name)) return reject('malformed')
+  if (!isNullableNumber(raw.pid)) return reject('malformed')
+  if (!isNullableString(raw.window_title)) return reject('malformed')
+  if (!isNullableString(raw.url)) return reject('malformed')
+  if (!isNullableString(raw.page_title)) return reject('malformed')
+  if (!isNullableBoolean(raw.is_private)) return reject('malformed')
+  if (!isNullableString(raw.platform)) return reject('malformed')
 
   const url = raw.url ?? null
   const pageTitle = raw.page_title ?? null
   const isPrivate = raw.is_private ?? false
 
-  if (!sourceAcceptsFocusEventType(source, eventType)) return null
-  if (confidence === 'unknown' && (url !== null || pageTitle !== null)) return null
-  if (source === 'uia_tab' && confidence === 'observed' && !url) return null
-  if (source === 'uia_foreground' && (url !== null || pageTitle !== null)) return null
+  if (!sourceAcceptsFocusEventType(source, eventType)) return reject('malformed')
+  if (confidence === 'unknown' && (url !== null || pageTitle !== null)) return reject('malformed')
+  if (source === 'uia_tab' && confidence === 'observed' && !url) return reject('malformed')
+  if (source === 'uia_foreground' && (url !== null || pageTitle !== null)) return reject('malformed')
 
   return {
     ts_ms: raw.ts_ms,
@@ -227,6 +234,7 @@ function handleLine(line: string): void {
   try {
     parsed = JSON.parse(trimmed)
   } catch {
+    recordCaptureEventRejection('windows_focus_helper', 'malformed')
     return
   }
   const ev = normalizeWindowsHelperEvent(parsed)

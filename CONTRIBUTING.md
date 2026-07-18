@@ -37,6 +37,10 @@ npm install
 npm start
 ```
 
+## Isolate each change
+
+Never work directly on `main`. Use a dedicated branch or worktree for each change, and keep unrelated local work out of the pull request. When work comes from Linear, include its identifier in the branch name (for example, `dev-161-delivery-pipeline`) so the pull request and issue statuses link automatically.
+
 ## Make a focused change
 
 1. Reproduce or inspect the current behavior.

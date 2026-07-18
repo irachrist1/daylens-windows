@@ -118,8 +118,28 @@ test('poll: a private window creates no app session and cuts the one before it',
     assert.equal(sessions.length, 1, 'only the pre-private session persists')
     assert.equal(sessions[0].ended_reason, 'incognito')
     assert.equal(sessions[0].end_time, BASE + 60_000)
-    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits_pending').get() as { n: number }).n, 0)
-    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM focus_events').get() as { n: number }).n, 0)
+    const visits = db.prepare('SELECT domain, url, page_title FROM website_visits').all() as
+      Array<{ domain: string; url: string; page_title: string | null }>
+    assert.equal(visits.length, 1, 'only the pre-private page may remain')
+    assert.equal(visits[0].domain, 'canva.com')
+    assert.doesNotMatch(JSON.stringify(visits), /Private|incognito/i)
+    assert.equal(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'website_visits_pending'",
+          )
+          .get() as { n: number }
+      ).n,
+      0,
+      'website_visits_pending must not exist',
+    )
+    // The canonical store carries exactly the normal session's activation and
+    // deactivation — the private window contributed nothing, not even a title.
+    const focusRows = db.prepare('SELECT event_type, window_title FROM focus_events ORDER BY id').all() as
+      Array<{ event_type: string; window_title: string | null }>
+    assert.deepEqual(focusRows.map((row) => row.event_type), ['app_activated', 'app_deactivated'])
+    assert.doesNotMatch(JSON.stringify(focusRows), /Private page/)
 
     // Still private on later polls: still no session.
     await poll(BASE + 90_000)
@@ -158,7 +178,6 @@ test('private Netflix activity produces neither a domain nor an app session', as
     assert.equal(getCurrentSession(), null)
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM app_sessions').get() as { n: number }).n, 0)
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits').get() as { n: number }).n, 0)
-    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM website_visits_pending').get() as { n: number }).n, 0)
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM focus_events').get() as { n: number }).n, 0)
   } finally {
     __setTrackingFsmTestHarness(null)

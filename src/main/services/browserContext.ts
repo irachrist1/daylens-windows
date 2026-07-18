@@ -4,13 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import type BetterSqlite from 'better-sqlite3'
-import { insertWebsiteVisit, insertPendingWebsiteVisit } from '../db/queries'
-import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
+import { insertWebsiteVisit } from '../db/queries'
+import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser, sanitizeUrlForPersistence } from '../lib/appIdentity'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
 import { getSettings } from './settings'
-import { decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings } from '@shared/trackingControls'
+import { decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings, type CaptureBlockReason } from '@shared/trackingControls'
 import { categoryForDomain } from '@shared/domainCategories'
 import {
   resolveBrowserApplication,
@@ -42,9 +42,9 @@ export interface ActiveBrowserTab {
   // tracked — no website visit, no app session — regardless of settings.
   isPrivate?: boolean
   // False when the browser could not report its window mode (Chromium forks
-  // that dropped the property, WebKit). Visits from such reads are quarantined
-  // until the browser's own history corroborates them — private windows never
-  // write history, so uncorroborated visits are deleted, never stored.
+  // that dropped the property, WebKit). Page title/URL are not persisted from
+  // these reads — only browser identity and timing (via app sessions) remain
+  // until the browser's own non-private history corroborates the page.
   modeKnown?: boolean
 }
 
@@ -53,7 +53,7 @@ export type ActiveBrowserTabReader = (snapshot: ActiveBrowserWindowSnapshot) => 
 export interface ActiveBrowserContextSample {
   isPrivate: boolean
   passivePresence: boolean
-  captureBlockReason?: 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
+  captureBlockReason?: CaptureBlockReason
 }
 
 interface InFlightBrowserContext {
@@ -272,7 +272,8 @@ function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string
     db.close()
 
     const row = rows.find((candidate) => titleMatchesWindow(candidate.title, windowTitle)) ?? rows[0]
-    return row ? { url: row.url, title: row.title ?? null } : null
+    // History is non-private by definition — treat as mode-verified.
+    return row ? { url: row.url, title: row.title ?? null, modeKnown: true } : null
   } catch {
     return null
   } finally {
@@ -297,7 +298,7 @@ function recentFirefoxTab(entry: BrowserEntry, now: number, windowTitle: string 
     db.close()
 
     const row = rows.find((candidate) => titleMatchesWindow(candidate.title, windowTitle)) ?? rows[0]
-    return row ? { url: row.url, title: row.title ?? null } : null
+    return row ? { url: row.url, title: row.title ?? null, modeKnown: true } : null
   } catch {
     return null
   } finally {
@@ -524,6 +525,20 @@ export class ActiveBrowserContextTracker {
       }
     }
 
+    // Unverifiable window mode: keep browser app timing (tracking sessions)
+    // but never accumulate page title/URL for persistence. History ingestion
+    // is the only path that may later attach page detail.
+    if (tab.modeKnown === false) {
+      this.flush(db, snapshot.capturedAt)
+      this.pending = null
+      this.inFlight = null
+      this.lastWindowTitle = snapshot.windowTitle ?? null
+      return {
+        isPrivate: false,
+        passivePresence: passivePresenceForDomain(domain, snapshot),
+      }
+    }
+
     this.lastWindowTitle = snapshot.windowTitle ?? null
 
     const normalizedUrl = normalizeUrlForStorage(tab.url)
@@ -539,6 +554,9 @@ export class ActiveBrowserContextTracker {
     this.inFlight = null
     this.pending = null
     if (!context) return false
+
+    // Defense in depth: unverifiable reads must never reach website_visits.
+    if (context.tab.modeKnown === false) return false
 
     const domain = extractDomain(context.tab.url)
     if (!domain) return false
@@ -558,11 +576,13 @@ export class ActiveBrowserContextTracker {
     if (durationSec < MIN_CONTEXT_SEC) return false
 
     const browserIdentity = resolveCanonicalBrowser(context.snapshot.bundleId)
+    const persistedUrl = sanitizeUrlForPersistence(context.tab.url)
+    if (!persistedUrl) return false
     const visit = {
       domain,
       pageTitle: context.tab.title,
-      url: context.tab.url,
-      normalizedUrl: context.normalizedUrl,
+      url: persistedUrl,
+      normalizedUrl: context.normalizedUrl ?? normalizeUrlForStorage(context.tab.url),
       pageKey: pageKeyForUrl(context.tab.url),
       visitTime: context.startedAt,
       visitTimeUs: BigInt(context.startedAt) * 1000n,
@@ -571,14 +591,6 @@ export class ActiveBrowserContextTracker {
       canonicalBrowserId: browserIdentity.canonicalBrowserId,
       browserProfileId: browserIdentity.browserProfileId,
       source: 'active_browser_context',
-    }
-
-    // A read without a window-mode signal cannot prove the window was not
-    // private: quarantine the visit until the browser's own history
-    // corroborates it (see reconcilePendingLiveVisits in browser.ts).
-    if (context.tab.modeKnown === false) {
-      insertPendingWebsiteVisit(db, visit)
-      return false
     }
 
     const inserted = insertWebsiteVisit(db, visit)

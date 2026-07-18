@@ -21,12 +21,11 @@ import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import type { SafariHistoryAccessStatus } from '@shared/types'
 import { getDb } from './database'
 import {
+  getBrowserHistoryCursor,
   insertWebsiteVisit,
-  listPendingWebsiteVisits,
-  deletePendingWebsiteVisits,
-  deleteExpiredPendingWebsiteVisits,
+  setBrowserHistoryCursor,
 } from '../db/queries'
-import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
+import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser, sanitizeUrlForPersistence } from '../lib/appIdentity'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { capture, captureRateLimited } from './analytics'
@@ -540,38 +539,42 @@ async function copyHistorySnapshot(historyPath: string, tmpDb: string, tmpWal: s
 
 // ─── Chromium poll ─────────────────────────────────────────────────────────────
 
-// Quarantined live visits (browserContext could not read the window mode)
-// are resolved against the browser's own history while its copy is open:
-// corroborated rows are promoted to website_visits, the rest deleted —
-// private windows never write browser history. The grace period gives the
-// browser time to flush its own history write; expiry bounds how long an
-// uncorroborable row can wait.
-const PENDING_VISIT_GRACE_MS = 90_000
-const PENDING_VISIT_MAX_AGE_MS = 86_400_000
+function loadBrowserCursor(db: ReturnType<typeof getDb>, bundleId: string): bigint | null {
+  return browserCursors.get(bundleId) ?? getBrowserHistoryCursor(db, bundleId)
+}
 
-function reconcilePendingLiveVisits(
+function persistBrowserCursor(
   db: ReturnType<typeof getDb>,
-  browserBundleId: string,
-  urlExistsInHistory: (url: string) => boolean,
+  bundleId: string,
+  cursor: bigint,
 ): void {
-  const canonicalBrowserId = resolveCanonicalBrowser(browserBundleId).canonicalBrowserId
-  const now = Date.now()
-  const resolved: number[] = []
-  for (const visit of listPendingWebsiteVisits(db, canonicalBrowserId)) {
-    if (now - visit.observedAt < PENDING_VISIT_GRACE_MS) continue
-    if (urlExistsInHistory(visit.url)) {
-      const inserted = insertWebsiteVisit(db, visit)
-      if (inserted) {
-        const date = localDateString(new Date(visit.visitTime))
-        invalidateProjectionScope('timeline', 'active_browser_context_recorded', { date })
-        invalidateProjectionScope('apps', 'active_browser_context_recorded', { canonicalAppId: visit.canonicalBrowserId })
-        invalidateProjectionScope('insights', 'active_browser_context_recorded', { date })
-      }
-    }
-    resolved.push(visit.id)
-  }
-  deletePendingWebsiteVisits(db, resolved)
-  deleteExpiredPendingWebsiteVisits(db, now - PENDING_VISIT_MAX_AGE_MS)
+  browserCursors.set(bundleId, cursor)
+  setBrowserHistoryCursor(db, bundleId, cursor)
+}
+
+function historyVisitInsert(
+  db: ReturnType<typeof getDb>,
+  browser: BrowserEntry,
+  processed: ProcessedHistoryRow,
+  source: string,
+): boolean {
+  const persistedUrl = sanitizeUrlForPersistence(processed.url)
+  if (!persistedUrl) return false
+  const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
+  return insertWebsiteVisit(db, {
+    domain: processed.domain,
+    pageTitle: processed.pageTitle,
+    url: persistedUrl,
+    normalizedUrl: normalizeUrlForStorage(processed.url),
+    pageKey: pageKeyForUrl(processed.url),
+    visitTime: processed.visitTime,
+    visitTimeUs: processed.visitTimeUs,
+    durationSec: processed.durationSec,
+    browserBundleId: browser.bundleId,
+    canonicalBrowserId: browserIdentity.canonicalBrowserId,
+    browserProfileId: browserIdentity.browserProfileId,
+    source,
+  })
 }
 
 async function pollChromium(
@@ -586,7 +589,7 @@ async function pollChromium(
   let inserted = 0
   let error: string | null = null
 
-  const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
+  const lastCursorUs = loadBrowserCursor(db, browser.bundleId)
   // If no cursor yet, start from 24h ago
   const fromUs: bigint = lastCursorUs ?? msToChromeUs(Date.now() - 86_400_000)
   const controls = trackingControlsStateFromSettings(getSettings())
@@ -621,22 +624,7 @@ async function pollChromium(
 
       for (const processed of processChromiumRows(rowsToProcess)) {
         if (!decideSiteCapture(controls, { domain: processed.domain }).capture) continue
-        const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
-        const didInsert = insertWebsiteVisit(db, {
-          domain:          processed.domain,
-          pageTitle:       processed.pageTitle,
-          url:             processed.url,
-          normalizedUrl:   normalizeUrlForStorage(processed.url),
-          pageKey:         pageKeyForUrl(processed.url),
-          visitTime:       processed.visitTime,
-          visitTimeUs:     processed.visitTimeUs,
-          durationSec:     processed.durationSec,
-          browserBundleId: browser.bundleId,
-          canonicalBrowserId: browserIdentity.canonicalBrowserId,
-          browserProfileId: browserIdentity.browserProfileId,
-          source:          'chrome_history',
-        })
-        if (didInsert) inserted++
+        if (historyVisitInsert(db, browser, processed, 'chrome_history')) inserted++
       }
 
       const lastRowUs = rows[rows.length - 1].visit_time
@@ -659,11 +647,8 @@ async function pollChromium(
       }
     }
 
-    // Persist the cursor so next poll continues from where we left off
-    browserCursors.set(browser.bundleId, cursor)
-
-    const urlLookup = histDb.prepare('SELECT 1 FROM urls WHERE url = ? LIMIT 1')
-    reconcilePendingLiveVisits(db, browser.bundleId, (url) => urlLookup.get(url) != null)
+    // Persist the cursor only after a successful read/write pass.
+    persistBrowserCursor(db, browser.bundleId, cursor)
 
     histDb.close()
   } catch (err) {
@@ -699,7 +684,7 @@ async function pollFirefox(
   let error: string | null = null
 
   // Firefox visit_date is Unix µs — not Chrome epoch µs
-  const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
+  const lastCursorUs = loadBrowserCursor(db, browser.bundleId)
   const fromUs: bigint = lastCursorUs ?? (BigInt(Date.now() - 86_400_000) * 1000n)
   const controls = trackingControlsStateFromSettings(getSettings())
 
@@ -731,22 +716,7 @@ async function pollFirefox(
 
       for (const processed of processFirefoxRows(rowsToProcess)) {
         if (!decideSiteCapture(controls, { domain: processed.domain }).capture) continue
-        const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
-        const didInsert = insertWebsiteVisit(db, {
-          domain:          processed.domain,
-          pageTitle:       processed.pageTitle,
-          url:             processed.url,
-          normalizedUrl:   normalizeUrlForStorage(processed.url),
-          pageKey:         pageKeyForUrl(processed.url),
-          visitTime:       processed.visitTime,
-          visitTimeUs:     processed.visitTimeUs,
-          durationSec:     processed.durationSec,
-          browserBundleId: browser.bundleId,
-          canonicalBrowserId: browserIdentity.canonicalBrowserId,
-          browserProfileId: browserIdentity.browserProfileId,
-          source:          'firefox_history',
-        })
-        if (didInsert) inserted++
+        if (historyVisitInsert(db, browser, processed, 'firefox_history')) inserted++
       }
 
       const lastRowUs = rows[rows.length - 1].visit_date
@@ -761,7 +731,7 @@ async function pollFirefox(
       }
     }
 
-    browserCursors.set(browser.bundleId, cursor)
+    persistBrowserCursor(db, browser.bundleId, cursor)
     histDb.close()
   } catch (err) {
     error = String(err)
@@ -792,7 +762,7 @@ async function pollWebKit(
   let inserted = 0
   let error: string | null = null
 
-  const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
+  const lastCursorUs = loadBrowserCursor(db, browser.bundleId)
   const fromMs = lastCursorUs ? Number(lastCursorUs / 1_000n) : Date.now() - 86_400_000
   const fromWebKitSeconds = fromMs / 1_000 - WEBKIT_EPOCH_OFFSET_SEC
 
@@ -814,36 +784,18 @@ async function pollWebKit(
       LIMIT 5000
     `).all(fromWebKitSeconds) as WebKitHistoryRow[]
 
-    const urlLookup = histDb.prepare('SELECT 1 FROM history_items WHERE url = ? LIMIT 1')
-    reconcilePendingLiveVisits(db, browser.bundleId, (url) => urlLookup.get(url) != null)
-
     histDb.close()
 
     const controls = trackingControlsStateFromSettings(getSettings())
     for (const processed of processWebKitRows(rows)) {
       if (!decideSiteCapture(controls, { domain: processed.domain }).capture) continue
-      const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
-      const didInsert = insertWebsiteVisit(db, {
-        domain: processed.domain,
-        pageTitle: processed.pageTitle,
-        url: processed.url,
-        normalizedUrl: normalizeUrlForStorage(processed.url),
-        pageKey: pageKeyForUrl(processed.url),
-        visitTime: processed.visitTime,
-        visitTimeUs: processed.visitTimeUs,
-        durationSec: processed.durationSec,
-        browserBundleId: browser.bundleId,
-        canonicalBrowserId: browserIdentity.canonicalBrowserId,
-        browserProfileId: browserIdentity.browserProfileId,
-        source: 'webkit_history',
-      })
-      if (didInsert) inserted++
+      if (historyVisitInsert(db, browser, processed, 'webkit_history')) inserted++
     }
 
     const last = rows[rows.length - 1]
     if (last) {
       const lastMs = Math.round((last.visit_time + WEBKIT_EPOCH_OFFSET_SEC) * 1_000)
-      browserCursors.set(browser.bundleId, BigInt(lastMs) * 1_000n)
+      persistBrowserCursor(db, browser.bundleId, BigInt(lastMs) * 1_000n)
     }
   } catch (err) {
     error = String(err)

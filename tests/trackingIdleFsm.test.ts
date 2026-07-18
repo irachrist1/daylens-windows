@@ -71,6 +71,7 @@ function makeRig(activeWindow = () => WIN): Rig {
   const flushes: FlushInfo[] = []
   const clock = { now: BASE, lastInput: BASE }
   __setTrackingFsmTestHarness({
+    platform: 'darwin',
     now: () => clock.now,
     // Idle seconds = wall-clock time since the last real input, exactly like the
     // OS idle timer the FSM reads in production.

@@ -11,6 +11,7 @@ import {
 } from '../src/shared/trackingControls.ts'
 
 const base: TrackingControlsState = {
+  consented: true,
   enabled: false,
   paused: false,
   excludedApps: [],
@@ -108,5 +109,6 @@ test('the structured private-window signal blocks capture even without a title m
 
 test('trackingControlsStateFromSettings defaults to opt-in-off with incognito-skip on', () => {
   const s = trackingControlsStateFromSettings({})
-  assert.deepEqual(s, { enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true })
+  // consented defaults FALSE — absent consent means capture refuses everything.
+  assert.deepEqual(s, { consented: false, enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true })
 })

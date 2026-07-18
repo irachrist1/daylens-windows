@@ -4,10 +4,10 @@ import { shouldCaptureFocusEvent } from '../src/main/services/focusCapture.ts'
 import type { TrackingControlsState } from '../src/shared/trackingControls.ts'
 
 const off: TrackingControlsState = {
-  enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true,
+  consented: true, enabled: false, paused: false, excludedApps: [], excludedSites: [], skipIncognito: true,
 }
 const on: TrackingControlsState = {
-  enabled: true, paused: false,
+  consented: true, enabled: true, paused: false,
   excludedApps: ['app.zen-browser.zen'], excludedSites: ['private.example.com'], skipIncognito: true,
 }
 

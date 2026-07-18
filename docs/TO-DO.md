@@ -79,7 +79,7 @@ Each item states the evidence required and what completes it. Items marked **(de
 
 ## Implementation blocked by later V2 production code
 
-- [ ] Complete [real-day Timeline, Apps, and AI reconciliation](tickets/real-day-timeline-apps-reconciliation.md) after the capture/evidence, Timeline, and Apps specifications are accepted. The private 2026-07-13 day stays a failing benchmark until then; it is reviewed and accepted only at that ticket's exit, when Timeline, Apps, meetings, and the agent agree.
+- [ ] Complete [real-day Timeline, Apps, and AI reconciliation](tickets/real-day-timeline-apps-reconciliation.md) after the capture/evidence, Timeline, and Apps specifications are accepted. The private 2026-07-13, 2026-07-16, and 2026-07-17 days stay failing benchmarks until then; they are reviewed and accepted only at that ticket's exit, when meetings are recognized, labels carry my voice, and Timeline, Apps, meetings, and the agent agree.
 - [ ] Complete [canonical deletion ownership](tickets/canonical-deletion-ownership.md) after the organized-fact model is accepted.
 - [ ] Complete the [encrypted sync terminal foundation](tickets/encrypted-sync-terminal-foundation.md) after the desktop fact model and browser-encryption decision.
 - [ ] Complete the [screen-context terminal foundation](tickets/screen-context-terminal-foundation.md) after the experiment specification and extraction runtime are accepted.

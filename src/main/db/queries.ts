@@ -21,7 +21,14 @@ import type {
 } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
 import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/localDate'
-import { resolveCanonicalApp, type CanonicalAppIdentity } from '../lib/appIdentity'
+import {
+  normalizeUrlForStorage,
+  pageKeyForUrl,
+  resolveCanonicalApp,
+  resolveCanonicalBrowser,
+  sanitizeUrlForPersistence,
+  type CanonicalAppIdentity,
+} from '../lib/appIdentity'
 import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
@@ -2120,6 +2127,17 @@ export function insertWebsiteVisit(
   db: Database.Database,
   visit: WebsiteVisitInsert,
 ): boolean {
+  const url = sanitizeUrlForPersistence(visit.url)
+  if (!url) return false
+  const normalizedUrl = visit.normalizedUrl ?? normalizeUrlForStorage(visit.url)
+  const pageKey = visit.pageKey ?? pageKeyForUrl(visit.url)
+  const durationSec = clipWebsiteVisitDurationToBrowserForeground(db, {
+    visitTime: visit.visitTime,
+    durationSec: visit.durationSec,
+    browserBundleId: visit.browserBundleId,
+    canonicalBrowserId: visit.canonicalBrowserId,
+  })
+
   const result = db.prepare(`
     INSERT OR IGNORE INTO website_visits
       (
@@ -2140,97 +2158,105 @@ export function insertWebsiteVisit(
   `).run(
     visit.domain,
     visit.pageTitle,
-    visit.url,
+    url,
     visit.visitTime,
     visit.visitTimeUs,
-    visit.durationSec,
+    durationSec,
     visit.browserBundleId,
     visit.canonicalBrowserId,
     visit.browserProfileId,
-    visit.normalizedUrl,
-    visit.pageKey,
+    normalizedUrl,
+    pageKey,
     visit.source,
   )
   return result.changes > 0
 }
 
-// Live tab reads from browsers that cannot report their window mode land here
-// instead of website_visits. The history poll promotes rows the browser's own
-// history corroborates and deletes the rest — private windows never write
-// browser history, so uncorroborated rows are private-window visits.
+/** Clip page duration to overlapping foreground browser time when any exists. */
+export function clipWebsiteVisitDurationToBrowserForeground(
+  db: Database.Database,
+  visit: {
+    visitTime: number
+    durationSec: number
+    browserBundleId: string
+    canonicalBrowserId: string | null
+  },
+): number {
+  if (visit.durationSec <= 0) return 0
+  const visitEnd = visit.visitTime + visit.durationSec * 1000
+  const visitCanonical =
+    visit.canonicalBrowserId ?? resolveCanonicalBrowser(visit.browserBundleId).canonicalBrowserId
+  const visitBundleBase = visit.browserBundleId.split(':', 1)[0]?.toLowerCase() ?? ''
 
-export interface PendingWebsiteVisit extends WebsiteVisitInsert {
-  id: number
-  observedAt: number
+  let rows: Array<{
+    start_time: number
+    end_time: number | null
+    duration_sec: number
+    bundle_id: string | null
+    canonical_app_id: string | null
+  }>
+  try {
+    rows = db.prepare(`
+      SELECT start_time, end_time, duration_sec, bundle_id, canonical_app_id
+      FROM app_sessions
+      WHERE start_time < ?
+        AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
+    `).all(visitEnd, visit.visitTime) as typeof rows
+  } catch {
+    return visit.durationSec
+  }
+
+  let overlapMs = 0
+  for (const row of rows) {
+    const bundle = (row.bundle_id ?? '').toLowerCase()
+    const bundleBase = bundle.split(':', 1)[0] ?? ''
+    const canonical = (row.canonical_app_id ?? '').toLowerCase()
+    const sameBrowser =
+      (visitCanonical != null && canonical !== '' && canonical === visitCanonical.toLowerCase())
+      || (bundleBase !== '' && bundleBase === visitBundleBase)
+      || bundle === visit.browserBundleId.toLowerCase()
+    if (!sameBrowser) continue
+
+    const sessionEnd = row.end_time ?? row.start_time + row.duration_sec * 1000
+    const overlapStart = Math.max(visit.visitTime, row.start_time)
+    const overlapEnd = Math.min(visitEnd, sessionEnd)
+    if (overlapEnd > overlapStart) overlapMs += overlapEnd - overlapStart
+  }
+
+  // No foreground overlap: keep the source duration for retrieval; active-time
+  // reconciliation still refuses to credit it against browser ownership.
+  if (overlapMs <= 0) return visit.durationSec
+  return Math.max(1, Math.round(overlapMs / 1000))
 }
 
-export function insertPendingWebsiteVisit(
+export function getBrowserHistoryCursor(
   db: Database.Database,
-  visit: WebsiteVisitInsert,
-  observedAt = Date.now(),
+  browserBundleId: string,
+): bigint | null {
+  const row = db.prepare(`
+    SELECT cursor_us FROM browser_history_cursors WHERE browser_bundle_id = ?
+  `).get(browserBundleId) as { cursor_us: string } | undefined
+  if (!row?.cursor_us) return null
+  try {
+    return BigInt(row.cursor_us)
+  } catch {
+    return null
+  }
+}
+
+export function setBrowserHistoryCursor(
+  db: Database.Database,
+  browserBundleId: string,
+  cursorUs: bigint,
+  updatedAt = Date.now(),
 ): void {
   db.prepare(`
-    INSERT INTO website_visits_pending
-      (domain, page_title, url, normalized_url, page_key, visit_time,
-       visit_time_us, duration_sec, browser_bundle_id, canonical_browser_id,
-       browser_profile_id, observed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    visit.domain,
-    visit.pageTitle,
-    visit.url,
-    visit.normalizedUrl,
-    visit.pageKey,
-    visit.visitTime,
-    visit.visitTimeUs,
-    visit.durationSec,
-    visit.browserBundleId,
-    visit.canonicalBrowserId,
-    visit.browserProfileId,
-    observedAt,
-  )
-}
-
-export function listPendingWebsiteVisits(
-  db: Database.Database,
-  canonicalBrowserId: string | null,
-  limit = 200,
-): PendingWebsiteVisit[] {
-  const rows = db.prepare(`
-    SELECT id, domain, page_title, url, normalized_url, page_key, visit_time,
-           visit_time_us, duration_sec, browser_bundle_id, canonical_browser_id,
-           browser_profile_id, observed_at
-    FROM website_visits_pending
-    WHERE canonical_browser_id IS ?
-    ORDER BY observed_at ASC
-    LIMIT ?
-  `).all(canonicalBrowserId, limit) as Array<Record<string, unknown>>
-  return rows.map((row) => ({
-    id: Number(row.id),
-    domain: String(row.domain),
-    pageTitle: (row.page_title as string | null) ?? null,
-    url: String(row.url),
-    normalizedUrl: (row.normalized_url as string | null) ?? null,
-    pageKey: (row.page_key as string | null) ?? null,
-    visitTime: Number(row.visit_time),
-    visitTimeUs: BigInt(row.visit_time_us as number | bigint),
-    durationSec: Number(row.duration_sec),
-    browserBundleId: String(row.browser_bundle_id),
-    canonicalBrowserId: (row.canonical_browser_id as string | null) ?? null,
-    browserProfileId: (row.browser_profile_id as string | null) ?? null,
-    source: 'active_browser_context',
-    observedAt: Number(row.observed_at),
-  }))
-}
-
-export function deletePendingWebsiteVisits(db: Database.Database, ids: number[]): void {
-  if (ids.length === 0) return
-  const placeholders = ids.map(() => '?').join(',')
-  db.prepare(`DELETE FROM website_visits_pending WHERE id IN (${placeholders})`).run(...ids)
-}
-
-export function deleteExpiredPendingWebsiteVisits(db: Database.Database, olderThanMs: number): number {
-  return db.prepare('DELETE FROM website_visits_pending WHERE observed_at < ?').run(olderThanMs).changes
+    INSERT INTO browser_history_cursors (browser_bundle_id, cursor_us, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(browser_bundle_id) DO UPDATE SET
+      cursor_us = excluded.cursor_us,
+      updated_at = excluded.updated_at
+  `).run(browserBundleId, cursorUs.toString(), updatedAt)
 }
 
 

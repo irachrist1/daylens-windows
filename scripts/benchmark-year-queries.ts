@@ -74,7 +74,7 @@ function seed(db: Database.Database, startMs: number): void {
   `)
   const insertFocus = db.prepare(`
     INSERT INTO focus_events (ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid, window_title, url, page_title, source, confidence, platform, schema_ver)
-    VALUES (?, ?, 'app_activated', ?, ?, 501, ?, NULL, NULL, 'nsworkspace_event', 'observed', 'darwin', 1)
+    VALUES (?, ?, 'app_activated', ?, ?, 501, ?, NULL, NULL, 'nsworkspace_event', 'observed', 'darwin', 2)
   `)
   const insertVisit = db.prepare(`
     INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id, canonical_browser_id)

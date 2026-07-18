@@ -222,6 +222,13 @@ test('recovered live snapshot splits at local midnight', () => {
       ) VALUES (1, 'company.thebrowser.dia', 'Dia', 'Some page', 'Dia',
         'dia', 'company.thebrowser.dia', 'foreground_poll', 'browsing', ?, ?)
     `).run(start, lastSeen)
+    db.prepare(`
+      INSERT INTO focus_events (
+        ts_ms, mono_ns, event_type, app_bundle_id, app_name, window_title,
+        source, confidence, platform, schema_ver
+      ) VALUES (?, 1, 'app_activated', 'company.thebrowser.dia', 'Dia', 'Some page',
+        'foreground_poll', 'observed', 'darwin', 2)
+    `).run(start)
 
     __recoverPersistedLiveSnapshotForTest()
 
@@ -235,6 +242,12 @@ test('recovered live snapshot splits at local midnight', () => {
     assert.equal(rows[0].end_time, midnight)
     assert.equal(rows[1].start_time, midnight)
     assert.equal(rows[1].end_time, lastSeen)
+
+    const deactivations = db.prepare(`
+      SELECT ts_ms FROM focus_events
+      WHERE source = 'foreground_poll' AND event_type = 'app_deactivated'
+    `).all() as Array<{ ts_ms: number }>
+    assert.deepEqual(deactivations, [{ ts_ms: lastSeen }])
 
     // Snapshot is consumed either way.
     const snapshotCount = db.prepare('SELECT COUNT(*) AS n FROM live_app_session_snapshot').get() as { n: number }

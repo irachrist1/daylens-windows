@@ -7,7 +7,8 @@ import {
   setApiKey,
   clearApiKey,
 } from '../services/settings'
-import { capture, captureTrackingPauseTransition } from '../services/analytics'
+import { capture } from '../services/analytics'
+import { recordTrackingPauseTransition } from '../services/tracking'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
@@ -16,7 +17,6 @@ import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings, EnrichmentSourcesState } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from '../services/database'
-import { recordActivityStateEvent } from '../db/queries'
 import { resetProviderBreaker } from '../services/providerCircuitBreaker'
 import { assertRealDayExternalAccessAllowed, isRealDayHarness } from '../lib/realDayHarness'
 
@@ -54,24 +54,14 @@ export function registerSettingsHandlers(): void {
       JSON.stringify(previous[key as keyof AppSettings]) !== JSON.stringify(partial[key as keyof AppSettings])
     ))
     const changedKeys = sanitizeSettingsChangedKeys(rawChangedKeys)
+    const trackingPauseChanged = 'trackingPaused' in partial
+      && Boolean(previous.trackingPaused) !== Boolean(partial.trackingPaused)
+    const trackingPauseAt = trackingPauseChanged ? Date.now() : null
 
     await setSettings(partial)
 
-    // A pause/resume of tracking is an activity-state fact the timeline needs:
-    // the paused span must classify as "Tracking paused" on the grid, not as
-    // an unexplained untracked gap (timeline gap reasons, Jul 2, 2026).
-    if ('trackingPaused' in partial && Boolean(previous.trackingPaused) !== Boolean(partial.trackingPaused)) {
-      try {
-        recordActivityStateEvent(getDb(), {
-          eventTs: Date.now(),
-          eventType: partial.trackingPaused ? 'tracking_paused' : 'tracking_resumed',
-          source: 'settings',
-        })
-      } catch {
-        // The event is best-effort telemetry for gap labeling; the pause
-        // itself is already persisted in settings.
-      }
-      captureTrackingPauseTransition(Boolean(partial.trackingPaused), 'user')
+    if (trackingPauseAt !== null) {
+      recordTrackingPauseTransition(Boolean(partial.trackingPaused), 'settings', trackingPauseAt)
     }
 
     if (!isRealDayHarness() && 'launchOnLogin' in partial && app.isPackaged) {

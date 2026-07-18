@@ -25,7 +25,7 @@ function seed(db: Database.Database): void {
       ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
       window_title, url, page_title, source, confidence, platform, schema_ver
     ) VALUES (?, ?, 'tab_changed', 'app.zen-browser.zen', 'Zen', 42, 'Private work',
-      'https://private.example.com/plan', 'Private plan', 'apple_events_tab', 'observed', 'darwin', 1)
+      'https://private.example.com/plan', 'Private plan', 'apple_events_tab', 'observed', 'darwin', 2)
   `).run(start, start)
   db.prepare(`
     INSERT INTO website_visits (
@@ -120,7 +120,7 @@ test('deleting a page removes every visit and clears generated recaps', () => {
       window_title, url, page_title, source, confidence, platform, schema_ver
     ) VALUES (?, 1, 'tab_changed', 'app.zen-browser.zen', 'Zen', 1,
       'Private plan', 'https://private.example.com/plan?utm_source=email',
-      'Private plan', 'apple_events_tab', 'observed', 'darwin', 1)
+      'Private plan', 'apple_events_tab', 'observed', 'darwin', 2)
   `).run(later + 1_000)
   db.prepare(`
     INSERT INTO ai_surface_summaries (

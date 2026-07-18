@@ -18,10 +18,12 @@ import {
   isFocusEventConfidence,
   isFocusEventType,
   isMacFocusEventSource,
+  isSupportedFocusEventSchemaVersion,
   sourceAcceptsFocusEventType,
   type FocusEvent,
   type MacFocusEventSource,
 } from '../core/evidence/focusEvent'
+import { recordCaptureEventRejection } from '../lib/captureRejections'
 
 type HelperEvent = FocusEvent<MacFocusEventSource>
 
@@ -52,33 +54,38 @@ function isNullableNumber(value: unknown): value is number | null | undefined {
   return value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value))
 }
 
+function reject(reason: 'malformed' | 'unsupported_schema_version'): null {
+  recordCaptureEventRejection('mac_focus_helper', reason)
+  return null
+}
+
 function normalizeHelperEvent(raw: unknown): HelperEvent | null {
-  if (!isObject(raw)) return null
+  if (!isObject(raw)) return reject('malformed')
   const eventType = raw.event_type
   const source = raw.source
   const confidence = raw.confidence
   const schemaVersion = raw.schema_ver ?? FOCUS_EVENT_SCHEMA_VERSION
-  if (typeof raw.ts_ms !== 'number' || !Number.isFinite(raw.ts_ms)) return null
-  if (typeof raw.mono_ns !== 'number' || !Number.isFinite(raw.mono_ns)) return null
-  if (!isFocusEventType(eventType)) return null
-  if (!isMacFocusEventSource(source)) return null
-  if (!isFocusEventConfidence(confidence)) return null
-  if (schemaVersion !== FOCUS_EVENT_SCHEMA_VERSION) return null
-  if (!isNullableString(raw.app_bundle_id)) return null
-  if (!isNullableString(raw.app_name)) return null
-  if (!isNullableNumber(raw.pid)) return null
-  if (!isNullableString(raw.window_title)) return null
-  if (!isNullableString(raw.url)) return null
-  if (!isNullableString(raw.page_title)) return null
-  if (!isNullableString(raw.platform)) return null
+  if (!isSupportedFocusEventSchemaVersion(schemaVersion)) return reject('unsupported_schema_version')
+  if (typeof raw.ts_ms !== 'number' || !Number.isFinite(raw.ts_ms)) return reject('malformed')
+  if (typeof raw.mono_ns !== 'number' || !Number.isFinite(raw.mono_ns)) return reject('malformed')
+  if (!isFocusEventType(eventType)) return reject('malformed')
+  if (!isMacFocusEventSource(source)) return reject('malformed')
+  if (!isFocusEventConfidence(confidence)) return reject('malformed')
+  if (!isNullableString(raw.app_bundle_id)) return reject('malformed')
+  if (!isNullableString(raw.app_name)) return reject('malformed')
+  if (!isNullableNumber(raw.pid)) return reject('malformed')
+  if (!isNullableString(raw.window_title)) return reject('malformed')
+  if (!isNullableString(raw.url)) return reject('malformed')
+  if (!isNullableString(raw.page_title)) return reject('malformed')
+  if (!isNullableString(raw.platform)) return reject('malformed')
 
   const url = raw.url ?? null
   const pageTitle = raw.page_title ?? null
 
-  if (!sourceAcceptsFocusEventType(source, eventType)) return null
-  if (confidence === 'unknown' && (url !== null || pageTitle !== null)) return null
-  if (source === 'apple_events_tab' && confidence === 'observed' && !url) return null
-  if (source === 'nsworkspace_event' && (url !== null || pageTitle !== null)) return null
+  if (!sourceAcceptsFocusEventType(source, eventType)) return reject('malformed')
+  if (confidence === 'unknown' && (url !== null || pageTitle !== null)) return reject('malformed')
+  if (source === 'apple_events_tab' && confidence === 'observed' && !url) return reject('malformed')
+  if (source === 'nsworkspace_event' && (url !== null || pageTitle !== null)) return reject('malformed')
 
   return {
     ts_ms: raw.ts_ms,
@@ -153,6 +160,9 @@ export function shouldCaptureFocusEvent(
   ev: Pick<HelperEvent, 'app_bundle_id' | 'app_name' | 'window_title' | 'url'>,
   controls: TrackingControlsState,
 ): boolean {
+  // Consent gates every event unconditionally — including machine-state
+  // events with no app or url, which the per-candidate gates below never see.
+  if (!controls.consented) return false
   // Private/incognito windows are never tracked, regardless of any setting.
   // The gates below also check this, but the title check runs here first so
   // a private tab URL never even reaches the event queue.
@@ -197,6 +207,7 @@ function handleLine(line: string): void {
   try {
     parsed = JSON.parse(trimmed)
   } catch {
+    recordCaptureEventRejection('mac_focus_helper', 'malformed')
     return
   }
   const ev = normalizeHelperEvent(parsed)

@@ -97,6 +97,7 @@ import { capture, captureException, initAnalytics, shutdown } from './services/a
 import { getBillingAccess } from './services/billing'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
+import { registerErrorHandlers } from './ipc/errors.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
 import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
@@ -120,7 +121,7 @@ import { prewarmBrowserRegistry } from './services/browserRegistry'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
-import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
+import { cancelPendingAutoInstall, getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
 import { setDailySummaryNotificationWindow, startDailySummaryNotifier, triggerDailySummaryChecks } from './services/dailySummaryNotifier'
 import { fireTestDailyNotification } from './services/notificationHarness'
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
@@ -128,6 +129,7 @@ import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { startExternalSignalCollection } from './services/externalSignals'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
+import { performUninstallCleanup } from './services/uninstallCleanup'
 import { detectCLITools } from './jobs/aiService'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
@@ -135,6 +137,7 @@ import { shouldStartTrackingForSettings } from './lib/onboardingState'
 import { assertIsolatedRealDayUserData, isRealDayHarness } from './lib/realDayHarness'
 import { resolvePreloadPath } from './lib/preloadPath'
 import { IPC } from '@shared/types'
+import { grantedCaptureConsent, declinedCaptureConsent } from '@shared/captureConsent'
 import {
   APP_DISPLAY_NAME,
   chooseUserDataPath,
@@ -142,6 +145,7 @@ import {
   isHealthyUserDataState,
   selectLatestRestorableBackup,
 } from './services/userData'
+import { checkDatabaseIntegrity, recoverCorruptDatabase } from './services/databaseRecovery'
 
 const APP_USER_MODEL_ID = 'com.daylens.desktop'
 const SMOKE_TEST = process.env.DAYLENS_SMOKE_TEST === '1'
@@ -625,6 +629,68 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
   }
 }
 
+// Corruption gate for the main database. Must run after recoverFromUpdateIfNeeded()
+// and before initDb(): a corrupt file previously rethrew out of initDb() straight
+// into app.quit(), which made corruption an unrecoverable crash loop. Returns
+// false only when the person chose to quit instead of recovering.
+function resolveCorruptDatabaseBeforeOpen(): boolean {
+  const dbPath = path.join(app.getPath('userData'), 'daylens.sqlite')
+  const integrity = checkDatabaseIntegrity(dbPath)
+  if (integrity.ok) return true
+
+  console.error('[db] integrity check failed:', integrity.reason)
+  if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
+    capture(ANALYTICS_EVENT.DATABASE_HEALTH, {
+      stage: 'integrity_check',
+      status: 'corrupt',
+      surface: 'database',
+    })
+  }
+
+  const backupDir = SMOKE_TEST || REAL_DAY_HARNESS
+    ? null
+    : selectLatestRestorableBackup(path.join(app.getPath('userData'), 'pre-update-backups'))
+
+  // Harness runs have no one to ask — recover to a fresh database so the run
+  // still produces a report instead of dying on the old crash loop.
+  let choice: 'restore' | 'fresh' | 'quit' = 'fresh'
+  if (!SMOKE_TEST && !REAL_DAY_HARNESS) {
+    const buttons = backupDir
+      ? ['Restore from backup', 'Start fresh', 'Quit']
+      : ['Start fresh', 'Quit']
+    const detail = backupDir
+      ? 'Your local database is damaged and cannot be opened. You can restore the most recent backup, or start with a fresh database. The damaged file is kept next to the database either way.'
+      : 'Your local database is damaged and cannot be opened, and no restorable backup was found. You can start with a fresh database. The damaged file is kept next to the database.'
+    const response = dialog.showMessageBoxSync({
+      type: 'error',
+      title: `${APP_DISPLAY_NAME} database problem`,
+      message: 'Your Daylens database needs repair',
+      detail,
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+    })
+    const picked = buttons[response]
+    choice = picked === 'Restore from backup' ? 'restore' : picked === 'Start fresh' ? 'fresh' : 'quit'
+  }
+
+  if (choice === 'quit') return false
+
+  const recovery = recoverCorruptDatabase(dbPath, backupDir, choice)
+  console.log(
+    `[db] corrupt database recovered via ${recovery.outcome}`,
+    recovery.quarantinedTo ? `(damaged file kept at ${recovery.quarantinedTo})` : '',
+  )
+  if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
+    capture(ANALYTICS_EVENT.DATABASE_HEALTH, {
+      stage: 'integrity_check',
+      status: `recovered_${recovery.outcome}`,
+      surface: 'database',
+    })
+  }
+  return true
+}
+
 async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
   if (deferredIntegrationStartup) {
     clearTimeout(deferredIntegrationStartup)
@@ -904,9 +970,87 @@ ipcMain.handle(IPC.APP.RELAUNCH, async () => {
   app.exit(0)
 })
 
+ipcMain.handle(IPC.APP.RESET_AND_UNINSTALL, async (event): Promise<{ started: boolean }> => {
+  if (REAL_DAY_HARNESS) return { started: false }
+  const window = BrowserWindow.fromWebContents(event.sender)
+  const ask = async (options: Electron.MessageBoxOptions) => (
+    window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
+  )
+
+  const { response } = await ask({
+    type: 'warning',
+    title: 'Reset and uninstall Daylens',
+    message: 'Remove Daylens from this computer?',
+    detail: 'Daylens will stop launching at login and quit. Choose what happens to your local data — the timeline database and settings on this machine.',
+    buttons: ['Delete local data', 'Keep local data', 'Cancel'],
+    defaultId: 1,
+    cancelId: 2,
+  })
+  if (response === 2) return { started: false }
+  const deleteLocalData = response === 0
+
+  if (deleteLocalData) {
+    const confirm = await ask({
+      type: 'warning',
+      title: 'Delete local data',
+      message: 'Permanently delete your local Daylens data?',
+      detail: 'Your timeline database, settings, and stored API keys on this computer will be deleted. This cannot be undone.',
+      buttons: ['Delete', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    if (confirm.response !== 0) return { started: false }
+  }
+
+  isQuitting = true
+  cancelPendingAutoInstall()
+  await shutdownApp()
+  await performUninstallCleanup({ deleteLocalData })
+  app.exit(0)
+  return { started: true }
+})
+
 ipcMain.handle(IPC.APP.COMPLETE_ONBOARDING, async () => {
+  // Completing onboarding through any flow (including legacy paths that never
+  // hit the explicit consent call) is a consent act — record it rather than
+  // leaving a completed install gated off. Explicit decisions are never
+  // overwritten here.
+  if (getSettings().captureConsent.status === 'unset') {
+    await setSettings({ captureConsent: grantedCaptureConsent(Date.now()) })
+  }
   ensureTray()
   startBackgroundServices()
+})
+
+// The explicit capture-consent decision. Granting starts capture immediately —
+// including mid-onboarding, where the proof step needs real capture before
+// completion. Declining stops every capture adapter and leaves the rest of the
+// app running; the per-sample consent gate in @shared/trackingControls blocks
+// any straggler in between.
+ipcMain.handle(IPC.APP.SET_CAPTURE_CONSENT, async (_e, granted: unknown) => {
+  const decision = granted === true
+  await setSettings({
+    captureConsent: decision ? grantedCaptureConsent(Date.now()) : declinedCaptureConsent(Date.now()),
+  })
+  if (decision) {
+    startBackgroundServices()
+    // Re-grant after services already started once (decline→grant, policy
+    // re-consent): startBackgroundServices is a one-shot, so restart the
+    // capture adapters directly — each start is idempotent.
+    if (backgroundServicesStarted && !SMOKE_TEST && !REAL_DAY_HARNESS && shouldStartTrackingForSettings(getSettings())) {
+      startTracking()
+      if (process.platform === 'darwin') startFocusCapture()
+      if (process.platform === 'win32') startWindowsFocusCapture()
+      startBrowserTracking()
+    }
+  } else {
+    stopTracking()
+    stopFocusCapture()
+    stopWindowsFocusCapture()
+    stopBrowserTracking()
+    stopProcessMonitor()
+  }
+  return getSettings().captureConsent
 })
 
 // The friendly computer name ("Christian's MacBook Pro") used to seed the
@@ -992,6 +1136,12 @@ app.whenReady()
     // backup if NSIS wiped userData during the update, before electron-store reads it.
     if (!REAL_DAY_HARNESS) await recoverFromUpdateIfNeeded()
     await initSettings()
+    // The smoke and real-day harnesses exist to exercise capture itself, on
+    // isolated profiles, run deliberately by an operator — that run IS the
+    // consent. Seed it so the consent gate doesn't blind the harness.
+    if (SMOKE_TEST || REAL_DAY_HARNESS) {
+      await setSettings({ captureConsent: grantedCaptureConsent(Date.now()) })
+    }
     if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
       initNotificationPermissions()
       void detectCLITools().catch(() => undefined)
@@ -1037,6 +1187,10 @@ app.whenReady()
       })
     }
 
+    if (!resolveCorruptDatabaseBeforeOpen()) {
+      app.quit()
+      return
+    }
     initDb()
 
     // AI-telemetry retention: deferred first pass after launch, then
@@ -1048,6 +1202,7 @@ app.whenReady()
     // once tracking is enabled; diagnostics requests reuse the same instance.
 
     registerDbHandlers()
+    registerErrorHandlers()
     registerDebugHandlers()
     registerFocusHandlers()
     registerAIHandlers()

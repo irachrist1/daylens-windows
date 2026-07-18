@@ -122,15 +122,19 @@ export function describeUserDataDirectory(dirPath: string): UserDataDirectorySta
   }
 }
 
-export function chooseUserDataPath(appDataPath: string, platform: NodeJS.Platform): string {
+export function listUserDataCandidatePaths(appDataPath: string, platform: NodeJS.Platform): string[] {
   const { preferredDirName, legacyDirNames } = getUserDataDirNames(platform)
-  const preferredPath = path.join(appDataPath, preferredDirName)
   const candidatePaths = [
-    preferredPath,
+    path.join(appDataPath, preferredDirName),
     ...legacyDirNames.map((dirName) => path.join(appDataPath, dirName)),
   ]
+  return candidatePaths.filter((candidate, index) => candidatePaths.indexOf(candidate) === index)
+}
 
-  const uniqueCandidatePaths = candidatePaths.filter((candidate, index) => candidatePaths.indexOf(candidate) === index)
+export function chooseUserDataPath(appDataPath: string, platform: NodeJS.Platform): string {
+  const { preferredDirName } = getUserDataDirNames(platform)
+  const preferredPath = path.join(appDataPath, preferredDirName)
+  const uniqueCandidatePaths = listUserDataCandidatePaths(appDataPath, platform)
   const states = uniqueCandidatePaths.map((candidate) => describeUserDataDirectory(candidate))
   const meaningfulStates = states.filter((state) => state.hasMeaningfulData)
 

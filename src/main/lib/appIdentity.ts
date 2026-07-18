@@ -168,16 +168,23 @@ export function resolveCanonicalBrowser(browserBundleId: string | null | undefin
   }
 }
 
-export function normalizeUrlForStorage(rawUrl: string | null | undefined): string | null {
-  if (!rawUrl) return null
+// Query keys that must never be persisted. Tracking params are stripped for
+// identity; secrets are stripped before any URL lands in storage.
+const TRACKING_QUERY_KEY_RE = /^(utm_|fbclid$|gclid$|mc_cid$|mc_eid$)/i
+const SENSITIVE_QUERY_KEY_RE =
+  /^(?:access_token|id_token|refresh_token|auth_token|token|session(?:id|_id)?|sid|code|state|password|passwd|pwd|secret|client_secret|api[_-]?key|apikey|jwt|auth|authorization|oauth[_-]?token)$/i
 
+function rewriteUrlSearch(
+  rawUrl: string,
+  shouldDrop: (key: string) => boolean,
+): string | null {
   try {
     const url = new URL(rawUrl)
     url.hash = ''
 
     const filteredParams = new URLSearchParams()
     for (const [key, value] of url.searchParams.entries()) {
-      if (/^(utm_|fbclid$|gclid$|mc_cid$|mc_eid$)/i.test(key)) continue
+      if (shouldDrop(key)) continue
       filteredParams.append(key, value)
     }
     url.search = filteredParams.toString()
@@ -187,6 +194,21 @@ export function normalizeUrlForStorage(rawUrl: string | null | undefined): strin
   } catch {
     return null
   }
+}
+
+/** Reopenable URL: fragments and sensitive query values removed; safe params kept. */
+export function sanitizeUrlForPersistence(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) return null
+  return rewriteUrlSearch(rawUrl, (key) => SENSITIVE_QUERY_KEY_RE.test(key))
+}
+
+/** Stable identity URL: also drops common tracking parameters. */
+export function normalizeUrlForStorage(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) return null
+  return rewriteUrlSearch(
+    rawUrl,
+    (key) => SENSITIVE_QUERY_KEY_RE.test(key) || TRACKING_QUERY_KEY_RE.test(key),
+  )
 }
 
 export function pageKeyForUrl(rawUrl: string | null | undefined): string | null {
