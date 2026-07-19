@@ -206,8 +206,14 @@ test('normal poll cadence never triggers a gap flush', async () => {
 test('recovered live snapshot splits at local midnight', () => {
   const db = setupDb()
   try {
-    // Reset FSM module state (also clears any live session from prior tests).
-    __setTrackingFsmTestHarness(null)
+    // Pin darwin so recovery's canonical deactivation is emitted on Linux CI
+    // too (poll capture is macOS/Windows-only by contract).
+    __setTrackingFsmTestHarness({
+      now: () => Date.now(),
+      idleSeconds: () => 0,
+      activeWindow: () => null,
+      platform: 'darwin',
+    })
 
     // The real shape: a session opened at 23:57 whose snapshot was last
     // bumped at 03:08 the next day (then the app died). Recovery must persist

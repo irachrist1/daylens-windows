@@ -94,6 +94,9 @@ test('poll: a private window creates no app session and cuts the one before it',
     __setTrackingFsmTestHarness({
       now: () => clock.now,
       idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
+      // Poll canonical emission is macOS/Windows-only; pin the harness so the
+      // focus_events assertions stay meaningful on the Linux CI runner.
+      platform: 'darwin',
       // The window title changes when the private window takes focus (as it
       // does for a real private window), so the tracker's same-title tab-read
       // cache can't mask the switch.
