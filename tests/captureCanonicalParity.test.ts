@@ -1,16 +1,10 @@
-// Canonical capture parity: the poll-based tracking FSM mirrors every
-// observation into canonical focus_events while keeping its legacy
-// app_sessions write. These tests drive the real FSM through scripted activity
-// and prove (1) the canonical record rebuilds the same sessions as the legacy
-// path, (2) foreground ownership never overlaps, (3) machine-state and idle
-// transitions are explicit canonical events, and (4) pause blocks canonical
-// persistence exactly like legacy.
-//
-// Documented parity tolerance: the legacy path drops sessions shorter than its
-// MIN_SESSION_SEC floor and splits sessions at local midnight for per-day
-// totals. Canonical evidence keeps brief switches (Timeline decides later) and
-// records one interval across midnight, so the comparison applies the same
-// floor and runs inside one calendar day.
+// Canonical capture: the poll-based tracking FSM records every observation as
+// canonical focus_events, and legacy app_sessions writes are retired (capture
+// migration slice 10). These tests drive the real FSM through scripted
+// activity and prove (1) the canonical record rebuilds the expected sessions,
+// (2) no legacy app_sessions rows appear during a captured stretch, (3)
+// foreground ownership never overlaps, (4) machine-state and idle transitions
+// are explicit canonical events, and (5) pause blocks canonical persistence.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -131,19 +125,20 @@ test('an ordinary working stretch rebuilds identical sessions from canonical evi
       ],
     )
 
-    // Parity: canonical rebuild == legacy app_sessions, same bounds.
+    // Canonical rebuild carries the whole stretch on its own.
     const rebuilt = rebuildPollForegroundSessions(rig.db, BASE - 1, BASE + 86_400_000)
       .filter((s) => (s.endMs - s.startMs) / 1_000 >= MIN_SESSION_SEC)
-    const legacy = rig.db.prepare(`
-      SELECT app_name AS appName, start_time AS startMs, end_time AS endMs
-      FROM app_sessions ORDER BY start_time ASC
-    `).all() as Array<{ appName: string; startMs: number; endMs: number }>
-
-    assert.equal(legacy.length, 2)
     assert.deepEqual(
       rebuilt.map((s) => ({ appName: s.appName, startMs: s.startMs, endMs: s.endMs })),
-      legacy,
+      [
+        { appName: 'TextEdit', startMs: BASE, endMs: BASE + 120_000 },
+        { appName: 'Mail', startMs: BASE + 120_000, endMs: BASE + 180_000 },
+      ],
     )
+
+    // Slice 10: a real captured stretch writes zero legacy rows.
+    const legacyCount = rig.db.prepare('SELECT COUNT(*) AS c FROM app_sessions').get() as { c: number }
+    assert.equal(legacyCount.c, 0, 'legacy app_sessions writes are retired')
 
     // Foreground ownership never overlaps.
     for (let i = 1; i < rebuilt.length; i++) {
@@ -170,13 +165,10 @@ test('going away emits canonical idle transitions and closes the interval at the
     assert.ok(supervisor.includes('idle_started'), 'away must record canonical idle_started')
     assert.ok(supervisor.includes('idle_ended'), 'return must record canonical idle_ended')
 
-    // The canonical deactivation carries the same idle-boundary end the legacy
-    // session got — not the poll time that discovered the absence.
-    const legacy = rig.db.prepare(`
-      SELECT end_time AS endMs FROM app_sessions ORDER BY start_time ASC LIMIT 1
-    `).get() as { endMs: number }
+    // The canonical deactivation carries the idle-boundary end (last input) —
+    // not the poll time that discovered the absence.
     const rebuilt = rebuildPollForegroundSessions(rig.db, BASE - 1, BASE + 86_400_000)
-    assert.equal(rebuilt[0].endMs, legacy.endMs)
+    assert.equal(rebuilt[0].endMs, BASE + 60_000)
 
     // Supervisor rows are content-free by contract.
     const contentful = rig.db.prepare(`
@@ -301,7 +293,7 @@ test('Linux polling joins the canonical adapter with its platform identity', asy
   }
 })
 
-test('Linux canonical events rebuild the same sessions as the legacy path', async () => {
+test('Linux canonical events rebuild the expected sessions with no legacy writes', async () => {
   __resetSettings()
   const rig = makeRig('linux')
   try {
@@ -314,19 +306,19 @@ test('Linux canonical events rebuild the same sessions as the legacy path', asyn
 
     const rebuilt = rebuildPollForegroundSessions(rig.db, BASE - 1, BASE + 86_400_000)
       .filter((s) => (s.endMs - s.startMs) / 1_000 >= MIN_SESSION_SEC)
-    const legacy = rig.db.prepare(`
-      SELECT app_name AS appName, start_time AS startMs, end_time AS endMs
-      FROM app_sessions ORDER BY start_time ASC
-    `).all() as Array<{ appName: string; startMs: number; endMs: number }>
-
-    assert.equal(legacy.length, 2)
     assert.deepEqual(
       rebuilt.map((s) => ({ appName: s.appName, startMs: s.startMs, endMs: s.endMs })),
-      legacy,
+      [
+        { appName: 'TextEdit', startMs: BASE, endMs: BASE + 120_000 },
+        { appName: 'Mail', startMs: BASE + 120_000, endMs: BASE + 180_000 },
+      ],
     )
     for (let i = 1; i < rebuilt.length; i++) {
       assert.ok(rebuilt[i].startMs >= rebuilt[i - 1].endMs, 'rebuilt sessions must not overlap')
     }
+
+    const legacyCount = rig.db.prepare('SELECT COUNT(*) AS c FROM app_sessions').get() as { c: number }
+    assert.equal(legacyCount.c, 0, 'legacy app_sessions writes are retired on Linux too')
   } finally {
     rig.teardown()
   }

@@ -11,7 +11,9 @@ import { findDatabaseTextMatches } from './support/dayFixturePrivacy.ts'
 import { projectDay } from '../src/main/core/projections/chunk2.ts'
 import { writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
-import { getAppSummariesForRange, searchAll } from '../src/main/db/queries.ts'
+import { searchAll } from '../src/main/db/queries.ts'
+import { getCorrectedAppSummariesForRange } from '../src/main/services/activityFacts.ts'
+import { ensureDayMemoryIndexed } from '../src/main/services/memoryIndex.ts'
 import { addWorkMemoryFact, chatMemoryPromptBlock } from '../src/main/services/workMemoryProfile.ts'
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
 import { collectExternalSignals, getExternalSignal } from '../src/main/services/externalSignals.ts'
@@ -74,9 +76,9 @@ test('synthetic day agrees from source boundaries through every local fact surfa
     const fromMs = fixtureClockMs(fixture, '00:00')
     const toMs = fromMs + 86_400_000
     const timeline = materializeTimelineDayProjection(db, fixture.date, null)
-    const apps = getAppSummariesForRange(db, fromMs, toMs)
+    const apps = getCorrectedAppSummariesForRange(db, fromMs, toMs)
     const appNames = apps.map((app) => app.appName)
-    assert.ok(appNames.includes('Code'), `missing captured editor in ${appNames.join(', ')}`)
+    assert.ok(appNames.includes('Visual Studio Code'), `missing captured editor in ${appNames.join(', ')}`)
     assert.ok(appNames.includes('Google Chrome'), `missing Google Chrome in ${appNames.join(', ')}`)
     assert.ok(
       apps.some((app) => app.category === 'meetings'),
@@ -101,6 +103,9 @@ test('synthetic day agrees from source boundaries through every local fact surfa
       )
     }
 
+    // Session moments are served from the memory-index projection of corrected
+    // canonical facts (legacy app_sessions writes are retired).
+    ensureDayMemoryIndexed(db, fixture.date)
     const search = searchAll(db, 'Acme', {
       startDate: fixture.date,
       endDate: fixture.date,

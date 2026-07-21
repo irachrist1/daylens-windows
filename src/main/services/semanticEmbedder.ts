@@ -57,12 +57,14 @@ const MODEL_RELATIVE_FILES = [
 ]
 
 /** Where the pinned model lives. Checked in order; the first directory that
- *  exists wins. The env override is for tests and power users. */
+ *  contains the pinned artifact wins. The env override is authoritative when
+ *  set (tests and power users point at exactly one directory — a test
+ *  simulating a missing model must not fall through to the repo checkout). */
 function modelCacheDirCandidates(): string[] {
-  const candidates: string[] = []
   if (process.env.DAYLENS_SEMANTIC_MODEL_DIR) {
-    candidates.push(process.env.DAYLENS_SEMANTIC_MODEL_DIR)
+    return [process.env.DAYLENS_SEMANTIC_MODEL_DIR]
   }
+  const candidates: string[] = []
   // Packaged: extraResources copies resources/models → <resources>/models.
   // (Electron adds resourcesPath to process; typed loosely so this module
   // never needs the electron type surface — tests import it under plain Node.)

@@ -13,6 +13,7 @@ import {
   ActiveBrowserContextTracker,
   __setActiveBrowserContextTrackerForTest,
 } from '../src/main/services/browserContext.ts'
+import { queryCorrectedActivityFactsForDay } from '../src/main/core/query/activityFactsQuery.ts'
 
 // Sleep-gap regression tests: macOS lid-close sleep froze the poll timer
 // WITHOUT firing the powerMonitor suspend or lock-screen events, so the
@@ -236,16 +237,17 @@ test('recovered live snapshot splits at local midnight', () => {
 
     __recoverPersistedLiveSnapshotForTest()
 
-    const rows = db.prepare(
-      'SELECT start_time, end_time, duration_sec FROM app_sessions ORDER BY start_time',
-    ).all() as Array<{ start_time: number; end_time: number; duration_sec: number }>
-    assert.equal(rows.length, 2, 'expected one slice per calendar day')
+    // Slice 10: recovery persists no legacy rows. The recovered deactivation
+    // closes the canonical span, and late-night day ownership carries the
+    // whole cross-midnight sitting on the day it started.
+    const legacyCount = db.prepare('SELECT COUNT(*) AS n FROM app_sessions').get() as { n: number }
+    assert.equal(legacyCount.n, 0, 'recovery must not write legacy app_sessions rows')
 
-    const midnight = new Date(2026, 6, 6, 0, 0, 0, 0).getTime()
-    assert.equal(rows[0].start_time, start)
-    assert.equal(rows[0].end_time, midnight)
-    assert.equal(rows[1].start_time, midnight)
-    assert.equal(rows[1].end_time, lastSeen)
+    const settledNowMs = lastSeen + 46 * 60_000
+    const dayOne = queryCorrectedActivityFactsForDay(db, '2026-07-05', { nowMs: settledNowMs })
+    assert.equal(dayOne.totalSeconds, Math.round((lastSeen - start) / 1000), 'the started day owns the whole sitting')
+    const dayTwo = queryCorrectedActivityFactsForDay(db, '2026-07-06', { nowMs: settledNowMs })
+    assert.equal(dayTwo.totalSeconds, 0, 'the next day owns none of the carried sitting')
 
     const deactivations = db.prepare(`
       SELECT ts_ms FROM focus_events

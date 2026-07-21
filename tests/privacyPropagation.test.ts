@@ -184,13 +184,17 @@ test('private and excluded observations cannot reach storage or downstream produ
       'capture privacy gate must reject every blocked canonical event',
     )
 
+    // Allowed activity persists canonically (legacy app_sessions writes are
+    // retired) — the blocked apps must not appear there either.
     const storedSessions = db
       .prepare(
         `
-      SELECT app_name, window_title FROM app_sessions ORDER BY start_time
+      SELECT DISTINCT app_name FROM focus_events
+      WHERE source = 'foreground_poll' AND app_name IS NOT NULL
+      ORDER BY app_name
     `,
       )
-      .all() as Array<{ app_name: string; window_title: string | null }>
+      .all() as Array<{ app_name: string }>
     assert.deepEqual(
       storedSessions.map((row) => row.app_name),
       ['Cursor', 'Google Chrome'],

@@ -133,13 +133,17 @@ test('both capture backends mint ONE identity for the same install once the path
     win = OTHER_WIN
     await poll(BASE + 210_000)
 
-    const sessions = db.prepare(`
-      SELECT bundle_id FROM app_sessions WHERE app_name = 'Traycer' ORDER BY start_time
-    `).all() as Array<{ bundle_id: string }>
-    assert.equal(sessions.length, 2, 'both backends must persist their session')
-    for (const session of sessions) {
-      assert.equal(session.bundle_id, TRAYCER_BUNDLE, 'the poll path must mint the bundle id, not the path')
-    }
+    // Slice 10: the canonical record is the only persisted record — every
+    // Traycer foreground event from both backends must carry the bundle id.
+    const canonicalBundles = db.prepare(`
+      SELECT DISTINCT app_bundle_id FROM focus_events
+      WHERE app_name = 'Traycer' AND app_bundle_id IS NOT NULL
+    `).all() as Array<{ app_bundle_id: string }>
+    assert.deepEqual(
+      canonicalBundles.map((row) => row.app_bundle_id),
+      [TRAYCER_BUNDLE],
+      'the poll path must mint the bundle id, not the path',
+    )
 
     const identities = db.prepare(`
       SELECT app_instance_id, metadata_json FROM app_identities WHERE raw_app_name = 'Traycer'

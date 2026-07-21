@@ -15,9 +15,22 @@ const BASE = new Date(2026, 6, 7, 9, 0, 0, 0).getTime()
 
 type WindowFixture = ReturnType<typeof notepadWindow> | ReturnType<typeof edgeWindow> | ReturnType<typeof uwpWindow>
 
+interface FlushInfo {
+  startTime: number
+  endTime: number
+  durationSeconds: number
+  endedReason: string | null
+  persisted: boolean
+  bundleId: string
+  appName: string
+  rawAppName: string | null
+  category: string
+}
+
 interface Rig {
   db: Database.Database
   clock: { now: number; lastInput: number }
+  flushes: FlushInfo[]
   setWindow: (next: WindowFixture | null) => void
   poll: (nowMs: number, opts?: { input?: boolean }) => Promise<void>
   teardown: () => void
@@ -66,15 +79,18 @@ function uwpWindow() {
 function makeRig(initialWindow: WindowFixture | null = notepadWindow()): Rig {
   const db = setupDb()
   const clock = { now: BASE, lastInput: BASE }
+  const flushes: FlushInfo[] = []
   let activeWindow = initialWindow
   tracking.__setTrackingFsmTestHarness({
     now: () => clock.now,
     idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
     activeWindow: () => activeWindow,
+    recordFlush: (info) => flushes.push(info),
   })
   return {
     db,
     clock,
+    flushes,
     setWindow: (next) => {
       activeWindow = next
     },
@@ -101,15 +117,11 @@ test('Windows poll gaps end the foreground session at the last completed tick', 
     const wake = BASE + 3 * 3_600_000
     await rig.poll(wake, { input: true })
 
-    const row = rig.db.prepare(`
-      SELECT start_time, end_time, duration_sec, ended_reason
-      FROM app_sessions
-    `).get() as { start_time: number; end_time: number; duration_sec: number; ended_reason: string } | undefined
-
-    assert.ok(row, 'sleep-gap flush should persist the pre-sleep Windows session')
-    assert.equal(row.end_time, BASE + 30_000)
-    assert.equal(row.duration_sec, 30)
-    assert.equal(row.ended_reason, 'sleep_gap')
+    const flush = rig.flushes.find((f) => f.persisted)
+    assert.ok(flush, 'sleep-gap flush should persist the pre-sleep Windows session')
+    assert.equal(flush.endTime, BASE + 30_000)
+    assert.equal(flush.durationSeconds, 30)
+    assert.equal(flush.endedReason, 'sleep_gap')
   } finally {
     rig.teardown()
   }
@@ -151,18 +163,20 @@ test('Windows UWP sessions use the package family instead of ApplicationFrameHos
     rig.setWindow(notepadWindow())
     await rig.poll(BASE + 20_000, { input: true })
 
-    const row = rig.db.prepare(`
-      SELECT bundle_id, app_name, raw_app_name, category
-      FROM app_sessions
-      ORDER BY start_time ASC
-      LIMIT 1
-    `).get() as { bundle_id: string; app_name: string; raw_app_name: string; category: string } | undefined
+    const flush = rig.flushes.find((f) => f.persisted)
+    assert.ok(flush)
+    assert.equal(flush.bundleId, 'Microsoft.WindowsTerminal_8wekyb3d8bbwe')
+    assert.equal(flush.appName, 'Windows Terminal')
+    assert.equal(flush.rawAppName, 'Windows Terminal')
+    assert.equal(flush.category, 'development')
 
-    assert.ok(row)
-    assert.equal(row.bundle_id, 'Microsoft.WindowsTerminal_8wekyb3d8bbwe')
-    assert.equal(row.app_name, 'Windows Terminal')
-    assert.equal(row.raw_app_name, 'Windows Terminal')
-    assert.equal(row.category, 'development')
+    // Canonical evidence carries the same unified identity.
+    const canonical = rig.db.prepare(`
+      SELECT app_bundle_id FROM focus_events
+      WHERE source = 'foreground_poll' AND app_name = 'Windows Terminal'
+      LIMIT 1
+    `).get() as { app_bundle_id: string } | undefined
+    assert.equal(canonical?.app_bundle_id, 'Microsoft.WindowsTerminal_8wekyb3d8bbwe')
   } finally {
     rig.teardown()
   }
@@ -193,17 +207,13 @@ test('Windows browser history reconciles executable IDs to foreground browser ti
       source: 'history',
     })
 
-    const edge = rig.db.prepare(`
-      SELECT duration_sec AS durationSec, canonical_app_id AS canonicalAppId
-      FROM app_sessions
-      WHERE canonical_app_id = 'edge'
-    `).get() as { durationSec: number; canonicalAppId: string } | undefined
+    const edge = rig.flushes.find((f) => f.persisted && /edge/i.test(f.appName))
     assert.ok(edge)
-    assert.equal(edge.durationSec, 60)
+    assert.equal(edge.durationSeconds, 60)
 
     const sites = getWebsiteSummariesForRange(rig.db, BASE, BASE + 5 * 60_000)
     const siteTotal = sites.reduce((sum, site) => sum + site.totalSeconds, 0)
-    assert.equal(siteTotal, edge.durationSec)
+    assert.equal(siteTotal, edge.durationSeconds)
     assert.equal(sites.find((site) => site.domain === 'github.com')?.totalSeconds, 60)
   } finally {
     rig.teardown()

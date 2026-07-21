@@ -4,11 +4,9 @@ import { app, powerMonitor } from 'electron'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import type Database from 'better-sqlite3'
 import {
   clearLiveAppSessionSnapshot,
   getLiveAppSessionSnapshot,
-  insertAppSession,
   markActivityStateEventHeldForMediaPlayback,
   recordActivityStateEvent,
   upsertLiveAppSessionSnapshot,
@@ -1256,7 +1254,7 @@ function passiveHoldActive(session: InFlightSession, idleSec: number): boolean {
   return kind === 'reading' && idleSec < READING_HOLD_MAX_SEC
 }
 
-function trackedForegroundSessionExclusionReason(
+export function trackedForegroundSessionExclusionReason(
   session: Pick<Omit<AppSession, 'id'>, 'bundleId' | 'appName' | 'windowTitle' | 'rawAppName'> & { executablePath?: string | null },
 ): string | null {
   if (isDaylensSelfIdentity(session.bundleId, session.appName, session.rawAppName, session.executablePath)) {
@@ -1266,14 +1264,6 @@ function trackedForegroundSessionExclusionReason(
     return 'daylens_project_title'
   }
   return null
-}
-
-export function persistTrackedForegroundSession(
-  db: Database.Database,
-  session: Omit<AppSession, 'id'>,
-): number | null {
-  if (trackedForegroundSessionExclusionReason(session)) return null
-  return insertAppSession(db, session)
 }
 
 function isOsNoise(bundleId: string, appName: string, winPath?: string): boolean {
@@ -1428,9 +1418,9 @@ function recoverPersistedLiveSnapshot(): void {
 
     const endTime = Math.min(nowMs(), Math.max(snapshot.lastSeenAt, snapshot.startTime))
 
-    // Same calendar-ownership rule as flushCurrent: a recovered session that
-    // crosses local midnight is persisted as one slice per day, so each day's
-    // raw totals only include time that actually fell within that day.
+    // Per-day slices drive identity observations and projection invalidation
+    // for every calendar day the recovered session touched; day ownership of
+    // the cross-midnight stretch itself is decided by the canonical record.
     const slices: Array<{ startMs: number; endMs: number }> = []
     let sliceStart = snapshot.startTime
     while (localDateString(new Date(sliceStart)) !== localDateString(new Date(endTime))) {
@@ -1440,36 +1430,21 @@ function recoverPersistedLiveSnapshot(): void {
     }
     slices.push({ startMs: sliceStart, endMs: endTime })
 
+    // Legacy app_sessions writes are retired (capture migration slice 10).
+    // Recovery persists nothing per-slice; the recovered deactivation event
+    // emitted below closes the canonical span, and the projection derives the
+    // recovered session from focus_events alone.
     let recovered = false
-    for (const slice of slices) {
-      const durationSeconds = Math.max(0, Math.round((slice.endMs - slice.startMs) / 1_000))
-      if (durationSeconds < MIN_SESSION_SEC) continue
-      const duplicate = db.prepare(`
-        SELECT 1
-        FROM app_sessions
-        WHERE bundle_id = ? AND start_time = ?
-        LIMIT 1
-      `).get(snapshot.bundleId, slice.startMs)
-      if (duplicate) continue
-
-      const { isFocused, category } = classifyResult(snapshot.bundleId, snapshot.appName)
-      const insertedId = persistTrackedForegroundSession(db, {
-        bundleId: snapshot.bundleId,
-        appName: snapshot.appName,
-        windowTitle: snapshot.windowTitle,
-        rawAppName: snapshot.rawAppName,
-        canonicalAppId: snapshot.canonicalAppId,
-        appInstanceId: snapshot.appInstanceId,
-        captureSource: snapshot.captureSource,
-        endedReason: 'recovered_after_restart',
-        captureVersion: 2,
-        startTime: slice.startMs,
-        endTime: slice.endMs,
-        durationSeconds,
-        category,
-        isFocused,
-      })
-      if (insertedId !== null) {
+    if (trackedForegroundSessionExclusionReason({
+      bundleId: snapshot.bundleId,
+      appName: snapshot.appName,
+      windowTitle: snapshot.windowTitle,
+      rawAppName: snapshot.rawAppName,
+    }) === null) {
+      const { category } = classifyResult(snapshot.bundleId, snapshot.appName)
+      for (const slice of slices) {
+        const durationSeconds = Math.max(0, Math.round((slice.endMs - slice.startMs) / 1_000))
+        if (durationSeconds < MIN_SESSION_SEC) continue
         recovered = true
         upsertAppIdentityObservation(db, {
           bundleId: snapshot.bundleId,
@@ -1710,6 +1685,10 @@ interface TrackingFsmTestHarness {
     durationSeconds: number
     endedReason: string | null
     persisted: boolean
+    bundleId: string
+    appName: string
+    rawAppName: string | null
+    category: AppCategory
   }) => void
 }
 let fsmTestHarness: TrackingFsmTestHarness | null = null
@@ -2339,43 +2318,34 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
     )
   }
 
-  if (durationSeconds >= MIN_SESSION_SEC) {
+  // Legacy app_sessions writes are retired (capture migration slice 10). The
+  // canonical focus_events emitted through recordPollForegroundEvent are the
+  // only persisted record of this session; the side effects below keep running
+  // so identity, projections, and attribution stay current on the canonical path.
+  if (durationSeconds >= MIN_SESSION_SEC && !trackedForegroundSessionExclusionReason({
+    bundleId: currentSession.bundleId,
+    appName: currentSession.appName,
+    windowTitle: currentSession.windowTitle,
+    rawAppName: currentSession.rawAppName,
+  })) {
     try {
       const db = getDb()
-      const { isFocused, category } = classifyResult(currentSession.bundleId, currentSession.appName)
-      const insertedId = persistTrackedForegroundSession(db, {
-        bundleId:        currentSession.bundleId,
-        appName:         currentSession.appName,
-        windowTitle:     currentSession.windowTitle,
-        rawAppName:      currentSession.rawAppName,
-        canonicalAppId:  currentSession.canonicalAppId,
-        appInstanceId:   currentSession.appInstanceId,
-        captureSource:   currentSession.captureSource,
-        endedReason,
-        captureVersion:  2,
-        startTime:       currentSession.startTime,
-        endTime,
-        durationSeconds,
-        category,
-        isFocused,
+      const { category } = classifyResult(currentSession.bundleId, currentSession.appName)
+      upsertAppIdentityObservation(db, {
+        bundleId: currentSession.bundleId,
+        rawAppName: currentSession.rawAppName,
+        appInstanceId: currentSession.appInstanceId,
+        observedCategory: category,
+        firstSeenAt: currentSession.startTime,
+        lastSeenAt: endTime,
       })
-      if (insertedId !== null) {
-        upsertAppIdentityObservation(db, {
-          bundleId: currentSession.bundleId,
-          rawAppName: currentSession.rawAppName,
-          appInstanceId: currentSession.appInstanceId,
-          observedCategory: category,
-          firstSeenAt: currentSession.startTime,
-          lastSeenAt: endTime,
-        })
-        // Timeline + insights coalesce (heavy full-day rebuild); apps stays
-        // immediate so its targeted per-app refresh keeps the canonicalAppId.
-        scheduleActivityProjectionInvalidation(localDateString(new Date(endTime)))
-        invalidateProjectionScope('apps', 'activity_recorded', {
-          canonicalAppId: currentSession.canonicalAppId,
-        })
-        scheduleAttributionRefreshForSession(currentSession.startTime, endTime)
-      }
+      // Timeline + insights coalesce (heavy full-day rebuild); apps stays
+      // immediate so its targeted per-app refresh keeps the canonicalAppId.
+      scheduleActivityProjectionInvalidation(localDateString(new Date(endTime)))
+      invalidateProjectionScope('apps', 'activity_recorded', {
+        canonicalAppId: currentSession.canonicalAppId,
+      })
+      scheduleAttributionRefreshForSession(currentSession.startTime, endTime)
     } catch (err) {
       console.error('[tracking] flush error:', err)
       captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:flush', {
@@ -2402,6 +2372,10 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
     durationSeconds,
     endedReason,
     persisted: durationSeconds >= MIN_SESSION_SEC,
+    bundleId: currentSession.bundleId,
+    appName: currentSession.appName,
+    rawAppName: currentSession.rawAppName ?? null,
+    category: classifyResult(currentSession.bundleId, currentSession.appName).category,
   })
 
   clearPersistedLiveSnapshot()

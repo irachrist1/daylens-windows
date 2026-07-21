@@ -318,14 +318,14 @@ No renderer, AI tool, MCP tool, sync encoder, or product surface may query a raw
 
 ## Migration from the current implementation
 
-The current application has overlapping paths:
+The application before this migration had overlapping paths:
 
-- `tracking.ts` polls foreground state and writes `app_sessions`
+- `tracking.ts` polled foreground state and wrote `app_sessions`
 - `browserContext.ts` and `browser.ts` write `website_visits`
 - native macOS and Windows helpers write `focus_events` alongside the legacy path
-- historical Timeline reads can project `focus_events`, while the live day still uses legacy sessions
-- some downstream block evidence queries `focus_events` directly
-- deletion manually scrubs several raw and derived tables
+- historical Timeline reads could project `focus_events`, while the live day still used legacy sessions
+- some downstream block evidence queried `focus_events` directly
+- deletion manually scrubbed several raw and derived tables
 
 The migration proceeds in reversible slices:
 
@@ -339,6 +339,8 @@ The migration proceeds in reversible slices:
 8. Move Timeline first, then Apps, search, the AI agent, MCP, and sync to shared corrected facts.
 9. Centralize deletion around evidence identity and derivative ownership.
 10. Stop legacy writes only after parity, restart recovery, deletion, and platform acceptance tests pass.
+
+Slice 10 is implemented: the tracking state machine persists no `app_sessions` rows on any platform — canonical `focus_events` are the only record of live capture, and restart recovery closes the open canonical span without a legacy row. The Windows history backfill remains a historical import for stretches with no canonical coverage; it never writes a span that overlaps captured evidence.
 
 Existing `app_sessions` and `website_visits` are not rewritten into fake event-level observations. A legacy adapter exposes them as legacy evidence until they are deleted or naturally fall outside the needed migration window.
 

@@ -4,6 +4,15 @@ This changelog explains released and upcoming improvements in language meant for
 
 ## Unreleased
 
+### One capture path
+
+- Live capture now writes only the canonical evidence record on every platform; the parallel legacy session write is retired, so the old and new records can never drift apart again.
+- Days captured before the migration still render exactly as before through the legacy compatibility reader.
+- Late-night work that crosses midnight stays on the day it started, now derived from the canonical record.
+- The Windows history import only fills stretches Daylens itself never observed; it can no longer shadow real captured evidence.
+- Deleting activity is now backed by a structural ownership registry: every table in the database has a named deletion owner, and the test suite fails if a new table is added without one — nothing can silently escape deletion.
+- Purged activity can no longer resurface through leftover document references from earlier versions of a rebuilt day.
+
 ### A more trustworthy Timeline
 
 - Daylens now reconciles browser activity with the time the browser was actually in front, preventing background tabs from inflating website totals.

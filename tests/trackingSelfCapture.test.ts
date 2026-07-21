@@ -3,34 +3,23 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
-import { persistTrackedForegroundSession } from '../src/main/services/tracking.ts'
+import { trackedForegroundSessionExclusionReason } from '../src/main/services/tracking.ts'
 
 function setupDb(): Database.Database {
   return createProductionTestDatabase()
 }
 
-test('Daylens foreground sessions are not persisted as tracked artifacts', () => {
+test('Daylens foreground sessions are excluded from capture', () => {
   const db = setupDb()
-  const startTime = new Date(2026, 3, 30, 9, 0, 0, 0).getTime()
 
-  const insertedId = persistTrackedForegroundSession(db, {
+  const reason = trackedForegroundSessionExclusionReason({
     bundleId: 'com.daylens.app',
     appName: 'Daylens',
     windowTitle: 'Daylens: This test the Best Environment. Straight from my claude directory',
     rawAppName: 'Daylens',
-    canonicalAppId: 'daylens',
-    appInstanceId: 'com.daylens.app',
-    captureSource: 'foreground_poll',
-    endedReason: 'app_switch',
-    captureVersion: 2,
-    startTime,
-    endTime: startTime + 30 * 60_000,
-    durationSeconds: 30 * 60,
-    category: 'development',
-    isFocused: true,
   })
 
-  assert.equal(insertedId, null)
+  assert.equal(reason, 'daylens_self_capture')
   assert.equal((db.prepare('SELECT COUNT(*) AS count FROM app_sessions').get() as { count: number }).count, 0)
 
   const payload = getTimelineDayPayload(db, '2026-04-30', null)
@@ -41,28 +30,17 @@ test('Daylens foreground sessions are not persisted as tracked artifacts', () =>
   db.close()
 })
 
-test('development tool sessions with Daylens project titles are not persisted', () => {
+test('development tool sessions with Daylens project titles are excluded from capture', () => {
   const db = setupDb()
-  const startTime = new Date(2026, 3, 30, 10, 0, 0, 0).getTime()
 
-  const insertedId = persistTrackedForegroundSession(db, {
+  const reason = trackedForegroundSessionExclusionReason({
     bundleId: '/Applications/Claude.app',
     appName: 'Claude',
     windowTitle: 'Daylens: This test the Best Environment. Straight from my claude directory',
     rawAppName: 'Claude',
-    canonicalAppId: 'claude',
-    appInstanceId: '/Applications/Claude.app',
-    captureSource: 'foreground_poll',
-    endedReason: 'app_switch',
-    captureVersion: 2,
-    startTime,
-    endTime: startTime + 20 * 60_000,
-    durationSeconds: 20 * 60,
-    category: 'aiTools',
-    isFocused: true,
   })
 
-  assert.equal(insertedId, null)
+  assert.equal(reason, 'daylens_project_title')
   assert.equal((db.prepare('SELECT COUNT(*) AS count FROM app_sessions').get() as { count: number }).count, 0)
 
   const payload = getTimelineDayPayload(db, '2026-04-30', null)
@@ -70,4 +48,14 @@ test('development tool sessions with Daylens project titles are not persisted', 
   assert.equal((db.prepare('SELECT COUNT(*) AS count FROM artifacts').get() as { count: number }).count, 0)
 
   db.close()
+})
+
+test('an ordinary foreground session is not excluded', () => {
+  const reason = trackedForegroundSessionExclusionReason({
+    bundleId: 'com.todesktop.230313mzl4w4u92',
+    appName: 'Cursor',
+    windowTitle: 'activityFactsQuery.ts — daylens',
+    rawAppName: 'Cursor',
+  })
+  assert.equal(reason, null)
 })

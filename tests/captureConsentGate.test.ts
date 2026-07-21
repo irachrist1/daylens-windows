@@ -178,7 +178,7 @@ test('the tracking FSM persists no evidence rows before consent, and persists af
       activeWindow: () => WIN,
     })
     await driveForegroundMinute(clock)
-    // Switch away so the open session flushes to app_sessions.
+    // Switch away so the open session flushes.
     clock.now = BASE + 120_000
     clock.lastInput = BASE + 120_000
     const flushedWin = { ...WIN, title: 'Other window', application: 'Notes', path: '/Applications/Notes.app', pid: 999 }
@@ -193,8 +193,10 @@ test('the tracking FSM persists no evidence rows before consent, and persists af
 
     const { flushCurrentSession } = await import('../src/main/services/tracking.ts')
     flushCurrentSession()
-    const appSessions = (db.prepare('SELECT COUNT(*) AS count FROM app_sessions').get() as { count: number }).count
-    assert.ok(appSessions > 0, 'the identical activity persists once consent is granted')
+    const canonical = (db.prepare(
+      "SELECT COUNT(*) AS count FROM focus_events WHERE source = 'foreground_poll'",
+    ).get() as { count: number }).count
+    assert.ok(canonical > 0, 'the identical activity persists canonically once consent is granted')
   } finally {
     __setTrackingFsmTestHarness(null)
     clearTestDb()

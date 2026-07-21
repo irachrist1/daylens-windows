@@ -17,6 +17,7 @@ import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { getDb } from './database'
 import { insertAppSession } from '../db/queries'
+import { countFocusEventsInRange } from '../db/focusEventRepository'
 import { classifyResult } from './tracking'
 import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
 import { getSettings } from './settings'
@@ -197,6 +198,12 @@ export function backfillWindowsHistory(): void {
         const durationSeconds = Math.round((endMs - startMs) / 1_000)
 
         if (durationSeconds < MIN_SESSION_SEC || durationSeconds > MAX_SESSION_SEC) continue
+
+        // Live legacy writes are retired (capture migration slice 10). The
+        // backfill only fills stretches Daylens itself never observed: any
+        // canonical focus_events coverage in the span means live capture was
+        // running, and the OS-history row would shadow real evidence.
+        if (countFocusEventsInRange(mainDb, startMs, endMs) > 0) continue
 
         const { category, isFocused } = classifyResult(bundleId, appName)
 

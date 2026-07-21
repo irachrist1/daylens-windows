@@ -91,13 +91,14 @@ test('poll: a private window creates no app session and cuts the one before it',
       () => true,
     ))
     const clock = { now: BASE, lastInput: BASE }
+    const flushes: Array<{ startTime: number; endTime: number; endedReason: string | null; persisted: boolean }> = []
     __setTrackingFsmTestHarness({
       platform: 'darwin',
       now: () => clock.now,
       idleSeconds: () => Math.max(0, (clock.now - clock.lastInput) / 1_000),
+      recordFlush: (info) => flushes.push(info),
       // Poll canonical emission is macOS/Windows-only; pin the harness so the
       // focus_events assertions stay meaningful on the Linux CI runner.
-      platform: 'darwin',
       // The window title changes when the private window takes focus (as it
       // does for a real private window), so the tracker's same-title tab-read
       // cache can't mask the switch.
@@ -117,11 +118,12 @@ test('poll: a private window creates no app session and cuts the one before it',
     await poll(BASE + 60_000) // private window takes focus
 
     assert.equal(getCurrentSession(), null, 'no session may be live while a private window is frontmost')
-    const sessions = db.prepare('SELECT app_name, start_time, end_time, ended_reason FROM app_sessions').all() as
-      Array<{ app_name: string; start_time: number; end_time: number; ended_reason: string | null }>
-    assert.equal(sessions.length, 1, 'only the pre-private session persists')
-    assert.equal(sessions[0].ended_reason, 'incognito')
-    assert.equal(sessions[0].end_time, BASE + 60_000)
+    const persisted = flushes.filter((f) => f.persisted)
+    assert.equal(persisted.length, 1, 'only the pre-private session persists')
+    assert.equal(persisted[0].endedReason, 'incognito')
+    assert.equal(persisted[0].endTime, BASE + 60_000)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM app_sessions').get() as { n: number }).n, 0,
+      'legacy app_sessions writes are retired')
     const visits = db.prepare('SELECT domain, url, page_title FROM website_visits').all() as
       Array<{ domain: string; url: string; page_title: string | null }>
     assert.equal(visits.length, 1, 'only the pre-private page may remain')

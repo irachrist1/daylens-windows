@@ -76,6 +76,49 @@ function persistedClaimEnd(db: Database.Database, dateStr: string): number | nul
   }
 }
 
+// Foreground spans reconstructed from canonical focus_events for the carry
+// scan. Legacy app_sessions writes are retired (capture migration slice 10),
+// so a cross-midnight sitting exists only as an unclosed canonical span; the
+// sitting detector needs those spans or late-night ownership breaks for every
+// canonically captured day. A simple open/close automaton is enough here —
+// carry detection only needs "activity chained across the boundary", not the
+// full projection's session semantics.
+function canonicalSpans(db: Database.Database, scanFrom: number, scanTo: number, nowMs: number): SessionSpan[] {
+  let rows: Array<{ ts_ms: number; event_type: string; app_name: string | null }>
+  try {
+    rows = db.prepare(`
+      SELECT ts_ms, event_type, app_name
+      FROM focus_events
+      WHERE ts_ms >= ? AND ts_ms < ?
+        AND event_type IN ('app_activated', 'app_deactivated', 'sleep', 'lock', 'idle_started')
+      ORDER BY ts_ms ASC, id ASC
+    `).all(scanFrom, scanTo) as Array<{ ts_ms: number; event_type: string; app_name: string | null }>
+  } catch {
+    return []
+  }
+
+  const spans: SessionSpan[] = []
+  let open: { app_name: string; start_time: number } | null = null
+  const close = (endMs: number) => {
+    if (open && endMs > open.start_time) {
+      spans.push({ app_name: open.app_name, start_time: open.start_time, end_time: endMs })
+    }
+    open = null
+  }
+  for (const row of rows) {
+    if (row.event_type === 'app_activated') {
+      close(row.ts_ms)
+      if (row.app_name) open = { app_name: row.app_name, start_time: row.ts_ms }
+    } else {
+      close(row.ts_ms)
+    }
+  }
+  // A span still open at the scan edge is a running sitting: credit it up to
+  // now (never the future edge) so the seed/continuation checks can see it.
+  close(Math.min(scanTo, Math.max(scanFrom, nowMs)))
+  return spans
+}
+
 function lateNightCarryEnd(
   db: Database.Database,
   boundaryMs: number,
@@ -94,7 +137,9 @@ function lateNightCarryEnd(
       AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
     ORDER BY start_time ASC, id ASC
   `).all(scanTo, scanFrom) as SessionSpan[]
-  const sessions = rows.filter((row) => !SYSTEM_NOISE_NAMES.has(row.app_name.trim().toLowerCase()))
+  const merged = [...rows, ...canonicalSpans(db, scanFrom, scanTo, nowMs)]
+    .sort((left, right) => left.start_time - right.start_time || left.end_time - right.end_time)
+  const sessions = merged.filter((row) => !SYSTEM_NOISE_NAMES.has(row.app_name.trim().toLowerCase()))
 
   const seed = [...sessions]
     .reverse()

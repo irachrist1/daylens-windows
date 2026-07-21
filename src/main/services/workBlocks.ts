@@ -4599,6 +4599,28 @@ function persistTimelineDay(
       `).run(Date.now(), dateStr)
     }
 
+    // Mentions are a projection of the day's current blocks. A superseded or
+    // deleted block must not leave mentions behind: an orphaned mention still
+    // carries the dead block's label in evidence_json, which resurrects
+    // purged text. Scoped by the day's bounds and pruned against the blocks
+    // that remain valid after this persist.
+    const [dayFromMs, dayToMs] = localDayBounds(dateStr)
+    if (validIds.length > 0) {
+      const mentionPlaceholders = validIds.map(() => '?').join(', ')
+      db.prepare(`
+        DELETE FROM artifact_mentions
+        WHERE source_type = 'timeline_block'
+          AND start_time >= ? AND start_time < ?
+          AND source_id NOT IN (${mentionPlaceholders})
+      `).run(dayFromMs, dayToMs, ...validIds)
+    } else {
+      db.prepare(`
+        DELETE FROM artifact_mentions
+        WHERE source_type = 'timeline_block'
+          AND start_time >= ? AND start_time < ?
+      `).run(dayFromMs, dayToMs)
+    }
+
     for (const rawBlock of blocks) {
       if (rawBlock.isLive) continue
       const block = options.finalized
