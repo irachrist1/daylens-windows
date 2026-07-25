@@ -1,0 +1,37 @@
+# Ground truth from the owner's Obsidian journal. This entry is a ~4 a.m.
+# self-review and week plan, not a day log — activity facts are thin by design.
+date: "2026-04-26"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-04-26 (early-morning self-review + weekly plan)"
+summary: >
+  Sunday. Woke around 4 a.m. and wrote a long journal entry: a personal
+  audit and a full plan for the coming week — day-by-day task lists for
+  Monday through Friday (Daylens work, running, morning learning, Andersen
+  articles, IT audit checklist, training prep) plus rules like no screens
+  past 10 p.m. The entry's Sunday list named three intentions: a post for
+  Monday, a "last week in AI" article, and a Daylens weekly checklist
+  including prep for a One Acre Fund meeting. The journal records nothing
+  about how the rest of the day actually went.
+primaryWork:
+  - name: Weekly planning / journal self-review
+    aliases: [journal, planning, weekly plan, self-review, reflection]
+secondary:
+  - name: Last week in AI article (intended, unconfirmed)
+    aliases: [last week in ai, article]
+  - name: Daylens weekly checklist (intended, unconfirmed)
+    aliases: [daylens]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { until: "05:00", desc: "~04:00 wake; wrote the self-review and the full Mon–Fri week plan in the journal" }
+  - { desc: "rest of the day unaccounted in the journal; the Sunday list intended a post for Monday, a 'last week in AI' article, and a Daylens weekly checklist (incl. One Acre Fund meeting prep) — none confirmed done" }
+notes: >
+  The journal is a 4 a.m. reflection with no timeline for the day itself.
+  Capture starts at 08:05 (the 4 a.m. writing was never observed) and totals
+  only ~6.3h, with large unexplained holes (~13:00–15:00, ~17:20–22:00).
+  Whatever Daylens shows for the daytime cannot be checked against the
+  journal — judge the shape very leniently and do not treat the daytime
+  holes as declared gaps. Do punish inventing a story the journal
+  contradicts, e.g. claiming the week plan was written midday.

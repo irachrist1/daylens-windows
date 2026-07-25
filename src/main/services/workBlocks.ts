@@ -59,6 +59,7 @@ import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@sh
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
+import { isDisqualifiedWorkSubject } from '@shared/workNameGuards'
 import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForCategory, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
@@ -4350,6 +4351,18 @@ function editorProjectLabel(block: WorkContextBlock): string | null {
     if (!rawLabelForm(withoutApp[0])) continue
     const project = withoutApp[withoutApp.length - 1]
     if (!project || project.length > 40 || rawLabelForm(project)) continue
+    // When intent already extracted a specific subject (the document/task
+    // actually being worked), the label names it inside the project —
+    // "Working on Timelineeval in daylens" beats the bare project, which
+    // repeated across every dev block reads like wallpaper. The subject is
+    // the humanized intent output, never the raw filename (DEV-276).
+    const subject = inferWorkIntent(block).subject?.trim()
+    const subjectUsable = subject
+      && subject.toLowerCase() !== project.toLowerCase()
+      && !subject.toLowerCase().includes(project.toLowerCase())
+      && !isDisqualifiedWorkSubject(subject)
+      && subject.length <= 40
+    if (subjectUsable) return `Working on ${subject} in ${project}`
     return `Working on ${project}`
   }
   return null

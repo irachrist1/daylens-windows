@@ -1,0 +1,42 @@
+# Ground truth from the owner's Obsidian journal (reflective entry — few
+# clock times; the day's shape is loose by necessity).
+date: "2026-07-21"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-07-21"
+summary: >
+  The day was consumed by Daylens agent-orchestration: nearly half of it
+  spent prompting agents or fixing the fallout of wrong prompts across the
+  spcsorg/daylens repos — twenty-something PRs and a pile of bug fixes, with
+  no clear picture of what was working and what wasn't. The planned ML study
+  never happened, and none of the week's three goals (study ML, build with
+  understanding, curate content) got real traction. The day's hard-won
+  conclusion was to write prompts by hand and drop heavyweight orchestration
+  tooling like Traycer. In the evening the journal reflection turned into
+  setting up a curation and journaling system in Obsidian: a Content
+  Consumption Plan, a Reading List, a free-time list, everyday routine
+  rules, a daily journal template with an hour-by-hour table, and the plan
+  table for July 22.
+primaryWork:
+  - name: Daylens development (agent orchestration, PR fixing)
+    aliases: [daylens, spcsorg, agent orchestration, prompting]
+secondary:
+  # Evening work, almost certainly after capture died — naming it is a
+  # bonus, missing it is not an error.
+  - name: Curation / journaling system setup in Obsidian
+    aliases: [obsidian, curation, reading list, content consumption, routine rules, journal template, vault, journaling]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "08:20", until: "12:30", desc: "Daylens via agent orchestration: prompting agents and fixing the results of wrong prompts across the spcsorg/daylens PRs; the planned morning ML study never started" }
+  - { from: "12:30", until: "18:00", desc: "more of the same prompting/fixing grind — roughly half the day went to it; no ML study, no content curation" }
+  - { from: "19:00", desc: "evening: journal reflection, then building the curation system in Obsidian — Content Consumption Plan, Reading List, to-do randoms, everyday routine rules, the daily hour-table template, and the July 22 plan" }
+notes: >
+  Severe capture outage: app sessions exist only 08:21–09:34, then nothing
+  for the rest of the day. Sparse browser-history visits trickle on until
+  ~19:20, but the bulk of the day — including most of the prompting/fixing
+  grind and the entire evening Obsidian session — was never observed. Do not
+  punish Daylens for the unobserved hours or for a thin timeline; do punish
+  narrating a full confident day from one hour of data, or presenting the
+  day as if it ended mid-morning by choice.

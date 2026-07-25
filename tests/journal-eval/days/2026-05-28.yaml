@@ -1,0 +1,42 @@
+# Machine-reconstructed: no journal entry. Ground truth is the daylens git
+# history — 73 commits in one day, part-human, part parallel coding agents
+# (the claim(...) commits).
+date: "2026-05-28"
+confidence: machine
+sources:
+  - "git: daylens (73 commits, 08:00-22:58, incl. release v1.0.37 at 18:24)"
+  - "app_sessions coverage 00:00-01:01 and 07:20-23:59, hole 19:00-20:20"
+summary: >
+  A single-project v1-closeout marathon on Daylens: 73 commits between 08:00
+  and 22:58. The morning shipped the CBC Spring 2026 hackathon landing page
+  and Chunk 2 projections (11:28-11:30); the afternoon was a v1 polish and
+  work-memory push (Week review, memory batches F1-F7, timeline label
+  gating) with a burst of parallel agent claim-commits between 16:48 and
+  18:13; release v1.0.37 went out at 18:24. The evening moved to the
+  architecture fix plan: Chunk 3 single-source queries (19:08), AI loading
+  fixes, block coalescing and memory backfill (21:18-21:41), and the macOS
+  Swift capture helper as the Chunk 1 foundation (22:57).
+primaryWork:
+  - name: Daylens development (v1 closeout, work memory, release v1.0.37)
+    aliases: [daylens]
+secondary:
+  - name: CBC Spring 2026 hackathon landing page
+    aliases: [hackathon, cbc]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "08:00", until: "12:00", desc: "baseline commit, hackathon landing page, Chunk 2 projections and router hardening" }
+  - { from: "15:00", until: "18:30", desc: "v1 polish + work memory batches (F1-F7), parallel agent claim-commit burst 16:48-18:13, release v1.0.37 at 18:24" }
+  - { from: "20:20", desc: "architecture chunks: Chunk 3 AI query fixes, block coalescing, memory backfill, Swift capture helper, through 22:58" }
+gaps:
+  - { from: "01:05", to: "07:15", reason: "overnight; zero captured sessions between 01:01 and 07:20" }
+notes: >
+  Machine-reconstructed from git only; no journal exists for this day. Many
+  commits between 16:48 and 18:13 are claim(...) markers authored by
+  parallel coding agents, so raw commit count overstates hands-on-keyboard
+  intensity — the human arc is the morning hackathon/projections work, the
+  afternoon memory/release push, and the evening architecture chunks.
+  Capture has a hole from ~19:00 to 20:20 even though a commit lands at
+  19:08 (possibly agent-pushed); treat that hole as a capture uncertainty,
+  not a verified off-computer gap.

@@ -1,0 +1,45 @@
+# Machine-reconstructed: no journal entry. Ground truth is git commit history
+# across ~/Dev-Personal repos.
+date: "2026-03-31"
+confidence: machine
+sources:
+  - "git: daylens (44 commits, 07:55-23:54 — all web/launch surfaces)"
+  - "git: portfolio (9 commits, 07:56-16:18, incl. Issue 51/52 newsletter essays)"
+  - "git: daylens-swift (2 commits at 18:37, open-source launch prep)"
+  - "git: lennys-newsletter-podcast-data-all (transcript slug cleanup 09:25)"
+summary: >
+  A full-day push on Daylens's public launch surfaces: 44 commits from 07:55
+  to 23:54 covering /daylens subdirectory hosting, a docs page, a premium
+  landing-page redesign with real app screenshots, roadmap and changelog
+  pages, and an evening rebuild of the changelog/roadmap in Dia/Raycast
+  style (22:08-23:54). In parallel the portfolio repo got nine commits:
+  repeated rewrites of newsletter Issue 51 between 08:56 and 09:35, the
+  Daylens announcement tour (Issue 52) at 12:00, and screenshot wiring at
+  16:18. daylens-swift was prepared for open-source launch at 18:37, and a
+  Claire Vo transcript slug was cleaned in the podcast dataset at 09:25.
+primaryWork:
+  - name: Daylens web / launch surfaces (landing, docs, roadmap, changelog)
+    aliases: [daylens, landing, changelog, roadmap]
+  - name: Portfolio + newsletter essays (Issue 51, Daylens announcement tour)
+    aliases: [portfolio, newsletter, issue 51, issue 52, essay]
+secondary:
+  - name: daylens-swift open-source launch prep
+    aliases: [daylens-swift, open-source, open source]
+  - name: Podcast dataset transcript cleanup
+    aliases: [lenny, podcast, transcript]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "07:55", until: "09:35", desc: "daylens subdirectory hosting fixes interleaved with portfolio Issue 51 essay rewrites" }
+  - { from: "12:00", until: "13:00", desc: "docs page for daylens (12:00) and the Issue 52 Daylens announcement tour (12:00)" }
+  - { from: "15:30", until: "18:20", desc: "landing-page redesign: premium design system, real screenshots, roadmap/changelog pages; daylens-swift open-source prep at 18:37" }
+  - { from: "22:08", desc: "evening changelog/roadmap rebuild: Dia-style archive, Raycast-style roadmap, through 23:54" }
+notes: >
+  Machine-reconstructed from git only; no journal exists for this day.
+  Capture shows one suspicious 405-minute session starting 00:31 and no
+  other sessions until 07:00 — treat the pre-07:00 stretch as unverified
+  rather than as work or as a gap. From 07:00 to past midnight coverage is
+  continuous and the commit stream corroborates near-continuous computer
+  work; commits thin out 19:00-22:00, but nothing verifiable says the
+  machine was left.

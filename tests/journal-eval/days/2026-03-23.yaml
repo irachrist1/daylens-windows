@@ -1,0 +1,38 @@
+# Machine-reconstructed: no journal entry. Ground truth is git commit history
+# across ~/Dev-Personal repos; raw session titles used only for orientation.
+date: "2026-03-23"
+confidence: machine
+sources:
+  - "git: daylens (20 commits, 00:08-08:00)"
+  - "git: daylens-swift (15 commits, 00:08-08:13, releases v1.0.8-v1.0.13)"
+  - "git: Dayflow (5 commits, 02:40-23:56)"
+  - "app_sessions coverage 00:00-23:10 with a hole 00:40-05:00"
+summary: >
+  An overnight-into-morning release blitz on Daylens: 35 commits split between
+  the daylens repo (dashboard fixes, liquid glass UI, PIN-protected privacy
+  section, hide apps/sites) and daylens-swift (version bumps v1.0.8 through
+  v1.0.13, update-install fixes), running from 00:08 to 08:13. Dayflow got
+  commits at 02:40, 03:33 and 06:42 (Claude runner and Gemini onboarding
+  copy), one more at 11:43 (Today shortcut), and a final one at 23:56. Git
+  proves work continued through the small hours even though capture has a
+  hole from roughly 00:40 to 05:00.
+primaryWork:
+  - name: Daylens development (app + dashboard releases)
+    aliases: [daylens]
+  - name: Dayflow development
+    aliases: [dayflow]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { until: "08:13", desc: "overnight/early-morning shipping run: paired daylens + daylens-swift commits, releases v1.0.8-v1.0.13, liquid glass UI, privacy/hiding features; Dayflow commits at 02:40, 03:33, 06:42" }
+  - { from: "11:00", until: "12:00", desc: "Dayflow: Today shortcut for date navigation (commit 11:43)" }
+  - { from: "23:30", desc: "late Dayflow commit (codex/claude domain examples, 23:56)" }
+notes: >
+  Machine-reconstructed from git only; no journal exists for this day.
+  Capture has no sessions between ~00:40 and 05:00, yet Dayflow commits land
+  at 02:40 and 03:33 inside that hole, so it was a capture outage, not
+  (entirely) time away — do not treat it as a verified off-computer gap, and
+  do not punish missing evidence there. Nothing verifiable pins down the
+  midday/afternoon subject (only session data, which is circular), so the
+  shape between 08:13 and 23:30 is deliberately left open.

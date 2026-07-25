@@ -1,0 +1,40 @@
+# Machine-reconstructed: no journal entry. Ground truth is git commit history
+# across ~/Dev-Personal repos; terminal-heavy app mix corroborates but does
+# not define the claim.
+date: "2026-06-10"
+confidence: machine
+sources:
+  - "git: tars (15 commits, 10:39-19:27, incl. npm publish v0.1.4)"
+  - "git: daylens + portfolio (paired README rewrites at 16:48/16:49)"
+  - "app_sessions coverage 08:12-22:46, continuous"
+summary: >
+  A TARS day, start to finish: 15 commits from 10:39 to 19:27. The morning
+  laid down research and strategy docs for the index-centered architecture
+  (10:39, 11:02); midday pivoted to "chief-of-staff is the product" — the
+  connector-first skill, onboarding, an npx installer — and the package was
+  published to npm as tars-chief-of-staff by 14:49, reaching v0.1.4 with a
+  viral README rewrite and MIT license by 16:30. In the same 16:48-16:49
+  minute both the daylens and portfolio repos got problem-first README
+  rewrites. The evening built the TARS landing page (walking gait, draggable
+  3D TARS, install chips, 18:17-18:35) and a front-end-markdown skill at
+  19:27.
+primaryWork:
+  - name: TARS (chief-of-staff skill, npm publish, landing page)
+    aliases: [tars, chief-of-staff, chief of staff]
+secondary:
+  - name: README rewrites (daylens + portfolio)
+    aliases: [readme, daylens, portfolio]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "10:39", until: "12:10", desc: "TARS research & strategy docs: index-centered architecture, grounding in OpenClaw/Hermes code" }
+  - { from: "14:30", until: "16:30", desc: "TARS as product: connector-first skill, npx installer, npm publish, v0.1.4 viral README + MIT license" }
+  - { from: "16:45", until: "17:00", desc: "paired problem-first README rewrites for daylens and portfolio" }
+  - { from: "18:15", until: "19:30", desc: "TARS landing page (walking gait, draggable 3D model, install chips) and front-end-markdown skill" }
+notes: >
+  Machine-reconstructed from git only; no journal exists for this day.
+  Capture is continuous 08:12-22:46 with no holes; the dominant apps are
+  Ghostty and Safari, consistent with terminal-driven package work, used
+  here only as corroboration. The 08:12-10:39 warm-up and post-19:27
+  evening have no verifiable subject and are left open.

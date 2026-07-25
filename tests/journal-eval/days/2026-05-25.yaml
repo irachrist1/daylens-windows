@@ -1,0 +1,43 @@
+# Ground truth from the owner's Obsidian journal (narrative day entry).
+date: "2026-05-25"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-05-25 (narrative + evening sections)"
+summary: >
+  Woke at 3 a.m. and worked on the Andersen "Did You Know" post about
+  Rwanda's first-to-file trademark system and the Azania/Bahresa case;
+  finished and posted it around 9:30 a.m. Two short cardio sessions
+  (~15 and ~11 minutes) and a shower after. Then a genuinely focused
+  Coursera ML session — going through the materials properly for the first
+  time. Around noon, Andersen calls, a friend, and a walk-in broke the
+  flow; the afternoon went to errands and food with little focused work.
+  In the early evening about 30 minutes on the second-brain Obsidian vault
+  with Claude Code, then a BAL basketball game at BK Arena, with a
+  calisthenics stop at Zaria Court on the way back.
+primaryWork:
+  - name: Andersen "Did You Know" post
+    aliases: [andersen, did you know, trademark, azania, ip protection]
+  - name: ML study (Coursera)
+    aliases: [coursera, machine learning, "ml study", "ai/ml"]
+secondary:
+  - name: Second-brain vault work with Claude Code
+    aliases: [second brain, obsidian, vault, journal]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { until: "09:30", desc: "Andersen 'Did You Know' post (Rwanda trademark, Azania/Bahresa) — writing and posting; started ~03:00, capture only sees from ~08:05" }
+  - { from: "09:30", until: "10:20", desc: "two cardio sessions and a shower, off computer" }
+  - { from: "10:20", until: "12:00", desc: "focused Coursera ML session" }
+  - { from: "12:00", until: "17:00", desc: "Andersen calls, a friend, and a walk-in broke the flow; errands and food; scattered afternoon with little focused work" }
+  - { from: "17:00", until: "18:15", desc: "~30 min on the second-brain Obsidian vault with Claude Code; journaling (Day One), TickTick" }
+  - { from: "18:20", until: "22:00", desc: "BAL game at BK Arena (school tickets); calisthenics stop at Zaria Court on the way back" }
+gaps:
+  - { from: "09:35", to: "10:15", reason: "cardio sessions (15 + ~11 min) and shower" }
+  - { from: "18:20", to: "21:55", reason: "BAL basketball game at BK Arena; Zaria Court stop on the way back" }
+notes: >
+  Capture is missing ~01:00–08:05, so most of the 3:00–9:30 Andersen post
+  block was never observed — do not punish the missing early morning, do
+  punish narrating the post work as if it started at 8. There is ~1.8h of
+  screen activity 22:00–24:00 that the journal does not describe; treat it
+  as unnarrated wind-down, not primary work.

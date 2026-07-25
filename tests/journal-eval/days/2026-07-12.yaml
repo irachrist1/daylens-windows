@@ -1,0 +1,40 @@
+# Machine-reconstructed: no journal entry. Ground truth is the daylens git
+# history plus the calendar signals stored in the snapshot (personal planning
+# blocks, not attended meetings).
+date: "2026-07-12"
+confidence: machine
+sources:
+  - "git: daylens (38 commits, 08:02-17:58)"
+  - "external_signals calendar: personal planning blocks (AI/ML learning 9am, Writing 12pm, Run 6:30pm, Reading 6:45pm, Wind down 10pm)"
+  - "app_sessions: real coverage only 14:00-23:26; one runaway 858-min session logged at 00:00"
+summary: >
+  A Daylens hardening day proven by 38 commits from 08:02 to 17:58. The
+  early morning merged Wave 1: absence guards, the provider circuit breaker
+  with telemetry retention, real chat cancel, and the whole-deck wrapped
+  judge (08:02-08:47). A timeline-correction hardening burst followed
+  (09:36-09:50: absence hidden by inflated session ends, corrections as
+  interval facts). Commits pause 09:50-13:47 — the calendar had AI/ML
+  learning and Writing blocks planned there, unverifiable — then billing
+  hardening lands 13:47-15:06 (atomic payment state, spend reservation,
+  Polar ordering), and the day closes by rebuilding chat as one agent loop
+  with a grounded tool surface (ADR 0003) at 17:58.
+primaryWork:
+  - name: Daylens development (Wave 1 merges, timeline corrections, billing hardening, chat agent loop)
+    aliases: [daylens]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "08:00", until: "09:50", desc: "Wave 1 merges (absence guard, circuit breaker, real cancel, deck judge) then timeline-correction hardening" }
+  - { from: "13:47", until: "15:10", desc: "billing hardening: atomic payment/spend state, key provisioning, Postgres survival, CI fix" }
+  - { from: "16:30", until: "18:00", desc: "AI fixes and the chat rebuild as one agent loop (ADR 0003)" }
+notes: >
+  Machine-reconstructed from git plus stored calendar signals; no journal
+  exists for this day. Capture is broken before 14:00: the only pre-14:00
+  row is a single runaway 858-minute "Home / X" session logged at 00:00,
+  which alone inflates the day's tracked total by ~14 hours — yet git
+  proves real work from 08:02. Do not punish missing morning evidence, and
+  do not let that phantom session read as an all-night X binge. The
+  calendar entries are personal planning blocks (including a 6:30pm run),
+  not verified attendance; the commit lull 09:50-13:47 is consistent with
+  the planned learning/writing blocks but unproven.

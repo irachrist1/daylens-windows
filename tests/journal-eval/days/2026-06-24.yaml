@@ -1,0 +1,43 @@
+# Machine-reconstructed: no journal entry. Ground truth is the daylens git
+# history: 30 commits, an onboarding-rebuild day with Linear DEV-numbers in
+# the messages.
+date: "2026-06-24"
+confidence: machine
+sources:
+  - "git: daylens (30 commits, 09:42-23:47)"
+  - "app_sessions coverage 07:42-23:45, continuous"
+summary: >
+  A Daylens onboarding-rebuild day, one repo, 30 commits from 09:42 to
+  23:47. The morning studied Rize's onboarding screen-by-screen and turned
+  it into a prescriptive Daylens blueprint (09:42-09:57), then fixed Windows
+  bugs under DEV-87 (system noise, midnight split, window titles, 10:39).
+  Midday shipped memory v2: unified view and client-scoped memory
+  (DEV-107/108), chat-write-to-client-scope, short client aliases, plus
+  DEV-106 billing and usage tracking (12:08-14:42). From 14:12 to 21:07 the
+  onboarding flow itself was rebuilt over and over — intent capture, guided
+  then narrated then animated feature tour, Lumen mascot, aurora gradient,
+  a designer brief — ending with the Settings Usage tab fix at 21:07 and a
+  client-memory test at 23:47.
+primaryWork:
+  - name: Daylens onboarding rebuild
+    aliases: [onboarding, first run, first-run]
+  - name: Daylens memory + billing work (DEV-106/107/108)
+    aliases: [memory, billing, usage, client]
+secondary:
+  - name: Windows bug fixes (DEV-87)
+    aliases: [windows, dev-87]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "09:42", until: "10:45", desc: "Rize onboarding analysis docs and DEV-87 Windows fixes" }
+  - { from: "12:00", until: "14:45", desc: "memory v2 (unified view, client scope, aliases), AI merge-blocks widget, DEV-106 billing & usage" }
+  - { from: "14:12", until: "21:07", desc: "onboarding rebuild arc: intent capture, feature tour iterations, Lumen mascot, designer brief, polish pass; Usage tab fix at 21:07" }
+  - { from: "23:30", desc: "client-scoped memory invariant test (23:47)" }
+notes: >
+  Machine-reconstructed from git only; no journal exists for this day. All
+  30 commits are in the daylens repo, so the whole day is one project with
+  several threads; the DEV-xxx identifiers come from commit messages, not
+  from Linear itself. Capture is continuous 07:42-23:45 (hour 15 is light
+  at ~8 minutes, but commits land at 15:02/15:08/15:22, so it is not a
+  gap).
