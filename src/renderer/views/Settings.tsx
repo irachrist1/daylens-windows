@@ -27,7 +27,6 @@ import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
 import { FileAccessSection } from './settings/FileAccessSection'
 import { ScreenContextSection } from './settings/ScreenContextSection'
 import { ContextPacketSection } from './settings/ContextPacketSection'
-import { ConnectionsSection } from './settings/ConnectionsSection'
 import { ExportSection } from './settings/ExportSection'
 import { track } from '../lib/analytics'
 import { setPendingChatSeed } from '../lib/aiSeed'
@@ -1157,7 +1156,7 @@ function TrackingControlsContent({
 type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory' | 'entities' | 'fileAccess'
-  | 'labels' | 'clients' | 'connections' | 'privacy' | 'screenContext' | 'export'
+  | 'labels' | 'clients' | 'privacy' | 'screenContext' | 'export'
   | 'mcp' | 'enrichment' | 'capture' | 'updates' | 'help'
 
 interface SectionDef { id: SectionId; label: string; keywords: string }
@@ -1187,7 +1186,6 @@ const SECTION_GROUPS: SectionGroup[] = [
     items: [
       { id: 'labels', label: 'Labels', keywords: 'category app override propagate zen browsing' },
       { id: 'clients', label: 'Clients', keywords: 'project attribution company work' },
-      { id: 'connections', label: 'Connections', keywords: 'connector connected sources external google calendar outlook github linear granola ics import sync disconnect scopes' },
       { id: 'privacy', label: 'Privacy & tracking', keywords: 'pause exclude excluded incognito private analytics local data' },
       { id: 'screenContext', label: 'Screen context', keywords: 'experiment screenshot screen capture sample frame ocr consent opt-in backlog quarantine retry delete wipe' },
       { id: 'export', label: 'Export your data', keywords: 'export download backup take your data portability history json jsonl csv manifest verify complete local' },
@@ -1225,7 +1223,6 @@ function SectionIcon({ id }: { id: SectionId }) {
     fileAccess: <><path d="M3 2.6h6l3 3v7.8H3Z" /><path d="M9 2.6v3h3" /><rect x="6" y="8" width="4" height="3.2" rx="0.8" /><path d="M7 8V7a1 1 0 0 1 2 0v1" /></>,
     labels: <><path d="M2.6 7.4 7.2 2.8h4.2v4.2L6.8 11.6Z" /><circle cx="9.4" cy="5.6" r="0.85" fill="currentColor" stroke="none" /></>,
     clients: <><rect x="2.3" y="5" width="11.4" height="7.6" rx="1.2" /><path d="M6 5V3.6h4V5" /></>,
-    connections: <><path d="M6.8 9.2 9.2 6.8" /><path d="M7.6 4.4 9 3a2.4 2.4 0 0 1 3.4 3.4l-1.4 1.4" /><path d="M8.4 11.6 7 13a2.4 2.4 0 0 1-3.4-3.4L5 8.2" /></>,
     privacy: <path d="M8 1.9 13 3.7v4.1c0 3-2.2 5-5 6.3-2.8-1.3-5-3.3-5-6.3V3.7Z" />,
     screenContext: <><rect x="2" y="3" width="12" height="8.4" rx="1.4" /><path d="M5.6 13.4h4.8" /><circle cx="8" cy="7.2" r="1.7" /></>,
     export: <><path d="M8 9.8V2.8" /><path d="M5.2 5.4 8 2.6l2.8 2.8" /><path d="M3 9.6v3.2h10V9.6" /></>,
@@ -3591,17 +3588,6 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           maxWidth={760}
         >
           <ExportSection />
-        </SectionPage>
-      )
-      break
-    case 'connections':
-      content = (
-        <SectionPage
-          title="Connections"
-          description="External sources that will add what this machine can't see — meetings, commits, issues. Every connection is read-only, consent-gated, and fully disconnectable; each becomes connectable here as its adapter ships."
-          maxWidth={760}
-        >
-          <ConnectionsSection />
         </SectionPage>
       )
       break

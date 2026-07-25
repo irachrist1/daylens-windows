@@ -279,7 +279,10 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
       bars: facts.appSites.map((s) => ({ name: s.name, seconds: s.seconds })),
       fallbackLine: `${facts.appSites[0].name} led the day.`,
       ask: 'One short caption for the app and site chart, a read on its SHAPE (concentrated in one or two tools, or spread thin), and NAME at least one real app or site from the chart. Never add up or compare the bar values numerically and never claim one nearly matched another; the chart already shows the sizes.',
-      factsNote: facts.appSites.map((s) => `${s.name} ${hm(s.seconds)}`).join(', '),
+      // The remainder bucket stays on the rendered bars (the chart must sum to
+      // the headline) but never reaches the writer — "Other" is chart
+      // plumbing, not a nameable surface of the day.
+      factsNote: facts.appSites.filter((s) => s.kind !== 'other').map((s) => `${s.name} ${hm(s.seconds)}`).join(', '),
     })
   }
 

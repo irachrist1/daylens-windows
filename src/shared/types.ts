@@ -1861,62 +1861,6 @@ export interface MeetingNotesSignal {
   notes: MeetingNoteSignal[]
 }
 
-// ─── Connectors (connectors.md, DEV-186) ────────────────────────────────────
-// The connected-sources foundation. Every provider registers a manifest; the
-// contract is proven by a fake provider in the test suite (the ticket's
-// deliverable) and real adapters arrive with DEV-188+, flipping `available`.
-// The renderer sees ONLY this listing shape — credentials, cursors, and raw
-// provider errors never cross the IPC boundary (spec: "The interface does not
-// display raw tokens, internal cursors, or provider errors that reveal
-// secrets").
-
-export type ConnectorId =
-  | 'google_calendar'
-  | 'outlook_calendar'
-  | 'github'
-  | 'linear'
-  | 'granola'
-
-export type ConnectorAuthState = 'disconnected' | 'connected' | 'needs_attention'
-
-/** One connector as Settings → Connections shows it. */
-export interface ConnectorListing {
-  id: ConnectorId
-  displayName: string
-  providerKind: 'calendar' | 'code' | 'issues' | 'meetings'
-  /** direct = Daylens-owned adapter; brokered = via an intermediary;
-   *  local = reads a file/store on this machine, no account at all. */
-  integration: 'direct' | 'brokered' | 'local'
-  authKind: 'oauth' | 'token' | 'local_file'
-  /** Plain-language "what data this brings" copy shown before connecting. */
-  whatItBrings: string
-  /** Exact read-only scopes, each with plain-language meaning. */
-  scopes: Array<{ scope: string; grants: string }>
-  /** Bounded initial-sync lookback, for honest progress copy. */
-  lookbackDays: number
-  /** True when a working adapter ships today; false = listed for the wave. */
-  available: boolean
-  authState: ConnectorAuthState
-  /** Human account/source label ("work.ics", "you@example.com"). Never a path, token, or cursor. */
-  accountLabel: string | null
-  connectedAt: number | null
-  lastSyncAt: number | null
-  /** Sanitized error summary — never a provider body that could carry secrets. */
-  lastSyncError: string | null
-  nextRetryAt: number | null
-  itemsIngested: number
-}
-
-/** What a connect/sync action reports back to Settings. `error` is always a
- *  sanitized summary — never a provider body that could carry secrets. */
-export interface ConnectorSyncSummary {
-  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
-  ingested: number
-  quarantined: number
-  tombstoned: number
-  error?: string
-}
-
 // ─── Full-history export (privacy-retention-and-sync.md §Export, DEV-196) ────
 // The renderer sees plans, progress, results, and verification reports — never
 // a raw row. Everything here is metadata about the export, safe to display.
@@ -2414,11 +2358,6 @@ export interface AppSettings {
   // MCP servers ("mcp:notion") and focus apps ("focus:Session"). Discovery
   // is free; nothing is called until enabled AND the enrichment is wired up.
   enrichmentSources?: Record<string, boolean>
-  // Connected sources master switch (DEV-186). Default ON, but it only opens
-  // the gate together with current capture consent — turning it OFF stops
-  // every connector sync and ingest immediately, same shape as the capture
-  // consent gate. Per-connector connect/disconnect lives on the connection.
-  connectedSourcesEnabled?: boolean
   // Screen-context experiment (DEV-197). Consent is separate from capture,
   // sync, browser, and connector consent, and is offered ONLY from the
   // experiment setup — enabling normal tracking never sets it. Absent means
@@ -3007,7 +2946,6 @@ export const IPC = {
     APPLY_CORRECTION: 'db:apply-correction',
     UNDO_CORRECTION: 'db:undo-correction',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
-    GET_RECAP_RANGE: 'db:get-recap-range',
     GET_TIMELINE_RANGE_BLOCKS: 'db:get-timeline-range-blocks',
   },
   DEBUG: {
@@ -3179,17 +3117,6 @@ export const IPC = {
     REVOKE_GRANT: 'file-access:revoke-grant',
     LIST_DISCLOSURES: 'file-access:list-disclosures',
     PICK_PATH: 'file-access:pick-path',
-  },
-  CONNECTORS: {
-    LIST: 'connectors:list',
-    // Lifecycle IPC (DEV-188, with the first connectable provider). CONNECT
-    // runs the provider's authorization flow and first sync; DISCONNECT
-    // carries the person's explicit keep-or-delete choice for imported data.
-    CONNECT: 'connectors:connect',
-    SYNC: 'connectors:sync',
-    DISCONNECT: 'connectors:disconnect',
-    /** Main → renderer: connect-phase progress ({ connectorId, phase }). */
-    PROGRESS: 'connectors:progress',
   },
   EXPORT: {
     // Full-history export (DEV-196). PLAN previews what an export would

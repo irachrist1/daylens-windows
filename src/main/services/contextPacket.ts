@@ -53,7 +53,6 @@ import {
   getCorrectedPageFactsForRange,
   hasMaterialPageCoverageShortfall,
 } from './activityFacts'
-import { extractTranscriptText as extractGranolaTranscript } from '../connectors/granola/cache'
 
 /** Bump when the assembly rules change; part of every packet and fingerprint,
  *  so two packets are only comparable under the same policy. */
@@ -641,6 +640,75 @@ const TRANSCRIPT_REQUEST_RE =
   /\btranscripts?\b|\bverbatim\b|\bword for word\b|\bexact(?:ly)?\s+(?:what\s+)?(?:was|were)\s+said\b|\bwhat\s+did\s+[^?]{0,60}\bsay\b/i
 const TRANSCRIPT_EXCERPT_CHARS = 700
 const MAX_TRANSCRIPT_EXCERPTS = 2
+
+// Inlined from the removed OAuth connector framework: reads one document's
+// transcript out of a raw Granola cache file. Granola wraps its state as
+// `{"cache": "<stringified json>"}`; transcripts live either in a top-level
+// `state.transcripts` map (docId → segments or string) or on the document's
+// own `transcribe`/`transcript` field.
+function extractGranolaTranscript(raw: string, docId: string): string | null {
+  let outer: unknown
+  try {
+    outer = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (outer == null || typeof outer !== 'object') return null
+  let stateHost = outer as Record<string, unknown>
+  if (typeof stateHost.cache === 'string') {
+    try {
+      const inner = JSON.parse(stateHost.cache)
+      if (inner && typeof inner === 'object') stateHost = inner as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+  const state = (stateHost.state && typeof stateHost.state === 'object'
+    ? stateHost.state
+    : stateHost) as Record<string, unknown>
+
+  const transcripts = state.transcripts
+  if (transcripts && typeof transcripts === 'object' && !Array.isArray(transcripts)) {
+    const entry = (transcripts as Record<string, unknown>)[docId]
+    const text = transcriptEntryText(entry)
+    if (text) return text
+  }
+  for (const doc of granolaDocumentsOf(state)) {
+    if (doc.id !== docId) continue
+    return transcriptEntryText(doc.transcribe) ?? transcriptEntryText(doc.transcript)
+  }
+  return null
+}
+
+function granolaDocumentsOf(state: Record<string, unknown>): Array<Record<string, unknown>> {
+  const documents = state.documents
+  if (Array.isArray(documents)) {
+    return documents.filter((doc): doc is Record<string, unknown> => doc != null && typeof doc === 'object')
+  }
+  if (documents && typeof documents === 'object') {
+    return Object.values(documents as Record<string, unknown>)
+      .filter((doc): doc is Record<string, unknown> => doc != null && typeof doc === 'object')
+  }
+  return []
+}
+
+function transcriptEntryText(entry: unknown): string | null {
+  if (typeof entry === 'string') return entry.trim() || null
+  if (!Array.isArray(entry)) return null
+  const parts: string[] = []
+  for (const segment of entry) {
+    if (typeof segment === 'string') {
+      if (segment.trim()) parts.push(segment.trim())
+      continue
+    }
+    if (segment && typeof segment === 'object') {
+      const record = segment as Record<string, unknown>
+      const text = typeof record.text === 'string' ? record.text : typeof record.content === 'string' ? record.content : null
+      if (text?.trim()) parts.push(text.trim())
+    }
+  }
+  return parts.length > 0 ? parts.join(' ') : null
+}
 
 function granolaTranscriptItems(
   db: Database.Database,

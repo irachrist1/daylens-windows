@@ -50,3 +50,15 @@ test('cleanWorkSubject strips decorations but keeps the real subject', () => {
   assert.equal(cleanWorkSubject('  '), null)
   assert.equal(cleanWorkSubject('Q3 proposal'), 'Q3 proposal')
 })
+
+test('a tool brand plus its own surface words is a panel title, never work', () => {
+  assert.equal(isDisqualifiedWorkSubject('Cursor Agents'), true)
+  assert.equal(isDisqualifiedWorkSubject('Copilot Chat'), true)
+  assert.equal(isDisqualifiedWorkSubject('ChatGPT'), true)
+  assert.equal(isDisqualifiedWorkSubject('New chat - Claude'), true)
+  assert.equal(isDisqualifiedWorkSubject('Untitled chat'), true)
+  // A brand followed by a REAL subject is still a valid work name.
+  assert.equal(isDisqualifiedWorkSubject('Cursor rules for the billing service'), false)
+  // Generic agent words inside a real subject survive.
+  assert.equal(isDisqualifiedWorkSubject('Designing the interpretation agent'), false)
+})

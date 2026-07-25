@@ -31,6 +31,7 @@ import {
 } from '../lib/wrappedNarrative'
 import { buildDayFactTable } from '../lib/wrapFactTable'
 import { getDb } from './database'
+import { localDateString } from '../lib/localDate'
 import { resolveDayEnrichment } from './enrichmentResolve'
 import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
 import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
@@ -102,13 +103,21 @@ export async function getWrappedNarrative(
   // (corrections invalidate the stored row at write time, so in practice this
   // is today accruing activity), the stored prose is re-grounded rather than
   // trusted — a line that would contradict the current cards cannot render.
+  let regeneratingStale = false
   if (!options.force) {
     const stored = getStoredWrappedNarrative<AIWrappedNarrative>(db, 'day', periodKey)
     if (stored && isDeckNarrative(stored.narrative)) {
       if (stored.factsHash === factsHash) {
         return { ...stored.narrative, generatedAt: stored.generatedAt }
       }
-      if (options.onStale !== 'regenerate') {
+      // A COMPLETED day whose stored wrap no longer matches its facts was
+      // generated mid-day and frozen — a full day permanently described by
+      // its first morning. Its facts can only have settled, so regenerate
+      // once; after that the hash matches and the stored wrap is served
+      // forever. Same-day opens keep reconciling so today's wrap stays
+      // stable while activity accrues.
+      const dayCompleted = facts.date < localDateString()
+      if (options.onStale !== 'regenerate' && !(dayCompleted && providerRunner)) {
         const reconciled = reconcileStoredNarrative(stored.narrative, facts, factsHash, enrichment, factTable)
         if (reconciled) return { ...reconciled, generatedAt: stored.generatedAt }
         // Nothing of the stored prose grounds anymore: show the honest
@@ -116,7 +125,9 @@ export async function getWrappedNarrative(
         // or notification delivery produces a fresh one.
         return buildFallbackNarrative(facts, factsHash)
       }
-      // onStale 'regenerate': fall through and generate from the current facts.
+      // onStale 'regenerate' or a settled completed day: fall through and
+      // generate from the current facts.
+      regeneratingStale = true
     }
   }
 
@@ -142,7 +153,7 @@ export async function getWrappedNarrative(
           question: result.question,
           reflection: result.reflection,
         },
-        reason: options.force ? 'manual-regenerate' : undefined,
+        reason: options.force ? 'manual-regenerate' : regeneratingStale ? 'facts-changed' : undefined,
         now: generatedAt,
       })
     } catch (versionError) {

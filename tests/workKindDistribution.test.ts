@@ -54,14 +54,29 @@ test('effectiveBlockKind: stored kind wins, then distribution, then domains', ()
   }
   // Stored field is authoritative.
   assert.equal(effectiveBlockKind({ ...base, kind: 'leisure' }), 'leisure')
-  // Distribution beats the weak domain fallback.
+  // A focused dominant category resolves to work on the read path — the same
+  // rule the block builder applies when it stores the kind (timeline.md
+  // §3.2/§3.6). Rehydrated blocks carry no `kind`, and before this a
+  // CI-work block with an inflated background Netflix tab re-derived as
+  // leisure and rendered "Watching Netflix & YouTube".
+  assert.equal(effectiveBlockKind(base), 'work')
+  // Distribution beats the weak domain fallback (non-focused dominant).
   assert.equal(
-    effectiveBlockKind({ ...base, categoryDistribution: { design: 3000, entertainment: 500 } }),
+    effectiveBlockKind({
+      ...base,
+      dominantCategory: 'browsing' as const,
+      categoryDistribution: { design: 3000, entertainment: 500 },
+    }),
     'work',
   )
-  // No distribution signal: falls back to domain/app resolution.
+  // No distribution signal, no focused dominant: falls back to domain/app
+  // resolution.
   assert.equal(
-    effectiveBlockKind({ ...base, categoryDistribution: { browsing: 4000 } }),
+    effectiveBlockKind({
+      ...base,
+      dominantCategory: 'browsing' as const,
+      categoryDistribution: { browsing: 4000 },
+    }),
     'personal',
   )
 })

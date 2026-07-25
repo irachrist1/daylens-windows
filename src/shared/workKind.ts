@@ -13,6 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import type { AppCategory, WorkKind } from './types'
+import { FOCUSED_CATEGORIES } from './types'
 import { policyForHost } from './domainPolicy'
 import { categoryForDomain } from './domainCategories'
 
@@ -289,6 +290,13 @@ export function kindFromCategoryDistribution(
 // that predate both.
 export function effectiveBlockKind(block: BlockKindInput): WorkKind {
   if (block.kind) return block.kind
+  // Same rule the block builder applies when it resolves the stored kind
+  // (timeline.md §3.2/§3.6): a block whose intent-weighted dominant category
+  // is focused work IS work — background-tab media seconds must not outvote
+  // the foreground work on the rehydrated path either. Blocks read from the
+  // store carry no `kind`, so without this a CI-migration block with a
+  // Netflix tab open re-derived as leisure and rendered "Watching Netflix".
+  if (FOCUSED_CATEGORIES.includes(block.dominantCategory)) return 'work'
   const fromDistribution = kindFromCategoryDistribution(block.categoryDistribution)
   if (fromDistribution) return fromDistribution
   return resolveBlockKind(block)

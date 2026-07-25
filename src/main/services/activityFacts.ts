@@ -463,7 +463,7 @@ export function getCorrectedWebsiteSummariesForRange(
     domain: string
     browserBundleId: string | null
     canonicalBrowserId: string | null
-    milliseconds: number
+    intervals: Array<{ start: number; end: number }>
     visitIds: Set<number>
     titleMs: Map<string, number>
   }>()
@@ -474,23 +474,37 @@ export function getCorrectedWebsiteSummariesForRange(
       domain: interval.domain,
       browserBundleId: visit?.browserBundleId ?? null,
       canonicalBrowserId: visit?.canonicalBrowserId ?? null,
-      milliseconds: 0,
+      intervals: [],
       visitIds: new Set<number>(),
       titleMs: new Map<string, number>(),
     }
     const milliseconds = interval.end - interval.start
-    entry.milliseconds += milliseconds
+    entry.intervals.push({ start: interval.start, end: interval.end })
     entry.visitIds.add(interval.visitId)
     const title = visitsById.get(interval.visitId)?.pageTitle?.trim()
     if (title) entry.titleMs.set(title, (entry.titleMs.get(title) ?? 0) + milliseconds)
     grouped.set(key, entry)
+  }
+  // Id-less visits bypass the shared per-browser claim pool upstream, so two
+  // orphan history rows can hold overlapping credited intervals — union per
+  // group before summing so a duplicate row can never double a domain's time.
+  const unionMs = (intervals: Array<{ start: number; end: number }>): number => {
+    const sorted = intervals.slice().sort((a, b) => a.start - b.start)
+    let total = 0
+    let cursor = Number.NEGATIVE_INFINITY
+    for (const piece of sorted) {
+      const start = Math.max(piece.start, cursor)
+      if (piece.end > start) total += piece.end - start
+      cursor = Math.max(cursor, piece.end)
+    }
+    return total
   }
   return [...grouped.entries()].map(([key, entry]) => {
     const raw = rawByDomainAndBrowser.get(key)
     const topTitle = [...entry.titleMs.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
     return {
       domain: entry.domain,
-      totalSeconds: Math.round(entry.milliseconds / 1000),
+      totalSeconds: Math.round(unionMs(entry.intervals) / 1000),
       visitCount: entry.visitIds.size,
       topTitle,
       browserBundleId: raw?.browserBundleId ?? entry.browserBundleId,

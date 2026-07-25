@@ -23,6 +23,7 @@ import { recordProviderCall } from '../services/aiRateLimiter'
 import { verifyTimestamps, verifyCitedEntities } from '../ai/citations'
 import { languageModelFor } from './providerModel'
 import { buildDaylensTools } from './daylensTools'
+import { buildScreenTools } from './screenTools'
 import { buildSystemTools, type FileAccessAnswer } from './systemTools'
 import type { FileDisclosureRow } from '../services/fileAccess'
 import { buildExportTools, buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
@@ -236,6 +237,9 @@ export async function runChatAgentTurn(
         },
       }),
       ...buildInteractionTools(interactionDeps),
+      // Tier-3 live-screen escalation; consent-gated in Settings, refuses
+      // honestly when off (docs/north-star/context-agent.md).
+      ...buildScreenTools(),
       ...buildExportTools(deps.db, interactionDeps),
       // The confirmed-memory proposal card (DEV-185): a durable personal fact
       // pauses the turn through the same askUser machinery as file access;

@@ -7,7 +7,6 @@ import {
   getReconciledWebsiteVisitsForRange,
   getTopPagesForDomains,
   getWebsiteVisitsForRange,
-  getWebsiteSummariesForRange,
   getWorkContextInsightForRange,
   getDistractionByMonth,
   getDistractionByHour,
@@ -48,7 +47,6 @@ import type {
   WorkContextBlock,
   LabelSource,
   WorkIntentRole,
-  WebsiteSummary,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES, isAppCategory } from '@shared/types'
 import { isAppFocused } from '../lib/focusScore'
@@ -2856,7 +2854,7 @@ function buildBlockFromCandidate(
   const switchCount = countAppSwitches(candidate.sessions)
   const computedAt = Date.now()
   const websites = filterExcludedWebsiteSummaries(
-    db, getWebsiteSummariesForRange(db, blockStart, blockEnd), blockStart, blockEnd,
+    db, getCorrectedWebsiteSummariesForRange(db, blockStart, blockEnd), blockStart, blockEnd,
   ).slice(0, 5)
   const keyPagesByDomain = getTopPagesForDomains(db, blockStart, blockEnd, websites.map((site) => site.domain), 2)
   const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
@@ -5153,7 +5151,7 @@ function loadPersistedTimelineBlocksForDay(
     }
 
     const websites = filterExcludedWebsiteSummaries(
-      db, getWebsiteSummariesForRange(db, row.start_time, row.end_time), row.start_time, row.end_time,
+      db, getCorrectedWebsiteSummariesForRange(db, row.start_time, row.end_time), row.start_time, row.end_time,
     ).slice(0, 5)
 
     const keyPagesByDomain = getTopPagesForDomains(db, row.start_time, row.end_time, websites.map((site) => site.domain), 2)
@@ -5474,7 +5472,7 @@ function persistedDayUnderCovers(blocks: WorkContextBlock[], sessions: AppSessio
   return sessionActiveMs - coveredMs > PARTIAL_SEAL_MAX_UNCOVERED_MS
 }
 
-export function buildTimelineBlocksForDay(
+function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
   sessions: AppSession[],
@@ -5708,7 +5706,7 @@ function classifyGapRange(
   }
 }
 
-export function buildSegmentsForDay(
+function buildSegmentsForDay(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],
@@ -6105,265 +6103,6 @@ export function getHistoryDayPayload(
   options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): HistoryDayPayload {
   return getTimelineDayPayload(db, dateStr, liveSession, options)
-}
-
-function emptyLightweightDayPayload(dateStr: string): DayTimelinePayload {
-  return {
-    date: dateStr,
-    sessions: [],
-    websites: [],
-    blocks: [],
-    segments: [],
-    focusSessions: [],
-    computedAt: Date.now(),
-    version: 'empty',
-    totalSeconds: 0,
-    focusSeconds: 0,
-    focusPct: 0,
-    appCount: 0,
-    siteCount: 0,
-  }
-}
-
-function getLightweightDayPayload(
-  db: Database.Database,
-  dateStr: string,
-): DayTimelinePayload | null {
-  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
-  // Recap reads the same corrected facts as the full Timeline payload so a
-  // canonical day cannot total differently in the recap strip.
-  const sessions = queryCorrectedActivityFactsForRange(db, fromMs, toMs).sessions
-  const websitesForDay = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
-
-  const rows = db.prepare(`
-    SELECT
-      id,
-      start_time,
-      end_time,
-      dominant_category,
-      category_distribution_json,
-      switch_count,
-      label_current,
-      label_source,
-      label_confidence,
-      narrative_current,
-      evidence_summary_json,
-      heuristic_version,
-      computed_at
-    FROM timeline_blocks b
-    WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
-      AND NOT EXISTS (
-        SELECT 1 FROM timeline_block_reviews r
-        WHERE r.block_id = b.id AND r.review_state = 'ignored'
-      )
-    ORDER BY start_time ASC
-  `).all(dateStr) as Array<{
-    id: string
-    start_time: number
-    end_time: number
-    dominant_category: AppCategory
-    category_distribution_json: string
-    switch_count: number
-    label_current: string
-    label_source: string
-    label_confidence: number
-    narrative_current: string | null
-    evidence_summary_json: string
-    heuristic_version: string
-    computed_at: number
-  }>
-
-  if (rows.length === 0) {
-    if (sessions.length === 0) {
-      return emptyLightweightDayPayload(dateStr)
-    }
-    return null
-  }
-
-  const blockIds = rows.map((row) => row.id)
-  const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
-  const labelsByBlock = persistedBlockLabelsByBlockId(db, blockIds)
-  const appSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'app_session')
-  const focusSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'focus_session')
-
-  const blocks: WorkContextBlock[] = []
-
-  let totalSeconds = 0
-  let focusSeconds = 0
-
-  for (const row of rows) {
-    let evidence: Partial<TimelineEvidenceSummary> = {}
-    try {
-      evidence = JSON.parse(row.evidence_summary_json || '{}') as Partial<TimelineEvidenceSummary>
-    } catch {
-      evidence = {}
-    }
-
-    const pageRefs = Array.isArray(evidence.pages) ? evidence.pages as PageRef[] : []
-    const documentRefs = Array.isArray(evidence.documents) ? evidence.documents as DocumentRef[] : []
-    const topArtifacts = [...pageRefs, ...documentRefs]
-      .sort((left, right) => right.totalSeconds - left.totalSeconds)
-      .slice(0, 6)
-
-    const labelRows = labelsByBlock.get(row.id) ?? []
-
-    let categoryDistribution: Partial<Record<AppCategory, number>> = {}
-    try {
-      categoryDistribution = JSON.parse(row.category_distribution_json)
-    } catch {
-      categoryDistribution = {}
-    }
-    const dominantCategory = dominantCategoryForBlock(categoryDistribution, topArtifacts)
-    const ruleLabel = labelRows.find(r => r.source === 'rule')?.label || prettyCategory(dominantCategory)
-    const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
-    const overrideRow = labelRows.find(r => r.source === 'user')
-
-    const memberRows = appSessionMembersByBlock.get(row.id) ?? []
-
-    const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
-    const blockSessions = sessions.filter((session) => sessionIds.has(session.id))
-
-    const blockWebsites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
-    const websites = blockWebsites.length > 0
-      ? blockWebsites
-      : (evidence.domains ?? []).map((domain) => ({
-          domain,
-          totalSeconds: 0,
-          visitCount: 0,
-          topTitle: null,
-          browserBundleId: null,
-        })) as WebsiteSummary[]
-
-    const keyPagesByDomain = getTopPagesForDomains(db, row.start_time, row.end_time, websites.map((site) => site.domain), 2)
-    const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
-      .map((page) => page.title?.trim())
-      .filter((title): title is string => Boolean(title))
-      .filter((title, index, titles) => titles.indexOf(title) === index)
-      .slice(0, 4)
-
-    const focusRows = focusSessionMembersByBlock.get(row.id) ?? []
-
-    const focusSessionIds = focusRows.map((r) => Number(r.member_id))
-    const focusTotalSeconds = focusRows.reduce((sum, r) => sum + r.weight_seconds, 0)
-    const durationSec = Math.max(1, (row.end_time - row.start_time) / 1000)
-    const focusOverlap = {
-      totalSeconds: focusTotalSeconds,
-      pct: Math.min(100, Math.round((focusTotalSeconds / durationSec) * 100)),
-      sessionIds: focusSessionIds,
-    }
-
-    const blockActiveSec = blockSessions.length > 0
-      ? blockSessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-      : memberRows.reduce((sum, r) => sum + r.weight_seconds, 0)
-    totalSeconds += blockActiveSec
-    if (FOCUSED_CATEGORIES.includes(dominantCategory)) {
-      focusSeconds += blockActiveSec
-    }
-    const evidenceApps = Array.isArray(evidence.apps)
-      ? normalizeAppSummariesForBlockDisplay(evidence.apps as WorkContextAppSummary[])
-      : []
-    const topApps = evidenceApps.length > 0 ? evidenceApps : topAppsFromSessions(blockSessions)
-
-    blocks.push({
-      id: row.id,
-      startTime: row.start_time,
-      endTime: row.end_time,
-      dominantCategory,
-      categoryDistribution,
-      ruleBasedLabel: ruleLabel,
-      aiLabel: aiLabel,
-      sessions: blockSessions,
-      topApps,
-      websites,
-      keyPages,
-      pageRefs,
-      documentRefs,
-      topArtifacts,
-      workflowRefs: workflowsByBlock.get(row.id) ?? [],
-      label: {
-        current: row.label_current,
-        source: row.label_source as LabelSource,
-        confidence: row.label_confidence,
-        narrative: row.narrative_current,
-        ruleBased: ruleLabel,
-        aiSuggested: aiLabel,
-        override: overrideRow?.label ?? null,
-      },
-      focusOverlap,
-      evidenceSummary: {
-        apps: topApps,
-        pages: pageRefs,
-        documents: documentRefs,
-        domains: Array.isArray(evidence.domains) ? evidence.domains as string[] : [],
-        windowTitles: Array.isArray(evidence.windowTitles) ? evidence.windowTitles : [],
-        sites: Array.isArray(evidence.sites) ? evidence.sites : pageRefs,
-        files: Array.isArray(evidence.files) ? evidence.files : [],
-      },
-      heuristicVersion: row.heuristic_version,
-      computedAt: row.computed_at,
-      switchCount: row.switch_count,
-      confidence: confidenceForCandidate({
-        sessions: blockSessions,
-        formation: 'mixed',
-        boundedBeforeGap: false,
-        boundedAfterGap: false,
-      }, coherenceScore(categoryDistribution)),
-      review: {
-        ...DEFAULT_TIMELINE_BLOCK_REVIEW,
-        state: 'pending',
-      },
-      isLive: false,
-    })
-  }
-
-  // Derive labels through the same finalizer as the timeline so recap surfaces
-  // never show the stale "<x> development" strings either (see the persisted
-  // loader). Grouping stays as persisted; only the label is recomputed.
-  const finalizedBlocks = blocks.map((block) => finalizedLabelForBlock(db, block, dateStr))
-  blocks.length = 0
-  blocks.push(...finalizedBlocks)
-
-  const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
-  const segments = buildSegmentsForDay(db, dateStr, blocks)
-  const activeSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-  const focusedSeconds = sessions
-    .filter((session) => session.isFocused)
-    .reduce((sum, session) => sum + session.durationSeconds, 0)
-  const payloadTotalSeconds = activeSeconds > 0 ? activeSeconds : totalSeconds
-  const payloadFocusSeconds = activeSeconds > 0 ? focusedSeconds : focusSeconds
-
-  return {
-    date: dateStr,
-    sessions,
-    websites: websitesForDay,
-    blocks,
-    segments,
-    focusSessions,
-    computedAt: Date.now(),
-    version: TIMELINE_HEURISTIC_VERSION,
-    totalSeconds: payloadTotalSeconds,
-    focusSeconds: payloadFocusSeconds,
-    focusPct: payloadTotalSeconds > 0 ? Math.round((payloadFocusSeconds / payloadTotalSeconds) * 100) : 0,
-    appCount: new Set(sessions.map((session) => session.bundleId)).size,
-    siteCount: websitesForDay.length,
-  }
-}
-
-export function getRecapRange(
-  db: Database.Database,
-  dateStrs: string[],
-): DayTimelinePayload[] {
-  const todayStr = localDateString()
-  return dateStrs.map((dateStr) => {
-    if (dateStr >= todayStr) {
-      return getTimelineDayPayload(db, dateStr)
-    }
-    const lightweight = getLightweightDayPayload(db, dateStr)
-    if (lightweight) {
-      return lightweight
-    }
-    return getTimelineDayPayload(db, dateStr)
-  })
 }
 
 export function localDateStringForOffset(offsetDays: number): string {

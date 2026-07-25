@@ -551,7 +551,7 @@ function tokenizeForBroadenedSearch(query: string): string[] {
     .filter((token) => token.length >= 3 && !SEARCH_STOPWORDS.has(token))
 }
 
-export function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
+function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
   const limit = params.limit ?? 25
   const searchOpts = { startDate: params.startDate, endDate: params.endDate, limit }
   // DEV-178: AI search reads the same exact-retrieval index as the palette.
@@ -796,7 +796,7 @@ function fmtHHMM(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): DaySummaryResult {
+function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): DaySummaryResult {
   const [fromMs, toMs] = localDayBounds(params.date)
   const summaries = getAppSummariesForRange(db, fromMs, toMs)
   const sessions = getSessionsForRange(db, fromMs, toMs)
@@ -932,7 +932,7 @@ export function execGetDaySummary(params: GetDaySummaryParams, db: Database.Data
   }
 }
 
-export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetAppUsageResult {
+function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetAppUsageResult {
   const now = Date.now()
   const fromMs = params.startDate ? localDayBounds(params.startDate)[0] : now - 365 * 86_400_000
   const toMs = params.endDate ? localDayBounds(params.endDate)[1] : now
@@ -1115,7 +1115,7 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
   }
 }
 
-export function execGetAttributionContext(params: GetAttributionContextParams, db: Database.Database): GetAttributionContextResult {
+function execGetAttributionContext(params: GetAttributionContextParams, db: Database.Database): GetAttributionContextResult {
   const client = findClientByName(params.entityName, db)
   const project = client ? null : findProjectByName(params.entityName, db)
   const entityId = client?.id ?? project?.id ?? null
@@ -1219,7 +1219,7 @@ function sanitizeKeyPageTitle(page: PageRefLike): string | null {
   return null
 }
 
-export function execGetBlockAtTime(params: GetBlockAtTimeParams, db: Database.Database): GetBlockAtTimeResult {
+function execGetBlockAtTime(params: GetBlockAtTimeParams, db: Database.Database): GetBlockAtTimeResult {
   const { date, time } = params
   const [fromMs] = localDayBounds(date)
   const match = time.match(/^(\d{1,2}):(\d{2})$/)
@@ -1296,7 +1296,7 @@ export function execGetBlockAtTime(params: GetBlockAtTimeParams, db: Database.Da
 // List-clients tool
 // ---------------------------------------------------------------------------
 
-export function execListClients(params: ListClientsParams, db: Database.Database): ListClientsResult {
+function execListClients(params: ListClientsParams, db: Database.Database): ListClientsResult {
   const roster = dbListClients(db).map((row) => ({
     clientId: row.id,
     clientName: row.name,

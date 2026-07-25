@@ -22,6 +22,31 @@ export function isToolBrandName(name: string): boolean {
   return TOOL_BRAND_NAMES.has(cleaned)
 }
 
+// Generic words a tool's own UI uses to name its surfaces. A tool brand plus
+// only these ("Cursor Agents", "Copilot Chat") is a panel title, not work —
+// it named 8 of 12 slides of a real day whose actual project never appeared.
+const TOOL_SURFACE_WORDS = new Set([
+  'agent', 'agents', 'chat', 'chats', 'composer', 'panel', 'tab', 'tabs',
+  'assistant', 'copilot', 'terminal', 'settings', 'home', 'dashboard',
+])
+
+/** True when the name is a tool's own UI surface rather than a work subject:
+ *  a tool brand followed only by surface words ("Cursor Agents"), or a fresh
+ *  unnamed conversation ("New chat - Claude", "Untitled chat"). */
+export function isToolSurfaceTitle(name: string): boolean {
+  const cleaned = name.trim().toLowerCase().replace(/^[^a-z0-9]+/, '').trim()
+  if (!cleaned) return false
+  if (/^(new|untitled) (chat|conversation|thread|tab)\b/.test(cleaned)) return true
+  const words = cleaned.split(/\s+/)
+  for (let i = words.length - 1; i >= 1; i -= 1) {
+    const prefix = words.slice(0, i).join(' ')
+    if (TOOL_BRAND_NAMES.has(prefix) && words.slice(i).every((w) => TOOL_SURFACE_WORDS.has(w))) {
+      return true
+    }
+  }
+  return false
+}
+
 const CLI_VERBS = /^(npx|npm|pnpm|yarn|node|git|gh|python3?|pip3?|brew|cargo|go|docker|kubectl|curl|wget|make|sudo|cd|ls|rm|cp|mv|ssh|scp|bash|zsh|sh)\b/i
 
 /** True when the label reads as a terminal command, not a human work name:
@@ -46,7 +71,8 @@ export function looksLikeJoinedTabTitle(label: string): boolean {
 export function isDisqualifiedWorkSubject(label: string): boolean {
   const trimmed = label.trim()
   if (!trimmed) return true
-  return isToolBrandName(trimmed) || looksLikeCommandLine(trimmed) || looksLikeJoinedTabTitle(trimmed)
+  return isToolBrandName(trimmed) || isToolSurfaceTitle(trimmed)
+    || looksLikeCommandLine(trimmed) || looksLikeJoinedTabTitle(trimmed)
 }
 
 /** Sanitize-then-check: strips capture decorations (braille spinner glyphs,

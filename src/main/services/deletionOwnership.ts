@@ -37,7 +37,9 @@ const ENTITY_LIFECYCLE =
 const AI_THREADS = 'AI thread deletion (aiThreadDeletion) and per-message deletion'
 const OWN_SETTINGS_FLOW = 'its own explicit Settings/chat flow'
 const DEVICE_ONLY = 'device-level deletion (uninstallCleanup / delete-everything)'
-const CONNECTOR_PURGE = 'connector disconnect purge (purgeConnectorDerivedData)'
+// The OAuth connector feature was removed; its tables stay (migrations are
+// append-only) and any residual rows fall to device-level deletion.
+const CONNECTOR_LEGACY = `legacy connector tables (feature removed); ${DEVICE_ONLY}`
 const SCREEN_LIFECYCLE = 'screen-context lifecycle (atomic extract-then-delete, quarantine, purge controls)'
 
 export const DELETION_OWNERSHIP: Record<string, DeletionOwnership> = {
@@ -46,7 +48,7 @@ export const DELETION_OWNERSHIP: Record<string, DeletionOwnership> = {
   app_sessions: { kind: 'evidence', owner: `${TRACKED_ACTIVITY} (legacy rows; writes retired)` },
   focus_events: { kind: 'evidence', owner: TRACKED_ACTIVITY },
   website_visits: { kind: 'evidence', owner: TRACKED_ACTIVITY },
-  connector_records: { kind: 'evidence', owner: CONNECTOR_PURGE },
+  connector_records: { kind: 'evidence', owner: CONNECTOR_LEGACY },
   external_signals: { kind: 'evidence', owner: `${TRACKED_ACTIVITY}; refreshed per day` },
   screen_context_frames: { kind: 'evidence', owner: SCREEN_LIFECYCLE },
   screen_context_evidence: { kind: 'evidence', owner: SCREEN_LIFECYCLE },
@@ -105,7 +107,7 @@ export const DELETION_OWNERSHIP: Record<string, DeletionOwnership> = {
   category_overrides: { kind: 'user', owner: OWN_SETTINGS_FLOW },
   client_aliases: { kind: 'user', owner: OWN_SETTINGS_FLOW },
   clients: { kind: 'user', owner: OWN_SETTINGS_FLOW },
-  connector_connections: { kind: 'user', owner: `disconnect flow; ${CONNECTOR_PURGE}` },
+  connector_connections: { kind: 'user', owner: CONNECTOR_LEGACY },
   context_packets: { kind: 'user', owner: AI_THREADS },
   correction_undo_log: { kind: 'user', owner: 'correction undo/redo flows' },
   evidence_exclusions: { kind: 'user', owner: 'correction undo/redo flows' },

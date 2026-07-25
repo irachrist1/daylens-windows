@@ -178,7 +178,12 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
       mostlyRest: facts.isLeisureDay,
     },
     workedOn: facts.workActivities.map((a) => ({ what: workActionPhrase(a.name, a.category), time: formatHm(a.seconds) })),
-    whereTheTimeWent: facts.appSites.map((s) => ({ name: s.name, time: formatHm(s.seconds) })),
+    // The chart's remainder bucket is presentation plumbing, not a day fact —
+    // fed to the model it produces lines about "the catch-all of everything
+    // else" / "somewhere the chart calls Other" instead of the day.
+    whereTheTimeWent: facts.appSites
+      .filter((s) => s.name.toLowerCase() !== 'other')
+      .map((s) => ({ name: s.name, time: formatHm(s.seconds) })),
     story: storyBeats,
     longestStretch: facts.standout
       ? { time: formatHm(facts.standout.seconds), on: facts.standout.name, from: `${facts.standout.startClock} to ${facts.standout.endClock}` }

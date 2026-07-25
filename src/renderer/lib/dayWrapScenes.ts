@@ -10,7 +10,7 @@
 
 import type { AppCategory, DayTimelinePayload, DayWrapEntity, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { effectiveBlockKind, type WorkKind } from '@shared/workKind'
+import { effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
 import { inferWorkIntent } from '@shared/workIntent'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { friendlyDomain, humanizeTitle, leisureActivityTitle } from '@shared/humanize'
@@ -208,9 +208,12 @@ function blockDisplayName(block: WorkContextBlock, kind: WorkKind): string {
     return name || categoryWord(block.dominantCategory)
   }
   if (kind === 'leisure') {
+    // Name the leisure by its leisure domains only — a work tab open inside a
+    // leisure block (Slack, a CI dashboard) must never appear as "watching".
     const domains = block.websites
       .slice()
       .sort((a, b) => b.totalSeconds - a.totalSeconds)
+      .filter((w) => kindForDomain(w.domain) === 'leisure')
       .map((w) => w.domain)
     return leisureActivityTitle(domains)
   }
@@ -304,6 +307,7 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     else if (kind === 'leisure') {
       leisureSeconds += seconds
       for (const site of block.websites) {
+        if (kindForDomain(site.domain) !== 'leisure') continue
         const name = friendlyDomain(site.domain)
         if (name) leisureByName.set(name, (leisureByName.get(name) ?? 0) + site.totalSeconds)
       }
@@ -554,7 +558,9 @@ function buildDayStory(blocks: WorkContextBlock[], dayStartMs: number): DayStory
           else byName.set(key, { phrase: workActionPhrase(name, placed.block.dominantCategory), seconds: placed.seconds })
         }
       } else if (kind === 'leisure' && credits) {
-        const domains = placed.block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds).map((w) => w.domain)
+        const domains = placed.block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds)
+          .filter((w) => kindForDomain(w.domain) === 'leisure')
+          .map((w) => w.domain)
         const friendly = leisureActivityTitle(domains)
         if (placed.seconds > asideSeconds) { asideSeconds = placed.seconds; asideName = friendly }
       }

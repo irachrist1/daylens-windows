@@ -35,6 +35,10 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 
 | Document                                           | Purpose                                                          |
 | -------------------------------------------------- | ---------------------------------------------------------------- |
+| [North star](docs/north-star/codebase.md)          | Verified codebase map, invariants, and recorded decisions (start here) |
+| [Gap analysis 2026-07-20](docs/north-star/gap-analysis-2026-07-20.md) | The reference day: journal ground truth vs Daylens output |
+| [Activity understanding](docs/north-star/activity-understanding.md) | The inference model: attention budget, naming ladder, threads, gaps |
+| [Context agent](docs/north-star/context-agent.md)  | The tiered agent design: decides what context it needs, goes and gets it |
 | [Product direction](docs/product/product.md)       | The product promise, problem, principles, and boundaries         |
 | [V2 direction](docs/product/v2.md)                 | Accepted V2 scope, sequencing, and technical boundaries          |
 | [Vocabulary](docs/product/vocabulary.md)           | Shared meanings for product and architecture terms               |
