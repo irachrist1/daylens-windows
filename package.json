@@ -65,7 +65,8 @@
     "dist:mac": "npm run build:all && electron-builder --mac zip dmg --config electron-builder.config.js",
     "dist:linux": "npm run build:all && electron-builder --linux AppImage deb rpm tar.gz --config electron-builder.config.js",
     "postinstall": "node scripts/rebuild-natives.mjs",
-    "cli": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./cli/run.ts"
+    "cli": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./cli/run.ts",
+    "eval:days": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/journal-eval/run.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.96",
