@@ -134,6 +134,35 @@ test('statusForTool produces real phrases for every agent tool, including the es
   }
 })
 
+test('interpolated string params are bounded to 80 chars — a runaway input never floods a label', () => {
+  const runaway = 'A'.repeat(2_000)
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['get_attribution', { entityName: runaway }],
+    ['search_history', { query: runaway }],
+    ['search_files', { query: runaway }],
+    ['get_app_usage', { appName: runaway }],
+    ['get_day_overview', { date: runaway }],
+    ['get_calendar_events', { date: runaway }],
+    ['get_git_activity', { date: runaway }],
+    ['get_moment', { date: runaway, time: runaway }],
+  ]
+  for (const [tool, input] of cases) {
+    const label = statusForTool(tool, input)
+    assert.ok(label.length <= 200, `${tool} label must stay bounded, got ${label.length} chars`)
+    assert.ok(!label.includes('A'.repeat(81)), `${tool} must truncate the runaway param`)
+    assert.ok(label.includes('…'), `${tool} shows the truncation honestly`)
+  }
+
+  // A short param still shows in full, and a non-string param falls back to
+  // the human phrase instead of leaking "[object Object]" or raw JSON.
+  assert.equal(statusForTool('get_attribution', { entityName: 'ACME' }), 'Checking work for ACME')
+  assert.equal(
+    statusForTool('get_attribution', { entityName: { nested: 'payload' } }),
+    'Checking work for that name',
+  )
+  assert.equal(statusForTool('get_time_chunks', { incrementMinutes: 30 }), 'Building 30-minute intervals')
+})
+
 test('statusForTool never leaks secrets, prompts, or payloads riding in tool arguments', () => {
   const poison = {
     date: '2026-07-06',
