@@ -242,6 +242,225 @@ test('an unstamped database runs the repair from the startup entry; blocks with 
   db.close()
 })
 
+// ─── Category-consistency heal ───────────────────────────────────────────────
+// A stored block's dominant_category / category_distribution_json can predate
+// the attention-clamped credit rules: one 17s Netflix history flip, filled
+// across an untitled browser's foreground time, once stamped a Slack/CI-review
+// block dominant 'entertainment' — and the read-time leisure floor then
+// rendered "Watching Netflix & YouTube" over a perfectly good stored label.
+// The repair recomputes the facts from the block's own members and heals the
+// row; genuine watching (title-corroborated) stays entertainment.
+
+function insertSession(
+  db: Database.Database,
+  o: { bundleId: string; appName: string; startHour: number; startMin: number; endHour: number; endMin: number; category: string; title: string },
+): void {
+  const start = localMs(o.startHour, o.startMin)
+  const end = localMs(o.endHour, o.endMin)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, capture_source, capture_version
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'test', 2)
+  `).run(
+    o.bundleId, o.appName, start, end, Math.round((end - start) / 1000),
+    o.category, o.title, o.appName, o.bundleId,
+  )
+}
+
+function insertVisit(
+  db: Database.Database,
+  o: { domain: string; title: string; url: string; visitMs: number; durationSec: number; browserBundleId: string },
+): void {
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, normalized_url, page_key, source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'history')
+  `).run(
+    o.domain, o.title, o.url, o.visitMs, o.visitMs * 1000, o.durationSec,
+    o.browserBundleId, o.browserBundleId, o.url, o.url,
+  )
+}
+
+function categoryRow(db: Database.Database, id: string): {
+  dominant_category: string
+  block_kind: string
+  distribution: Partial<Record<string, number>>
+} {
+  const row = db.prepare(`
+    SELECT dominant_category, block_kind, category_distribution_json FROM timeline_blocks WHERE id = ?
+  `).get(id) as { dominant_category: string; block_kind: string; category_distribution_json: string }
+  return {
+    dominant_category: row.dominant_category,
+    block_kind: row.block_kind,
+    distribution: JSON.parse(row.category_distribution_json),
+  }
+}
+
+// The reference shape (2026-07-20 21:24): Slack + Warp foreground work, an
+// untitled browser whose last recorded navigation was a 20s Netflix flip —
+// history fill inflated the stored entertainment seconds past everything else.
+function seedCiReviewEvening(db: Database.Database): void {
+  insertSession(db, {
+    bundleId: 'com.tinyspeck.slackmacgap', appName: 'Slack', category: 'communication',
+    startHour: 21, startMin: 0, endHour: 21, endMin: 5, title: 'daylens (Channel) - Slack',
+  })
+  insertSession(db, {
+    bundleId: 'dev.warp.Warp-Stable', appName: 'Warp', category: 'development',
+    startHour: 21, startMin: 5, endHour: 21, endMin: 25, title: '✳ Claude Code',
+  })
+  insertSession(db, {
+    bundleId: 'company.thebrowser.dia', appName: 'Dia', category: 'browsing',
+    startHour: 21, startMin: 25, endHour: 21, endMin: 50, title: 'Dia',
+  })
+  insertVisit(db, {
+    domain: 'github.com', title: 'ci.yml · daylens/daylens',
+    url: 'https://github.com/daylens/daylens/blob/main/.github/workflows/ci.yml',
+    visitMs: localMs(21, 25) + 5_000, durationSec: 60,
+    browserBundleId: 'company.thebrowser.dia',
+  })
+  // 20 seconds of recorded Netflix dwell; the history fill would hand this
+  // visit the rest of the browser's foreground time (~23 minutes).
+  insertVisit(db, {
+    domain: 'netflix.com', title: 'Stranger Things — Netflix',
+    url: 'https://www.netflix.com/watch/80100172',
+    visitMs: localMs(21, 26) + 30_000, durationSec: 20,
+    browserBundleId: 'company.thebrowser.dia',
+  })
+}
+
+const CI_EVENING_BLOCK_ID = 'blk_ci_evening'
+
+function seedCiEveningBlock(db: Database.Database, options: { withCorrectedReview?: boolean } = {}): void {
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_blocks (
+      id, date, start_time, end_time, block_kind, dominant_category,
+      category_distribution_json, switch_count, label_current, label_source,
+      label_confidence, narrative_current, evidence_summary_json, is_live,
+      heuristic_version, computed_at, invalidated_at
+    ) VALUES (?, ?, ?, ?, 'work', 'entertainment', ?, 0, ?, 'ai', 0.9, NULL, ?, 0, 'test-v1', ?, NULL)
+  `).run(
+    CI_EVENING_BLOCK_ID,
+    TEST_DATE,
+    localMs(21, 0),
+    localMs(21, 50),
+    // The stale stored facts: fill-inflated entertainment dominating the
+    // real communication + development attention.
+    JSON.stringify({ entertainment: 1400, communication: 300, development: 1200, browsing: 100 }),
+    'Slack and Blacksmith workflow review',
+    JSON.stringify(DEV_EVIDENCE),
+    now,
+  )
+  db.prepare(`
+    INSERT INTO timeline_block_labels (id, block_id, label, narrative, source, confidence, created_at)
+    VALUES ('lbl_ci_ai', ?, 'Slack and Blacksmith workflow review', NULL, 'ai', 0.9, ?)
+  `).run(CI_EVENING_BLOCK_ID, now)
+  if (options.withCorrectedReview) {
+    db.prepare(`
+      INSERT INTO timeline_block_reviews (id, block_id, date, evidence_key, review_state, original_block_json, correction_json, created_at, updated_at)
+      VALUES ('rev_ci', ?, ?, 'ek', 'corrected', '{}', '{"category":"entertainment"}', ?, ?)
+    `).run(CI_EVENING_BLOCK_ID, TEST_DATE, now, now)
+  }
+}
+
+test('stale entertainment category facts heal to the focused truth; label and projections follow', async () => {
+  const db = createProductionTestDatabase()
+  try {
+    seedCiReviewEvening(db)
+    seedCiEveningBlock(db)
+    seedDaySnapshot(db, TEST_DATE)
+    seedWrappedNarrative(db, TEST_DATE)
+
+    const result = await runLabelGuardRepair(db)
+    assert.equal(result.status, 'ran')
+    assert.equal(result.healedCategoryBlocks, 1, 'the stale category facts healed')
+    assert.deepEqual(result.affectedDates, [TEST_DATE])
+
+    const healed = categoryRow(db, CI_EVENING_BLOCK_ID)
+    assert.equal(healed.dominant_category, 'development',
+      'the recomputation names the focused work the members actually show')
+    assert.equal(healed.block_kind, 'work')
+    assert.ok((healed.distribution.entertainment ?? 0) <= 60,
+      `entertainment credit is clamped to the recorded 20s dwell, got ${healed.distribution.entertainment}`)
+    assert.ok((healed.distribution.development ?? 0) >= 1200,
+      'the foreground development attention survives the recomputation')
+
+    // The stored label was always right — a category heal never rewrites it.
+    const labelRow = blockRow(db, CI_EVENING_BLOCK_ID)
+    assert.equal(labelRow.label_current, 'Slack and Blacksmith workflow review')
+    assert.equal(labelRow.label_source, 'ai')
+    assert.deepEqual(labelRowSources(db, CI_EVENING_BLOCK_ID), ['ai'], 'the clean ai label row survives')
+
+    // Projections over the stale facts regenerate.
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM day_snapshots WHERE date = ?`).get(TEST_DATE)!['n' as never], 0)
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM wrapped_narratives WHERE cadence = 'day' AND period_key = ?`).get(TEST_DATE)!['n' as never], 0)
+
+    // Idempotent: a forced re-run finds the stored facts already true.
+    const again = await runLabelGuardRepair(db)
+    assert.equal(again.healedCategoryBlocks, 0, 'a re-run is a no-op')
+    assert.equal(again.healedBlocks, 0)
+    assert.deepEqual(categoryRow(db, CI_EVENING_BLOCK_ID), healed, 'a re-run changes nothing')
+  } finally {
+    db.close()
+  }
+})
+
+test('a genuinely-leisure stored block keeps its entertainment facts and label', async () => {
+  const db = createProductionTestDatabase()
+  try {
+    // Safari foregrounded ON Netflix: the window title corroborates the page,
+    // so the visit keeps its full credit and the block stays entertainment.
+    insertSession(db, {
+      bundleId: 'com.apple.Safari', appName: 'Safari', category: 'browsing',
+      startHour: 20, startMin: 0, endHour: 21, endMin: 30, title: 'Stranger Things - Netflix',
+    })
+    insertVisit(db, {
+      domain: 'netflix.com', title: 'Stranger Things',
+      url: 'https://www.netflix.com/watch/80100172',
+      visitMs: localMs(20, 5), durationSec: 85 * 60,
+      browserBundleId: 'com.apple.Safari',
+    })
+    const now = Date.now()
+    db.prepare(`
+      INSERT INTO timeline_blocks (
+        id, date, start_time, end_time, block_kind, dominant_category,
+        category_distribution_json, switch_count, label_current, label_source,
+        label_confidence, narrative_current, evidence_summary_json, is_live,
+        heuristic_version, computed_at, invalidated_at
+      ) VALUES ('blk_watching', ?, ?, ?, 'work', 'entertainment', ?, 0, 'Watching Netflix', 'ai', 0.9, NULL, '{}', 0, 'test-v1', ?, NULL)
+    `).run(TEST_DATE, localMs(20, 0), localMs(21, 30), JSON.stringify({ entertainment: 5100, browsing: 300 }), now)
+    seedDaySnapshot(db, TEST_DATE)
+
+    const result = await runLabelGuardRepair(db)
+    assert.equal(result.healedCategoryBlocks, 0, 'real watching is not "healed"')
+    assert.equal(result.healedBlocks, 0, 'a leisure label on a leisure block passes the guards')
+    assert.deepEqual(result.affectedDates, [])
+    assert.equal(categoryRow(db, 'blk_watching').dominant_category, 'entertainment')
+    assert.equal(blockRow(db, 'blk_watching').label_current, 'Watching Netflix')
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM day_snapshots WHERE date = ?`).get(TEST_DATE)!['n' as never], 1,
+      'an untouched date keeps its frozen snapshot')
+  } finally {
+    db.close()
+  }
+})
+
+test('a user category correction blocks the category heal (invariant 8)', async () => {
+  const db = createProductionTestDatabase()
+  try {
+    seedCiReviewEvening(db)
+    seedCiEveningBlock(db, { withCorrectedReview: true })
+
+    const result = await runLabelGuardRepair(db)
+    assert.equal(result.healedCategoryBlocks, 0, 'a corrected block is never recomputed')
+    assert.equal(categoryRow(db, CI_EVENING_BLOCK_ID).dominant_category, 'entertainment',
+      'the corrected category stands')
+  } finally {
+    db.close()
+  }
+})
+
 test('a pre-stamped database never rescans (guard-version keying)', async () => {
   const db = createProductionTestDatabase()
   markMaintenanceRun(db, labelGuardMaintenanceKey())

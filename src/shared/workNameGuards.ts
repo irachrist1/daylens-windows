@@ -8,12 +8,19 @@
 
 /**
  * Version of the guard rules in this file (plus the stored-label checks built
- * on them in workBlocks.ts `storedLabelViolatesWorkNameGuards`). Bump this
- * whenever the rules change so the startup repair pass
- * (labelGuardRepair.ts) re-scans labels persisted under the older rules —
- * stored labels must heal without the user re-analyzing every day.
+ * on them in workBlocks.ts `storedLabelViolatesWorkNameGuards`, and the
+ * stored-category recomputation the same startup pass runs —
+ * `recomputeStoredBlockCategoryFacts`). Bump this whenever either rule set
+ * changes so the startup repair pass (labelGuardRepair.ts) re-scans rows
+ * persisted under the older rules — stored labels and category facts must
+ * heal without the user re-analyzing every day.
+ *
+ * v2: category-consistency heal — stored dominant_category /
+ * category_distribution_json recomputed with the attention-gated distribution
+ * (media history-fill credit no longer counts as watching without foreground
+ * title corroboration).
  */
-export const WORK_NAME_GUARD_VERSION = 1
+export const WORK_NAME_GUARD_VERSION = 2
 
 /** Tool brands that are the INSTRUMENT of the work, never its subject. */
 export const TOOL_BRAND_NAMES = new Set([

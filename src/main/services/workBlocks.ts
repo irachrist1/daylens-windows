@@ -750,6 +750,9 @@ function categoryDistributionFor(sessions: EffectiveSession[]): Partial<Record<A
 
 interface BrowserCreditPool {
   intervals: { start: number; end: number }[]
+  /** Foreground window titles of the pool's sessions — the corroboration a
+   *  media page needs before its history-fill credit counts as watching. */
+  windowTitles: string[]
   totalSeconds: number
   creditedSeconds: number
 }
@@ -791,13 +794,15 @@ export function weightedCategoryDistributionFor(
     }
     let pool = pools.get(session.bundleId)
     if (!pool) {
-      pool = { intervals: [], totalSeconds: 0, creditedSeconds: 0 }
+      pool = { intervals: [], windowTitles: [], totalSeconds: 0, creditedSeconds: 0 }
       pools.set(session.bundleId, pool)
     }
     pool.intervals.push({
       start: session.startTime,
       end: session.endTime ?? (session.startTime + session.durationSeconds * 1000),
     })
+    const windowTitle = session.windowTitle?.trim()
+    if (windowTitle && !pool.windowTitles.includes(windowTitle)) pool.windowTitles.push(windowTitle)
     pool.totalSeconds += session.durationSeconds
     if (session.canonicalAppId) poolKeyByCanonicalId.set(session.canonicalAppId, session.bundleId)
   }
@@ -818,8 +823,29 @@ export function weightedCategoryDistributionFor(
       if (!poolKey) continue
       const pool = pools.get(poolKey)
       if (!pool) continue
+      // Attention gate for media pages — the distribution-side twin of the
+      // kind-voting clamp (resolveSessionKindRaw). A reconciled credit can
+      // include history-FILL seconds: for an unverifiable browser (Dia) the
+      // last recorded navigation fills the browser's later foreground time
+      // until the next one, which is how a 17-second Netflix flip once spent
+      // 695s of a CI-review block and stamped it dominant 'entertainment'.
+      // Watching is an activity, not a residue: unless the browser's own
+      // foreground window titles corroborate the page, an entertainment
+      // domain's credit counts only inside the visit's recorded dwell — the
+      // fill seconds stay in the pool and fall out as honest 'browsing'.
+      let creditIntervals = freeIntervals
+      if (policyForHost(visit.domain) === 'entertainment'
+        && !pool.windowTitles.some((title) => pageTitleInForegroundTitle(visit.pageTitle, title))) {
+        const observedEndMs = visit.visitTime + Math.max(0, visit.durationSec) * 1000
+        creditIntervals = freeIntervals
+          .map((interval) => ({
+            start: Math.max(interval.start, visit.visitTime),
+            end: Math.min(interval.end, observedEndMs),
+          }))
+          .filter((interval) => interval.end > interval.start)
+      }
       let clippedMs = 0
-      for (const interval of freeIntervals) {
+      for (const interval of creditIntervals) {
         clippedMs += overlapWithIntervalsMs(interval, pool.intervals)
       }
       const credited = Math.min(Math.round(clippedMs / 1000), pool.totalSeconds - pool.creditedSeconds)
@@ -4295,9 +4321,15 @@ export function buildTimelineBlocksFromSessions(
 }
 
 function blockKindFor(block: WorkContextBlock): string {
-  if (block.dominantCategory === 'meetings') return 'meeting'
-  if (block.dominantCategory === 'communication' || block.dominantCategory === 'email') return 'communication'
-  if (block.dominantCategory === 'uncategorized') return 'mixed'
+  return blockKindForCategory(block.dominantCategory)
+}
+
+/** The persisted block_kind implied by a dominant category — exported so the
+ *  startup category heal writes the same value the builder would. */
+export function blockKindForCategory(dominantCategory: AppCategory): string {
+  if (dominantCategory === 'meetings') return 'meeting'
+  if (dominantCategory === 'communication' || dominantCategory === 'email') return 'communication'
+  if (dominantCategory === 'uncategorized') return 'mixed'
   return 'work'
 }
 
@@ -5540,6 +5572,53 @@ export function rederivePersistedDayLabels(
     source: block.label.source,
     confidence: block.label.confidence,
   }]))
+}
+
+export interface StoredBlockCategoryFacts {
+  distribution: Partial<Record<AppCategory, number>>
+  dominantCategory: AppCategory
+  blockKind: string
+}
+
+/**
+ * Recompute one STORED block's category facts from its own members, through
+ * the exact computation buildBlockFromCandidate runs at build time: the
+ * site-weighted, attention-gated distribution (weightedCategoryDistributionFor)
+ * and the artifact-aware dominant category (dominantCategoryForBlock). Used by
+ * the startup guard repair to catch persisted rows whose dominant_category /
+ * category_distribution_json predate today's clamped-credit rules — the
+ * "Watching Netflix & YouTube" headline manufactured from a stale stored
+ * 'entertainment' dominant on a block whose evidence was Slack + CI pages.
+ *
+ * Sessions are resolved by start-time membership in the block's span (the same
+ * fallback loadPersistedTimelineBlocksForDay uses — persisted member ids live
+ * in the raw app_session namespace, which a canonical-mode read can't join).
+ * Returns null when no sessions resolve (raw rows pruned) or the distribution
+ * carries no seconds: stored facts are then kept rather than replaced with an
+ * empty guess.
+ */
+export function recomputeStoredBlockCategoryFacts(
+  db: Database.Database,
+  blockStart: number,
+  blockEnd: number,
+  topArtifacts: ArtifactRef[],
+): StoredBlockCategoryFacts | null {
+  if (blockEnd <= blockStart) return null
+  const facts = queryCorrectedActivityFactsForRange(db, blockStart, blockEnd, { nowMs: Date.now() })
+  const sessions = facts.sessions.filter(
+    (session) => session.startTime >= blockStart && session.startTime < blockEnd && session.id !== -1,
+  )
+  if (sessions.length === 0) return null
+  const distribution = weightedCategoryDistributionFor(db, sessions, blockStart, blockEnd)
+  const totalSeconds = Object.values(distribution).reduce((sum, seconds) => sum + (seconds ?? 0), 0)
+  if (totalSeconds <= 0) return null
+  const dominantCategory = dominantCategoryForBlock(distribution, topArtifacts)
+  // Legacy pre-normalization sessions carry display-cased category strings
+  // ("AI Tools", "Uncategorized"); a distribution keyed by them is not the
+  // current vocabulary and can't be compared to — or written over — stored
+  // facts. Keep the stored row rather than "heal" it with off-vocabulary data.
+  if (!isAppCategory(dominantCategory)) return null
+  return { distribution, dominantCategory, blockKind: blockKindForCategory(dominantCategory) }
 }
 
 /** The repair's projection invalidation: the date's labels changed, so its
