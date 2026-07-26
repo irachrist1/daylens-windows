@@ -4265,8 +4265,11 @@ function splitSessionsAtEvidenceSeams(
 
 /** The hard seam over finished candidates: any candidate spanning an
  *  unobserved 30-minute hole is cut at the hole, whatever pass produced it —
- *  a stored merge correction, a same-work bridge, or a sliver fold. */
-function splitCandidatesAtEvidenceSeams(
+ *  a stored merge correction, a same-work bridge, or a sliver fold. Meetings
+ *  are exempt, like every other destructive pass (the floor, the merges): a
+ *  calendar-formed meeting legitimately spans a capture hole — being IN the
+ *  meeting is exactly why the machine saw nothing. Exported for tests. */
+export function splitCandidatesAtEvidenceSeams(
   candidates: CandidateBlock[],
   db: Database.Database,
   userMergedSpans: readonly MergedSpan[] = [],
@@ -4274,6 +4277,7 @@ function splitCandidatesAtEvidenceSeams(
   const allSessions = candidates.flatMap((candidate) => candidate.sessions)
   const passive = passiveCoverageIntervals(db, allSessions)
   return candidates.flatMap((candidate) => {
+    if (candidate.formation === 'meeting') return [candidate]
     const runs = splitSessionsAtEvidenceSeams(candidate.sessions, passive, userMergedSpans)
     if (runs.length <= 1) return [candidate]
     console.warn(

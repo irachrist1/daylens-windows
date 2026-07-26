@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppSession } from '../src/shared/types.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
-import { buildTimelineBlocksFromSessions } from '../src/main/services/workBlocks.ts'
+import { buildTimelineBlocksFromSessions, splitCandidatesAtEvidenceSeams } from '../src/main/services/workBlocks.ts'
 
 // Local-time millis on a fixed day, so block boundaries are deterministic.
 function at(hour: number, minute: number): number {
@@ -144,6 +144,33 @@ test('a seam split never ships a sub-floor sliver', () => {
       `block ${spans([block]).join('')} spans the unobserved hole`,
     )
   }
+  db.close()
+})
+
+// Meetings are exempt from the seam like every other destructive pass (the
+// floor, the merges): a calendar-formed meeting legitimately spans a capture
+// hole — being IN the meeting is why the machine saw nothing. A heuristic
+// candidate with the same shape still splits.
+test('a meeting candidate with a capture hole stays one block', () => {
+  const db = createProductionTestDatabase()
+  const meetingSessions = [
+    session({ bundleId: 'us.zoom.xos', appName: 'zoom.us', category: 'meetings', startTime: at(10, 0), endTime: at(10, 15), windowTitle: 'Zoom Meeting' }),
+    session({ bundleId: 'us.zoom.xos', appName: 'zoom.us', category: 'meetings', startTime: at(10, 50), endTime: at(11, 10), windowTitle: 'Zoom Meeting' }),
+  ]
+  const meeting = {
+    sessions: meetingSessions,
+    formation: 'meeting' as const,
+    boundedBeforeGap: true,
+    boundedAfterGap: true,
+    forcedLabel: 'Zoom Call',
+  }
+  const kept = splitCandidatesAtEvidenceSeams([meeting], db)
+  assert.equal(kept.length, 1, 'the meeting survives the seam as one candidate')
+  assert.equal(kept[0].sessions.length, 2, 'both meeting sittings stay in the block')
+
+  const heuristic = { ...meeting, formation: 'heuristic' as const, forcedLabel: undefined }
+  const split = splitCandidatesAtEvidenceSeams([heuristic], db)
+  assert.equal(split.length, 2, 'the same shape without the meeting formation still splits at the hole')
   db.close()
 })
 
