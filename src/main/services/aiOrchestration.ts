@@ -211,10 +211,12 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     foreground: true,
     // The deck rewrite made the response a full slide deck (one line per
     // slide + question + reflection), so the call needs more room than the
-    // old five-field arc did. A 16-slide Sonnet deck runs ~15-25s. Overridable
-    // for the offline benchmark, which tolerates a longer wait to measure
-    // content rather than latency.
-    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 40_000,
+    // old five-field arc did. A full day with git enrichment measured 54s on
+    // the quality model, and a 40s budget silently served the fallback deck
+    // on exactly the days most worth telling — this must stay aligned with
+    // NARRATIVE_TIMEOUT_MS (90s) in wrappedNarrative.ts. Overridable for the
+    // offline benchmark.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 90_000,
     cachePolicy: 'off',
     // The wrap is the showcase surface — "the most crafted
     // surface" — so it rides the QUALITY tier (Sonnet, not Haiku). On the
@@ -231,8 +233,9 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'wrapped_period_narrative',
     screen: 'timeline_week',
     foreground: true,
-    // A weekly deck is 20+ slides of prose; give it real time.
-    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 45_000,
+    // A weekly deck is 20+ slides of prose; give it real time. Aligned with
+    // the daily budget above for the same silent-fallback reason.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 100_000,
     cachePolicy: 'off',
     modelStrategy: 'quality',
   },
