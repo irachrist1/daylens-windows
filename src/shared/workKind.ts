@@ -333,21 +333,51 @@ export function blockTypeTag(block: BlockKindInput): string {
 // contributes its own category-kind; browser time is attributed to the kind of
 // the domains it sat on (leisure youtube vs work github). The dominant kind by
 // seconds wins. Used as the fallback for blocks that predate the stored field.
+//
+// Attention clamp: only foreground app sessions measure attention — a site's
+// visit-seconds are history estimates that keep accruing while its tab sits in
+// the background, so the sites' collective vote is clamped to the browser's own
+// foreground seconds before it can outweigh anything. Only totals survive on a
+// stored block, so the clamp is a proportional scale, not the per-interval
+// reconciliation the live path runs.
 function resolveBlockKind(block: BlockKindInput): WorkKind {
   const weighted: Array<{ kind: WorkKind; seconds: number }> = []
 
+  let browserForegroundSeconds = 0
+  let hasBrowserApp = false
   for (const app of block.topApps) {
     const browserish = app.isBrowser
       || app.category === 'browsing'
       || app.category === 'entertainment'
       || app.category === 'social'
-    if (browserish) continue // attributed via websites below
+    if (browserish) {
+      // Spent through the domain votes below, capped at this budget.
+      hasBrowserApp = true
+      browserForegroundSeconds += Math.max(0, app.totalSeconds)
+      continue
+    }
     weighted.push({ kind: kindForCategory(app.category), seconds: app.totalSeconds })
   }
 
+  const rawSiteSeconds = block.websites.reduce(
+    (sum, site) => sum + Math.max(0, site.totalSeconds), 0,
+  )
+  const scale = hasBrowserApp && rawSiteSeconds > browserForegroundSeconds && rawSiteSeconds > 0
+    ? browserForegroundSeconds / rawSiteSeconds
+    : 1
+  // Old blocks keep only the top-N apps, so the browser may be missing from
+  // topApps entirely; the site total is then the only observable budget.
+  const budgetSeconds = hasBrowserApp ? browserForegroundSeconds : rawSiteSeconds
+
   for (const site of block.websites) {
+    const seconds = Math.max(0, site.totalSeconds) * scale
+    if (seconds <= 0) continue
+    // Media ambience: an entertainment domain votes only when it held the
+    // majority of the browser's clamped budget — anything less is a background
+    // tab (a paused video, an idle Netflix tab), excluded from kind voting.
+    if (policyForHost(site.domain) === 'entertainment' && !(seconds > budgetSeconds / 2)) continue
     const domainKind = kindForDomain(site.domain)
-    weighted.push({ kind: domainKind ?? 'personal', seconds: site.totalSeconds })
+    weighted.push({ kind: domainKind ?? 'personal', seconds })
   }
 
   if (weighted.length === 0) {
