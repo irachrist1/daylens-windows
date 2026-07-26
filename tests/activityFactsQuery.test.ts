@@ -269,6 +269,42 @@ test('a stale deactivation of the previous app does not close the newly activate
   assert.equal(ghostty[0].durationSeconds, 30 * 60, 'the titleless session keeps its real duration')
 })
 
+// A walk-away without lock or sleep reaches the fold only as idle_started /
+// idle_ended. The open session must stop accruing at idle_started and resume
+// at idle_ended (focus never moved, so no app_activated fires on return) —
+// otherwise a lunch break reads as a multi-hour active stretch.
+test('an idle stretch inside one focused session is excluded from its active seconds', () => {
+  const db = createProductionTestDatabase()
+  insertFocusEvents(db, [
+    focusEvent(ms(9, 0), 'app_activated', { window_title: null }),
+    focusEvent(ms(9, 25), 'idle_started', {
+      app_bundle_id: null,
+      app_name: null,
+      pid: null,
+      window_title: null,
+      source: 'capture_supervisor',
+    }),
+    focusEvent(ms(10, 15), 'idle_ended', {
+      app_bundle_id: null,
+      app_name: null,
+      pid: null,
+      window_title: null,
+      source: 'capture_supervisor',
+    }),
+    focusEvent(ms(10, 30), 'app_deactivated', { window_title: null }),
+  ])
+  const facts = queryCorrectedActivityFactsForDay(db, DATE, { asOfMs: DAY_END, nowMs: DAY_END })
+  const ghostty = facts.sessions.filter((s) => s.bundleId === 'com.mitchellh.ghostty')
+  assert.equal(ghostty.length, 2, 'the idle stretch splits the session')
+  assert.equal(ghostty[0].startTime, ms(9, 0))
+  assert.equal(ghostty[0].endTime, ms(9, 25))
+  assert.equal(ghostty[1].startTime, ms(10, 15))
+  assert.equal(ghostty[1].endTime, ms(10, 30))
+  const activeSeconds = ghostty.reduce((sum, s) => sum + s.durationSeconds, 0)
+  assert.equal(activeSeconds, (25 + 15) * 60, 'active seconds exclude the 50-minute idle stretch')
+  assert.ok(facts.gaps.some((gap) => gap.kind === 'idle' && gap.startMs === ms(9, 25) && gap.endMs === ms(10, 15)))
+})
+
 test('same evidence + corrections + projection version is byte-stable across repeated queries', () => {
   const db = createProductionTestDatabase()
   seedCanonicalMorning(db)

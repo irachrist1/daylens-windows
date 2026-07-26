@@ -19,7 +19,9 @@ import {
 // Bump when segmentation or labeling logic changes. Reprojection rewrites
 // any rows whose stored version is older. Idempotent.
 // v2: app_deactivated only closes the session it belongs to — a stale
-// deactivation of the PREVIOUS app no longer kills the newly activated one.
+// deactivation of the PREVIOUS app no longer kills the newly activated one —
+// and idle_started ends the open session (idle_ended resumes it when focus
+// never moved), so a walk-away without lock/sleep is not counted as active.
 export const PROJECTION_VERSION = 2
 
 const IDLE_GAP_MS = 15 * 60 * 1000   // 15 min boundary between blocks
@@ -124,6 +126,11 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
   const out: DerivedSessionRow[] = []
   let open: OpenSession | null = null
   let lastEventTs: number | null = null
+  // The session an idle_started interrupted, remembered so idle_ended can
+  // resume it: a user who walks away and comes back to the same app produces
+  // no app_activated on return, and without the resume the stretch from
+  // idle_ended to the next event would vanish.
+  let resumeAfterIdle: OpenSession | null = null
 
   const close = (atMs: number) => {
     if (!open) return
@@ -141,6 +148,7 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
       case 'capture_stopped': {
         // Capture is down from here: whatever was focused stops accruing.
         close(ev.ts_ms)
+        resumeAfterIdle = null
         break
       }
       case 'capture_started': {
@@ -151,10 +159,12 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
         // activity (observed: an overnight crash loop rendered as a night of
         // continuous app use).
         if (open) close(lastEventTs ?? ev.ts_ms)
+        resumeAfterIdle = null
         break
       }
       case 'app_activated': {
         close(ev.ts_ms)
+        resumeAfterIdle = null
         open = {
           start_ts_ms: ev.ts_ms,
           app_bundle_id: ev.app_bundle_id,
@@ -172,6 +182,7 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
         // on the same app + new tab url. Spec: tab boundaries are real
         // boundaries even when the app didn't change.
         if (open) close(ev.ts_ms)
+        resumeAfterIdle = null
         open = {
           start_ts_ms: ev.ts_ms,
           app_bundle_id: ev.app_bundle_id,
@@ -193,11 +204,49 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
         // deactivated app's own session closes; an event that carries no app
         // identity keeps the old unconditional close.
         if (deactivationClosesOpenSession(open, ev)) close(ev.ts_ms)
+        // A deactivation for the idle-interrupted app means focus really
+        // moved while the user was away — nothing to resume.
+        if (resumeAfterIdle && deactivationClosesOpenSession(resumeAfterIdle, ev)) {
+          resumeAfterIdle = null
+        }
+        break
+      }
+      case 'idle_started': {
+        // The user stopped giving input: whatever is focused stops accruing,
+        // exactly like the day-ownership span automaton. Without this cut, a
+        // walk-away without lock/sleep counts the whole idle stretch as
+        // active session time (a lunch break narrated as a deep-work run).
+        // Copied field-by-field, not aliased: tsc 5.9's loop flow analysis
+        // mis-narrows a nullable let aliased from another narrowed one.
+        if (open) {
+          resumeAfterIdle = {
+            start_ts_ms: open.start_ts_ms,
+            app_bundle_id: open.app_bundle_id,
+            app_name: open.app_name,
+            window_title: open.window_title,
+            url: open.url,
+            page_title: open.page_title,
+            confidence: open.confidence,
+          }
+          close(ev.ts_ms)
+        }
+        break
+      }
+      case 'idle_ended': {
+        // Input resumed. If focus never moved while away (no activation,
+        // deactivation, or boundary since), the interrupted session resumes
+        // from here — the idle stretch itself stays excluded.
+        const interrupted: OpenSession | null = resumeAfterIdle
+        if (!open && interrupted) {
+          open = { ...interrupted, start_ts_ms: ev.ts_ms }
+        }
+        resumeAfterIdle = null
         break
       }
       case 'sleep':
       case 'lock': {
         close(ev.ts_ms)
+        resumeAfterIdle = null
         break
       }
       case 'window_changed': {

@@ -236,7 +236,18 @@ function projectGapsFromFocusEvents(
 /** Legacy sessions clipped to the stretch before the canonical capture era
  *  began (the first focus event ever recorded). A session that straddles the
  *  cutover keeps only its pre-cutover part — from the cutover on, canonical
- *  evidence owns the time and the legacy row is a dual-write duplicate. */
+ *  evidence owns the time and the legacy row is a dual-write duplicate.
+ *
+ *  Known limit of the global anchor: it cannot represent a canonical OUTAGE
+ *  after the cutover that legacy dual-writes still covered. A post-cutover day
+ *  whose focus_events are missing or all system noise (observed: hours of
+ *  legacy sessions against a handful of noise-only focus events) renders only
+ *  because a per-day read then has zero canonical sessions and falls to the
+ *  legacy branch — while a multi-day window that includes any canonical
+ *  evidence drops that day's legacy rows, so range totals can undercount such
+ *  days. The exposure is frozen to the historical dual-write era (legacy
+ *  writes are retired); modelling per-outage coverage intervals is not worth
+ *  the complexity for a bounded, shrinking window of old data. */
 function legacySessionsBeforeCanonicalEra(
   db: Database.Database,
   legacySessions: readonly AppSession[],

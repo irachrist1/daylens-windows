@@ -1211,9 +1211,11 @@ test('a media-held idle stretch is presence, not a dead zone — the block stays
     startMinute: 0,
     durationMinutes: 90,
   })
-  // Idle fired mid-video but capture marked it held for media playback:
-  // presence without input, never an absence.
-  insertActivityEvent(db, 'idle_start', localMs(9, 10), { heldForMediaPlayback: true })
+  // Idle fired three minutes in and held until the end of the video, but
+  // capture marked it held for media playback: presence without input, never
+  // an absence. Were the hold treated as hard idle, observed evidence would
+  // be 3 minutes — under the mint floor — and the block would wrongly drop.
+  insertActivityEvent(db, 'idle_start', localMs(9, 3), { heldForMediaPlayback: true })
   insertActivityEvent(db, 'idle_end', localMs(10, 30))
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
