@@ -2830,7 +2830,10 @@ function parseWorkBlockInsight(raw: string): WorkContextInsight | null {
   }
 }
 
-function workBlockPrompt(block: WorkContextBlock): string {
+// Exported for the interpretation-agent relabel (services/interpretationAgent.ts),
+// which grounds its tool loop in the SAME per-block evidence prompt the direct
+// relabel uses — one evidence contract, two execution modes.
+export function workBlockPrompt(block: WorkContextBlock): string {
   const durationMinutes = Math.max(1, Math.round(blockActiveSeconds(block) / 60))
 
   // Top websites with duration — highest-signal evidence (browser/AI work)
