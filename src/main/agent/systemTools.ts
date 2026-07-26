@@ -611,7 +611,7 @@ export function buildSystemTools(deps: SystemToolDeps = {}) {
     }),
 
     git: tool({
-      description: 'Read-only git against a local repository: log, show, diff, status, shortlog, branch, rev-parse, describe. Use for "what did I ship" — e.g. subcommand "log" with args ["--since=2026-07-01", "--oneline", "--author=..."]. Content-bearing subcommands (show, diff, log with a patch flag) need the user\'s file-access permission for the repository. Never mutates.',
+      description: 'Read-only git against a local repository: log, show, diff, status, shortlog, branch, rev-parse, describe. Use for "what did I ship", e.g. subcommand "log" with args ["--since=2026-07-01", "--oneline", "--author=..."]. Content-bearing subcommands (show, diff, log with a patch flag) need the user\'s file-access permission for the repository. Never mutates.',
       inputSchema: z.object({
         repoPath: z.string().min(1).describe('Absolute path to the repository'),
         subcommand: z.string().min(1).describe('One of: log, show, diff, status, shortlog, branch, rev-parse, describe'),

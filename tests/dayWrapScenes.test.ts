@@ -602,8 +602,9 @@ test('a real leisure detour breaks the run; a short peek does not', () => {
 })
 
 test('a sparse block with session evidence never claims its wall span', () => {
-  // 6.4h wall span, 1.1h of actual sessions in three separated islands — the
-  // 2026-05-27 shape ("Watching documentaries" spans 6.4h with 1.1h active).
+  // 6.4h wall span, 1.1h of actual sessions in three separated islands: the
+  // idle-detection-failure shape where a mostly-empty span must never be
+  // narrated as one stretch.
   const sparse = makeBlock({ label: 'Sparse build', start: NINE_AM, durationSeconds: 66 * 60, category: 'development' })
   sparse.endTime = NINE_AM + 384 * 60_000
   sparse.sessions = [

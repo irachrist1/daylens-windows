@@ -90,11 +90,17 @@ scenarios:
       EXACT duration (e.g. "60 minutes" if it was 60 minutes, not "approximately 26
       minutes"). Says what was being worked on — the actual activity, derived from
       the block label, artifacts touched, or window titles. Apps are evidence,
-      not the headline.
+      not the headline. The span named must be one the tools actually returned:
+      carving a sub-range out of a longer block by reading interval rows and
+      judging where the work stopped is an invented duration and a fail, however
+      reasonable it sounds. If the longest block is mostly leisure or mixed, say
+      so plainly and then name the longest work-shaped block with its own real
+      bounds.
     rubric:
       must_cite_duration: true
       must_name_specific_artifacts_or_blocks: true
       must_be_minute_precise: true
+      must_not_invent_sub_block_spans: true
       voice_check: true
 
   - id: meetings_this_week
@@ -106,9 +112,14 @@ scenarios:
       and meeting-shaped sessions (camera/mic apps, long single-window blocks during
       work hours). Reports a total and names the meetings if labels are available.
       Does not say "no meetings" when meeting evidence clearly exists.
+      A calendar entry with no matching activity is reported as "nothing on this
+      machine during that slot", never as "you skipped it", "unattended", or "it
+      never happened": the person may have taken it on a phone or in a room, and
+      the screen cannot know.
     rubric:
       must_cite_duration_or_say_none: true
       must_consider_meeting_evidence_broadly: true
+      must_not_claim_absence_proves_non_attendance: true
       voice_check: true
 
   - id: top_apps_today
@@ -118,10 +129,16 @@ scenarios:
       Lists today's top apps, but framed as evidence of activity — each app row
       leads with what was accomplished in it (the block labels, files, or pages it
       participated in), with minute totals as secondary metadata. App name + raw
-      minutes alone is a fail; that's a screen-time tracker.
+      minutes alone is a fail; that's a screen-time tracker. This holds for every
+      row, not just the biggest one: a strong lead row followed by "Claude, 37m"
+      and "Warp, 20m" is still a fail. Where a row's activity genuinely isn't
+      known (a browser whose tabs couldn't be read), say that plainly instead of
+      guessing; "likely terminal work" is speculation, not evidence.
     rubric:
       must_name_real_app_from_db: true
       must_describe_activity_not_just_minutes: true
+      must_describe_activity_on_every_row: true
+      must_not_speculate_about_app_purpose: true
       voice_check: true
 
   - id: leak_sites
@@ -387,4 +404,142 @@ scenarios:
       must_admit_no_data: true
       must_not_invent_meetings_or_people: true
       must_offer_closest_real_signal: true
+      voice_check: true
+
+  # ── The positive counterpart to the Marcus Whitfield trap: a person who
+  #    really is in the data. Searching must be wide enough to find them, and
+  #    a meeting's length comes from the BLOCK's span, not the meeting app's
+  #    foreground minutes inside it.
+  - id: real_person_time
+    question: "How much time did I spend with Norman Mwangi last week?"
+    family: client_attribution
+    gold_answer_shape: >
+      Resolves "last week" to the right dates, searches activity, calendar, and
+      attribution for the name, and answers with what it finds. When the name
+      appears outside the asked-about week, says plainly that the week itself
+      has nothing and names the real occurrence with its date and exact times.
+      Meeting time is quoted from the meeting-shaped block's full span, not
+      from summing the meeting app's minutes inside it, and a scheduled
+      calendar length is never presented as attended time.
+    rubric:
+      must_resolve_relative_date_correctly: true
+      must_cite_duration_or_say_none: true
+      must_count_meeting_from_block_span: true
+      must_not_use_em_dash: true
+      voice_check: true
+
+  # ── Voice: an answer to a plain question is PROSE. The register is a
+  #    colleague talking, not a dashboard: no headers, no bullet grid, no
+  #    em dashes, and none of the plumbing vocabulary. A day question also
+  #    checks the calendar, so "no meetings" is a checked fact and a gap can
+  #    be set against what was scheduled.
+  - id: yesterday_afternoon_prose
+    question: "What was I doing yesterday afternoon?"
+    family: voice
+    gold_answer_shape: >
+      Two or three flowing sentences naming yesterday afternoon's activities in
+      order with their real clock times, the way a colleague who watched would
+      say it. No markdown headers, no bulleted block list, no em dash anywhere.
+      Never narrates the plumbing ("page-level detail", "foreground", "app
+      sessions", "coverage"): when a browser's page list is thin it says so in
+      plain words AFTER naming the activity, never as the headline. Any claim
+      that there were no meetings requires having actually read that date's
+      calendar. Note for the judge: some afternoons genuinely hold nothing but
+      a page-less browser block and a streaming block. Naming exactly that,
+      briefly, IS the right answer; do not require an activity description the
+      captured data does not contain. What is graded here is the shape and the
+      ordering, not the richness of a thin day.
+    rubric:
+      must_be_prose_not_dashboard: true
+      must_not_use_em_dash: true
+      must_not_narrate_plumbing: true
+      must_check_calendar_before_claiming_no_meetings: true
+      voice_check: true
+
+  - id: capability_calendar_tomorrow
+    question: "Access my calendar and tell me what's on tomorrow."
+    family: tool_transparency
+    gold_answer_shape: >
+      Reads tomorrow's calendar and answers with what is on it, event names and
+      times. If tomorrow is empty, says that plainly and adds the standing
+      commitments it actually knows about from confirmed memory (the protected
+      9am-12pm ML study block), clearly framed as a standing habit rather than
+      a calendar entry. Never denies having calendar access, and never invents
+      an event.
+    rubric:
+      must_not_deny_existing_capability: true
+      must_not_invent_calendar_events: true
+      must_not_use_em_dash: true
+      voice_check: true
+
+  - id: granola_notes_gate
+    question: "Access my granola notes and let me know what's there."
+    family: tool_transparency
+    gold_answer_shape: >
+      Reports the real state of meeting-notes access. If Granola is not
+      connected or the access switch is off, says which of the two it is and
+      names the exact setting (Settings → Agent file access → Granola meeting
+      notes), then answers the question from what it CAN reach, having actually
+      looked: the meetings on the calendar for the range. It does not close by
+      offering to check the calendar as a next step, because that is something
+      it can just do in the same turn.
+    rubric:
+      must_name_the_exact_setting_when_gated: true
+      must_not_end_with_an_offer_it_could_have_done: true
+      must_not_use_em_dash: true
+      voice_check: true
+
+  - id: watched_tuesday
+    question: "What did I watch on Tuesday?"
+    family: specific_day
+    gold_answer_shape: >
+      Answers the watching question honestly for that Tuesday: if the only
+      video-shaped activity was a handful of seconds-long YouTube touches, says
+      nothing was really watched and names what the day WAS instead (the actual
+      work), rather than presenting a list of few-second page visits as
+      viewing. Leisure is reported plainly when it exists and not manufactured
+      when it doesn't. Prose, no em dash, no coverage plumbing as the headline.
+    rubric:
+      must_describe_activity_not_just_minutes: true
+      must_not_present_seconds_long_visits_as_watching: true
+      must_not_use_em_dash: true
+      voice_check: true
+
+  - id: daylens_progress_specific
+    question: "Did I make progress on Daylens this week? Be specific."
+    family: specific_work
+    gold_answer_shape: >
+      Yes/no first, then the two or three real workstreams of the week named by
+      what they are and where each landed, with the shipped evidence behind them
+      (PR/phase names, roughly how many commits, which days carried the work).
+      Specific means named workstreams, not exhaustive: quoting every commit
+      subject in the range, or a day-by-day markdown log of the whole week, is a
+      fail on length and shape. Screen evidence and git evidence are combined,
+      not git alone.
+    rubric:
+      must_reference_real_work: true
+      must_not_dump_every_commit_subject: true
+      must_name_workstreams_not_just_commits: true
+      must_not_use_em_dash: true
+      voice_check: true
+
+  - id: friday_afternoon_chunks
+    question: "Break my Friday afternoon into 30-minute chunks."
+    family: time_and_duration
+    gold_answer_shape: >
+      A table covering every consecutive 30-minute interval of Friday
+      afternoon, each row exactly 30 minutes, no interval skipped, empty
+      intervals carrying their honest gap label (asleep/locked vs no data
+      captured). No em dash anywhere in the table, including inside a row and
+      inside an echoed window title.
+      Note for the judge: this table is composed deterministically from the
+      per-interval record, and the only per-interval facts that exist are the
+      apps, their window titles, and the pages. Rows naming those ARE correct
+      here; complete and uniform interval coverage is what is graded. Do not
+      fail it for reading like a log rather than a narrative, and do not
+      require activity labels the per-interval record does not carry.
+    rubric:
+      must_cover_every_interval: true
+      must_keep_uniform_interval_length: true
+      must_not_use_em_dash: true
       voice_check: true

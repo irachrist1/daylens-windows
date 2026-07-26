@@ -66,5 +66,26 @@ test('time chunk answers hide internal action syntax and deduplicate activity', 
   })
   assert.ok(answer)
   assert.doesNotMatch(answer!, /AskUserQuestion|Wants to run/)
-  assert.equal(answer!.match(/Editor — Project review/g)?.length, 1)
+  assert.equal(answer!.match(/Editor: Project review/g)?.length, 1)
+  // The voice contract bans em dashes in every surface, tables included.
+  assert.doesNotMatch(answer!, /—/)
+})
+
+test('an em dash inside a window title never reaches the chunk table', () => {
+  const answer = renderTimeChunkAnswer({
+    found: true,
+    date: '2026-07-24',
+    incrementMinutes: 30,
+    chunks: [{
+      startTime: '15:00',
+      endTime: '15:30',
+      durationMinutes: 30,
+      activity: [{ appName: 'Gemini', windowTitle: 'Gemini — Digital File Organization Strategy', seconds: 1800 }],
+      pages: [],
+      gap: null,
+    }],
+  })
+  assert.ok(answer)
+  assert.doesNotMatch(answer!, /—/)
+  assert.match(answer!, /Gemini: Digital File Organization Strategy/)
 })

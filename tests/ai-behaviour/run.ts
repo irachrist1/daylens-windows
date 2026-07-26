@@ -23,6 +23,7 @@ import yaml from 'js-yaml'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy } from './realDb'
+import { containsEmDash } from '../../src/main/ai/voiceContract'
 import { summarizeArtifactsForJudge, summarizeTraceForJudge } from './evidence'
 import type { ScenarioRecord } from './types'
 import type { AIProviderMode } from '@shared/types'
@@ -41,6 +42,19 @@ const ANSI = {
 
 function color(c: keyof typeof ANSI, s: string): string {
   return process.stdout.isTTY ? `${ANSI[c]}${s}${ANSI.reset}` : s
+}
+
+// The em dash ban is punctuation, not judgment: check it here rather than
+// trusting the judge to notice a single character. An answer carrying one can
+// never grade better than "bad", whatever else it got right.
+function applyEmDashCap<T extends { grade: string; reason: string; voiceOk: boolean }>(verdict: T, answer: string): T {
+  if (verdict.grade === 'error' || !containsEmDash(answer)) return verdict
+  return {
+    ...verdict,
+    grade: verdict.grade === 'worse' ? 'worse' : 'bad',
+    voiceOk: false,
+    reason: `em dash in the answer (voice contract bans it); ${verdict.reason}`,
+  }
 }
 
 function loadScenarios(): ScenarioRecord[] {
@@ -185,7 +199,7 @@ async function main(): Promise<void> {
       const artifactSummary = summarizeArtifactsForJudge(assistant.artifacts ?? [])
       const evidence = [traceSummary, artifactSummary].filter(Boolean).join('\n\n') || undefined
       const followUps = (assistant.suggestedFollowUps ?? []).map((s) => s.text)
-      const verdict = await judgeAnswer(scenario, text, groundTruthBlob, judgeApiKey, evidence, followUps)
+      const verdict = applyEmDashCap(await judgeAnswer(scenario, text, groundTruthBlob, judgeApiKey, evidence, followUps), text)
       const gradeColor: keyof typeof ANSI =
         verdict.grade === 'good' ? 'green'
         : verdict.grade === 'bad' ? 'yellow'

@@ -50,6 +50,10 @@ export const DELETION_OWNERSHIP: Record<string, DeletionOwnership> = {
   website_visits: { kind: 'evidence', owner: TRACKED_ACTIVITY },
   connector_records: { kind: 'evidence', owner: CONNECTOR_LEGACY },
   external_signals: { kind: 'evidence', owner: `${TRACKED_ACTIVITY}; refreshed per day` },
+  // The "collected, nothing found" ledger: one row per (date, source) marking
+  // a completed connector scan of a finished day. Derived bookkeeping — safe
+  // to clear; the next wrap/analyze of an affected day simply re-collects.
+  external_signal_scans: { kind: 'derived', owner: 'external-signal collection; rows re-derive on the next backfill' },
   screen_context_frames: { kind: 'evidence', owner: SCREEN_LIFECYCLE },
   screen_context_evidence: { kind: 'evidence', owner: SCREEN_LIFECYCLE },
   live_app_session_snapshot: { kind: 'evidence', owner: 'flush/clear on session end; device deletion' },

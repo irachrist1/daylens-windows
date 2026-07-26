@@ -197,8 +197,10 @@ function timeChunks(
       : machineState
         ? { kind: machineState.state, label: machineState.state.includes('asleep') ? 'machine asleep/locked' : 'machine locked' }
         : untracked
-          ? { kind: 'untracked', label: 'no data captured — possible tracking failure' }
-          : { kind: 'idle', label: 'no activity captured — likely away/idle' }
+          // These labels are printed verbatim into the chunk table, so they
+          // carry no em dash (the voice contract bans it in every surface).
+          ? { kind: 'untracked', label: 'no data captured, possibly a tracking failure' }
+          : { kind: 'idle', label: 'no activity captured, likely away or idle' }
     chunks.push({
       startTime: fmtMinuteOffset(offset),
       endTime: fmtMinuteOffset(offset + incrementMinutes),
@@ -252,7 +254,7 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     search_history: tool({
-      description: 'Full-text fuzzy search over everything captured: app sessions, window titles, page titles and URLs. Use for recall questions ("that drowning video", "the article about transformers"). Returns matches with times, durations, and URLs, or an explicit empty result. When the local semantic index is available, a separate semanticHits array carries moments found by MEANING (on-device embeddings) — present those as "similar meaning" leads, never as exact matches.',
+      description: 'Full-text fuzzy search over everything captured: app sessions, window titles, page titles and URLs. Use for recall questions ("that drowning video", "the article about transformers"). Returns matches with times, durations, and URLs, or an explicit empty result. When the local semantic index is available, a separate semanticHits array carries moments found by MEANING (on-device embeddings), present those as "similar meaning" leads, never as exact matches.',
       inputSchema: z.object({
         query: z.string().min(1).describe('Search words. Keep it to the distinctive terms.'),
         startDate: DATE.optional(),
@@ -281,7 +283,7 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     list_page_visits: tool({
-      description: 'Website visits over a date range, aggregated per page: title, URL, domain, total time, visit count, first/last seen. Filter by domain (e.g. "youtube.com") or title words. Use for "all YouTube videos this month", podcasts, and export data. Time is reconciled foreground seconds — the same ledger the Apps screen totals — NOT the media\'s own length. When coverageNotes is present, page detail explains less time than the browser verifiably had; quote the note instead of presenting the page list as complete.',
+      description: 'Website visits over a date range, aggregated per page: title, URL, domain, total time, visit count, first/last seen. Filter by domain (e.g. "youtube.com") or title words. Use for "all YouTube videos this month", podcasts, and export data. Time is the reconciled seconds the page was in front of the person, the same ledger the Apps screen totals, NOT the media\'s own length. When coverageNotes is present, page detail explains less time than the browser verifiably had; quote the note instead of presenting the page list as complete.',
       inputSchema: z.object({
         startDate: DATE,
         endDate: DATE,

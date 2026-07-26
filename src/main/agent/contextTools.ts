@@ -60,7 +60,7 @@ export function buildContextTools(db: Database.Database, options: ContextToolOpt
 
   return {
     get_calendar_events: tool({
-      description: 'The day\'s meetings: calendar events (names, times, durations, attendee counts — never attendee names) plus the day-level resolution of which were actually attended (matched), which were calendar-only, and which meeting-app time had no calendar entry. Use for "what meetings did I have" and to separate scheduled from attended.',
+      description: 'The day\'s meetings: calendar events (names, times, durations, attendee counts, never attendee names) plus the day-level resolution of which were actually attended (matched), which were calendar-only, and which meeting-app time had no calendar entry. Use for "what meetings did I have" and to separate scheduled from attended.',
       inputSchema: z.object({ date: DATE }),
       execute: async ({ date }) => {
         const result = await getCalendarEvents({ date }, db, { allowCollect })
@@ -72,7 +72,7 @@ export function buildContextTools(db: Database.Database, options: ContextToolOpt
     }),
 
     get_git_activity: tool({
-      description: 'The day\'s git story from the stored daily signal: repositories touched, commits (messages + times), and PR activity when the gh CLI was available. Cheaper than the git tool for "what did I commit on <date>" — use the git tool only when you need history outside the stored daily signals.',
+      description: 'The day\'s git story from the stored daily signal: repositories touched, commits (messages + times), and PR activity when the gh CLI was available. Cheaper than the git tool for "what did I commit on <date>", use the git tool only when you need history outside the stored daily signals.',
       inputSchema: z.object({ date: DATE }),
       execute: async ({ date }) => {
         const result = await getGitActivity({ date }, db, { allowCollect })
@@ -98,7 +98,15 @@ export function buildContextTools(db: Database.Database, options: ContextToolOpt
         }
         const connection = getGranolaConnection(db)
         if (!connection) {
-          return { found: false, reason: 'Granola is not connected on this machine, so no meeting notes are available.' }
+          // Name the one switch that exists rather than a connect flow that
+          // does not: the model quotes this reason, so an invented path here
+          // becomes an invented instruction in the answer.
+          return {
+            found: false,
+            reason: 'Granola is not connected on this machine, so there are no meeting notes to read. '
+              + 'The switch that governs this access is Settings → Agent file access → "Granola meeting notes"; '
+              + 'reading notes also needs Granola installed and signed in on this machine.',
+          }
         }
 
         try {

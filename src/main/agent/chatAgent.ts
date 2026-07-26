@@ -479,7 +479,7 @@ export async function runChatAgentTurn(
           { role: 'assistant', content: text },
           {
             role: 'user',
-            content: `Your answer failed the grounding check: ${problems}. Rewrite it using only times and names that appear in the tool results you already have (call a tool again if you need to re-check). Reply with the corrected answer only.`,
+            content: `Your answer failed the grounding check: ${problems}. Fix ONLY those items and keep everything else exactly as you wrote it: same answer, same voice, same length, same shape. Where a time was one you computed, replace it with the exact start and end the tool result shows, or drop it. You already have the evidence you need, so do not re-run the research you just did. Do not add caveats about coverage, and do not explain what you can or cannot see. Reply with the corrected answer only.`,
           },
         ]
         const replacement = await streamTurn(retryMessages)

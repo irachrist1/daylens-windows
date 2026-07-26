@@ -662,10 +662,15 @@ export function hasMaterialPageCoverageShortfall(entry: BrowserPageCoverage): bo
   return entry.pageCoveredSeconds * 2 < entry.foregroundSeconds
 }
 
+// Worded the way the answer should read, not the way the plumbing works: the
+// model copies this note's vocabulary and punctuation straight into prose, so
+// it carries no em dash and none of the terms the voice contract bans
+// ("foreground", "page-level detail").
 export function browserPageCoverageNoteText(entry: BrowserPageCoverage): string {
-  return `${entry.appName} was foreground ${formatHoursMinutes(entry.foregroundSeconds)}; `
-    + `page-level detail covers ${formatHoursMinutes(entry.pageCoveredSeconds)} — `
-    + `page tracking for this browser is limited, so app time is the trustworthy total.`
+  return `${entry.appName} was in front for ${formatHoursMinutes(entry.foregroundSeconds)}, `
+    + `and specific pages are recorded for ${formatHoursMinutes(entry.pageCoveredSeconds)} of that, `
+    + `because Daylens can only read some of this browser's tabs. `
+    + `Treat ${formatHoursMinutes(entry.foregroundSeconds)} as the real total and the page list as partial.`
 }
 
 /** Honest reconciliation notes for browsers with a material page-coverage

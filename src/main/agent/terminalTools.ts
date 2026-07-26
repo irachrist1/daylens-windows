@@ -266,7 +266,7 @@ export function buildTerminalTools(deps: TerminalToolDeps = {}) {
 
   return {
     run_command: tool({
-      description: 'Run ONE read-only allowlisted command (ls, cat, head, grep, git log/status/..., node --version, ...) via argv — no shell, no pipes, no redirection, 15s timeout, 64KB output. Path arguments must stay inside the working directory. For inspecting the local environment when the database and file tools cannot answer. Consent-gated: off by default in Settings, and the first use asks the user. The reason you give is shown to the user.',
+      description: 'Run ONE read-only allowlisted command (ls, cat, head, grep, git log/status/..., node --version, ...) via argv, no shell, no pipes, no redirection, 15s timeout, 64KB output. Path arguments must stay inside the working directory. For inspecting the local environment when the database and file tools cannot answer. Consent-gated: off by default in Settings, and the first use asks the user. The reason you give is shown to the user.',
       inputSchema: z.object({
         command: z.string().min(1).describe('Bare binary name from the allowlist, e.g. "ls" or "git"'),
         args: z.array(z.string()).max(16).optional().describe('Arguments as an argv array — never a shell string'),

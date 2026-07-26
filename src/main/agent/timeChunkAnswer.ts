@@ -24,8 +24,13 @@ export interface TimeChunkResult {
   chunks: TimeChunkRow[]
 }
 
+// Titles arrive as the app wrote them, and plenty of apps put an em dash in
+// their window title ("Gemini — Digital File Organization Strategy"). Echoing
+// one into the table would break the voice contract's punctuation rule on a
+// surface Daylens composes itself, so the separator is normalized here, the
+// same place the title is already shortened for display.
 function concise(value: string, limit = 72): string {
-  const normalized = value.trim().replace(/\s+/g, ' ')
+  const normalized = value.trim().replace(/\s+/g, ' ').replace(/\s*—\s*/g, ': ')
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1).trimEnd()}…`
 }
 
@@ -42,8 +47,10 @@ function rowDescription(chunk: TimeChunkRow): string {
   const known = new Set<string>()
   for (const item of chunk.activity) {
     const title = userVisibleWindowTitle(item.windowTitle)
+    // Colon, never an em dash: the voice contract bans em dashes in every
+    // surface, including the tables composed here rather than by the model.
     const label = title && title.toLowerCase() !== item.appName.toLowerCase()
-      ? `${item.appName} — ${concise(title)}`
+      ? `${item.appName}: ${concise(title)}`
       : item.appName
     const key = label.toLowerCase()
     if (known.has(key)) continue

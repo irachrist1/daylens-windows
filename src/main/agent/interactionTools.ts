@@ -111,7 +111,7 @@ export function buildInteractionTools(deps: InteractionDeps) {
     }),
 
     create_artifact: tool({
-      description: 'Create a real downloadable file for the user. Use "xlsx" when they say Excel, "csv" for CSV, "markdown" for a document/report. For xlsx/csv pass columns + rows (every claim in them must come from tool results this conversation). For markdown pass content. Returns the saved file; mention it naturally in your answer — the UI renders the download. For a WEEKLY export/timesheet workbook, do NOT compose rows here — call export_week_excel, which computes the numbers itself from the same facts as the Timeline.',
+      description: 'Create a real downloadable file for the user. Use "xlsx" when they say Excel, "csv" for CSV, "markdown" for a document/report. For xlsx/csv pass columns + rows (every claim in them must come from tool results this conversation). For markdown pass content. Returns the saved file; mention it naturally in your answer, the UI renders the download. For a WEEKLY export/timesheet workbook, do NOT compose rows here, call export_week_excel, which computes the numbers itself from the same facts as the Timeline.',
       inputSchema: z.object({
         title: z.string().min(1).max(80).describe('Human title, e.g. "YouTube July 2026"'),
         format: z.enum(['xlsx', 'csv', 'markdown']),
@@ -131,7 +131,7 @@ export function buildInteractionTools(deps: InteractionDeps) {
 export function buildExportTools(db: Database.Database, deps: InteractionDeps) {
   return {
     export_week_excel: tool({
-      description: 'Build the real weekly Excel export: a styled workbook with a per-day week summary (active time, top apps, top sites, honest gaps), a totals row, and a by-app sheet whose numbers are computed from the same corrected facts as the Timeline — never from values you type. Use this for every "export my week / timesheet Excel" request. Returns the saved file plus the computed totals so your answer can quote the same numbers.',
+      description: 'Build the real weekly Excel export: a styled workbook with a per-day week summary (active time, top apps, top sites, honest gaps), a totals row, and a by-app sheet whose numbers are computed from the same corrected facts as the Timeline, never from values you type. Use this for every "export my week / timesheet Excel" request. Returns the saved file plus the computed totals so your answer can quote the same numbers.',
       inputSchema: z.object({
         weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
           .describe('Any date inside the target week (local, YYYY-MM-DD); it is snapped to that week\'s Monday'),
