@@ -11,6 +11,7 @@
 import type { WrappedPeriodFacts } from '@shared/types'
 import {
   formatHm,
+  gapKindPhrase,
   lowerName,
   seedFromDate,
   workActionPhrase,
@@ -341,6 +342,49 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
       fallbackLine: `${hm(facts.meetingsSeconds)} went to meetings and calls.`,
       ask: 'One line on the meeting time, plain and factual.',
       factsNote: `meetings ${hm(facts.meetingsSeconds)} of ${hm(facts.workSeconds)} work`,
+    })
+  }
+
+  // 12b · The day's real holes — gaps are facts (day-recap-and-analysis.md).
+  // The biggest untracked stretch gets the card; every 45m+ gap rides in the
+  // facts so the prose can tell the truth instead of implying a continuous
+  // grind. Deterministic fallback says it plainly, with the calendar match
+  // when the day's schedule explains the hole.
+  if (facts.gaps.length > 0) {
+    const biggest = facts.gaps.reduce((a, b) => (b.minutes > a.minutes ? b : a))
+    const gapSeconds = Math.round((biggest.toMs - biggest.fromMs) / 1000)
+    const phrase = gapKindPhrase(biggest.kind)
+    pushMiddle({
+      id: 'away', kind: 'stat', kicker: 'Off the screen',
+      stat: {
+        value: hm(gapSeconds),
+        seconds: gapSeconds,
+        sublabel: `${biggest.fromClock} to ${biggest.toClock}${biggest.matchesEvent ? ` · ${biggest.matchesEvent}` : ''}`,
+      },
+      fallbackLine: `${biggest.fromClock} to ${biggest.toClock} ${phrase}${biggest.matchesEvent ? `, matching "${biggest.matchesEvent}" on your calendar` : ''}.`,
+      ask: `The day had a real hole: ${biggest.fromClock} to ${biggest.toClock} ${phrase}. One plain line that owns it as part of the day's shape${biggest.matchesEvent ? `, naming the calendar event it matches ("${biggest.matchesEvent}")` : '. Daylens does not know what happened off-screen, so never guess an activity for it'}; time away needs no defense and no apology.`,
+      factsNote: facts.gaps.map((gap) =>
+        `${gap.fromClock} to ${gap.toClock} (${hm(Math.round((gap.toMs - gap.fromMs) / 1000))}) ${gapKindPhrase(gap.kind)}${gap.matchesEvent ? `, matches calendar event "${gap.matchesEvent}"` : ''}`,
+      ).join('; '),
+    })
+  }
+
+  // 12c · The through-line — a subject that recurred across 3+ blocks over 3+
+  // hours is the day's real shape (day-recap-and-analysis.md "Day threads").
+  const thread = facts.threads[0]
+  if (thread) {
+    pushMiddle({
+      id: 'daythread', kind: 'stat', kicker: 'The through-line',
+      stat: {
+        value: hm(thread.seconds),
+        seconds: thread.seconds,
+        sublabel: `${thread.name} · ${thread.blockCount} separate blocks`,
+      },
+      fallbackLine: `${thread.name} ran through the day: ${thread.blockCount} separate blocks between ${thread.fromClock} and ${thread.toClock}.`,
+      ask: `${lowerName(thread.name)} was not one sitting: it came back in ${thread.blockCount} separate blocks between ${thread.fromClock} and ${thread.toClock}. One line on that shape — the thing the day kept returning to — without judging the interleaving as good or bad.`,
+      factsNote: facts.threads.map((t) =>
+        `${t.name}: ${t.blockCount} blocks, ${hm(t.seconds)}, ${t.fromClock} to ${t.toClock}`,
+      ).join('; '),
     })
   }
 
