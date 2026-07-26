@@ -31,6 +31,10 @@ import {
 import { runEntityAdoptionBackfill } from '../src/main/services/entities/entityAdoption.ts'
 import { applyEntityCorrection } from '../src/main/services/entities/entityCorrections.ts'
 import { upsertAppIdentityObservation } from '../src/main/core/inference/appIdentityRegistry.ts'
+import {
+  aggregateAppSummaries,
+  getCorrectedAppSummariesForRange,
+} from '../src/main/services/activityFacts.ts'
 import type { EntityRow } from '../src/main/services/entities/entityRepository.ts'
 
 const TRAYCER_PATH = '/Applications/Traycer.app/Contents/MacOS/Traycer'
@@ -384,6 +388,71 @@ test('a prior explicit merge stands exactly as the user arranged it', () => {
   } finally {
     db.close()
   }
+})
+
+// ─── Read-time twin merge (DEV-239) ──────────────────────────────────────────
+// The dedupe restamps HISTORICAL sessions, but a later capture pass whose
+// bundle resolution fails still writes a path-keyed session with no
+// canonical_app_id. Aggregation must consult the stored registry link so any
+// twin merges at read time — the Apps view can never show one install twice.
+
+test('app summaries merge path-keyed and bundle-keyed sessions of one install into one row', () => {
+  const db = seedTwinWorld()
+  try {
+    dedupeAppIdentityTwins(db, fakeResolver)
+
+    // A bundle-keyed session and a FRESH path-keyed session captured after
+    // the dedupe (bundle resolution failed this pass: canonical_app_id NULL).
+    db.prepare(`
+      INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec, category)
+      VALUES (?, 'Canva Desktop', ?, ?, 600, 'design'), (?, 'Canva Desktop', ?, ?, 300, 'design')
+    `).run(
+      CANVA_BUNDLE, BASE + 4_000_000, BASE + 4_600_000,
+      CANVA_PATH, BASE + 5_000_000, BASE + 5_300_000,
+    )
+
+    const summaries = getCorrectedAppSummariesForRange(db, BASE - 86_400_000, BASE + 86_400_000)
+    const canvaRows = summaries.filter((summary) => summary.appName === 'Canva Desktop')
+    assert.equal(canvaRows.length, 1, `one install must be one row, got ${JSON.stringify(canvaRows)}`)
+    assert.equal(canvaRows[0].canonicalAppId, CANVA_BUNDLE)
+    // 600 + 300 (seeded historical) + 600 + 300 (fresh) seconds all together.
+    assert.equal(canvaRows[0].totalSeconds, 1800)
+  } finally {
+    db.close()
+  }
+})
+
+test('aggregateAppSummaries keys twins through stored canonical links, never display names', () => {
+  const links = new Map([[TRAYCER_PATH, TRAYCER_BUNDLE]])
+  const session = (bundleId: string, startTime: number) => ({
+    id: 1,
+    bundleId,
+    appName: 'Traycer',
+    startTime,
+    endTime: startTime + 300_000,
+    durationSeconds: 300,
+    category: 'development' as const,
+    isFocused: true,
+    windowTitle: null,
+    rawAppName: 'Traycer',
+    canonicalAppId: null,
+    appInstanceId: bundleId,
+    captureSource: 'foreground_poll',
+    endedReason: null,
+    captureVersion: 2,
+  })
+  const merged = aggregateAppSummaries([session(TRAYCER_PATH, BASE), session(TRAYCER_BUNDLE, BASE + 600_000)], links)
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].canonicalAppId, TRAYCER_BUNDLE)
+  assert.equal(merged[0].totalSeconds, 600)
+
+  // Two DIFFERENT apps that share a display name but have no stored link
+  // must stay two rows — equivalence is the resolved mapping, never a name.
+  const unlinked = aggregateAppSummaries(
+    [session('/Applications/Studio.app/Contents/MacOS/Studio', BASE), session('com.beta.studio', BASE + 600_000)],
+    new Map(),
+  )
+  assert.equal(unlinked.length, 2)
 })
 
 // ─── Re-mint prevention (issue Done-when #3) ─────────────────────────────────

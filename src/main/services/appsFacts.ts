@@ -13,6 +13,7 @@ import type { AppCategory, AppUsageSummary, LiveSession, WorkContextBlock } from
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { resolveCanonicalApp } from '../lib/appIdentity'
+import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
 import { getTimelineDayPayload } from './workBlocks'
 
 // Stable identity for time whose application is unknown (apps.md failure
@@ -40,18 +41,28 @@ interface Accumulator {
   lastSessionEnd: number | null
 }
 
-function appKeyFor(bundleId: string, appName: string, canonicalAppId?: string | null): {
+function appKeyFor(
+  bundleId: string,
+  appName: string,
+  canonicalAppId: string | null | undefined,
+  canonicalLinks: ReadonlyMap<string, string>,
+): {
   key: string
   proto: ShareProto
 } {
   const identity = resolveCanonicalApp(bundleId, appName)
-  const key = canonicalAppId ?? identity.canonicalAppId ?? bundleId
+  // The stored registry link remaps a twin's derived key onto its canonical
+  // counterpart, so one installed app never becomes two rows (DEV-239). The
+  // remap runs AFTER the per-session derivation because the canonical
+  // projection stamps a catalog miss with the raw bundle/path id.
+  const derivedKey = canonicalAppId ?? identity.canonicalAppId ?? bundleId
+  const key = canonicalLinks.get(derivedKey) ?? derivedKey
   return {
     key,
     proto: {
       bundleId,
       appName: identity.displayName || appName,
-      canonicalAppId: canonicalAppId ?? identity.canonicalAppId ?? null,
+      canonicalAppId: key,
       category: 'uncategorized',
     },
   }
@@ -77,12 +88,15 @@ function apportion(total: number, weights: readonly number[]): number[] {
   return out
 }
 
-function sharesForBlock(block: WorkContextBlock): { shares: Share[]; sessionBacked: boolean } {
+function sharesForBlock(
+  block: WorkContextBlock,
+  canonicalLinks: ReadonlyMap<string, string>,
+): { shares: Share[]; sessionBacked: boolean } {
   if (block.sessions.length > 0) {
     return {
       sessionBacked: true,
       shares: block.sessions.map((session) => {
-        const { key, proto } = appKeyFor(session.bundleId, session.appName, session.canonicalAppId)
+        const { key, proto } = appKeyFor(session.bundleId, session.appName, session.canonicalAppId, canonicalLinks)
         return { key, proto: { ...proto, category: session.category }, weight: Math.max(0, session.durationSeconds) }
       }),
     }
@@ -93,7 +107,7 @@ function sharesForBlock(block: WorkContextBlock): { shares: Share[]; sessionBack
   return {
     sessionBacked: false,
     shares: (block.topApps ?? []).map((app) => {
-      const { key, proto } = appKeyFor(app.bundleId, app.appName, app.canonicalAppId)
+      const { key, proto } = appKeyFor(app.bundleId, app.appName, app.canonicalAppId, canonicalLinks)
       return { key, proto: { ...proto, category: app.category }, weight: Math.max(0, app.totalSeconds) }
     }),
   }
@@ -110,6 +124,7 @@ export function getAppSummariesForTimelineDay(
   liveSession?: LiveSession | null,
 ): AppUsageSummary[] {
   const payload = getTimelineDayPayload(db, date, liveSession, { materialize: false })
+  const canonicalLinks = getStoredCanonicalAppLinks(db)
   const perApp = new Map<string, Accumulator>()
 
   const credit = (key: string, proto: ShareProto, seconds: number, category: AppCategory) => {
@@ -135,7 +150,7 @@ export function getAppSummariesForTimelineDay(
 
   for (const block of payload.blocks) {
     const base = blockActiveSeconds(block)
-    const { shares, sessionBacked } = sharesForBlock(block)
+    const { shares, sessionBacked } = sharesForBlock(block, canonicalLinks)
     const weightSum = shares.reduce((acc, share) => acc + share.weight, 0)
 
     if (weightSum <= 0) {
@@ -162,7 +177,7 @@ export function getAppSummariesForTimelineDay(
     if (sessionBacked) {
       const ordered = [...block.sessions].sort((a, b) => a.startTime - b.startTime)
       for (const session of ordered) {
-        const { key } = appKeyFor(session.bundleId, session.appName, session.canonicalAppId)
+        const { key } = appKeyFor(session.bundleId, session.appName, session.canonicalAppId, canonicalLinks)
         const entry = perApp.get(key)
         if (!entry) continue
         if (entry.lastSessionEnd == null || session.startTime - entry.lastSessionEnd >= 2 * 60_000) {

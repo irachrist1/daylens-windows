@@ -18,14 +18,23 @@ import { categoryForDomain } from './domainCategories'
 
 export type { WorkKind }
 
+// Product decision (DEV-240): a leisure domain with at least this much
+// credited time in the selected range stays in the main list at its
+// time-ranked position instead of being relegated to the "Off to the side"
+// fold. The fold exists to keep incidental leisure from crowding out work,
+// never to hide hours of real activity off-screen. Default: 30 minutes.
+export const PROMINENT_LEISURE_MIN_SECONDS = 30 * 60
+
 export function partitionDomainsWorkFirst<T>(
   rows: T[],
   domain: (row: T) => string | null | undefined,
+  seconds?: (row: T) => number,
 ): { work: T[]; leisure: T[] } {
   const work: T[] = []
   const leisure: T[] = []
   for (const row of rows) {
-    if (kindForDomain(domain(row)) === 'leisure') leisure.push(row)
+    const prominentLeisure = seconds !== undefined && seconds(row) >= PROMINENT_LEISURE_MIN_SECONDS
+    if (kindForDomain(domain(row)) === 'leisure' && !prominentLeisure) leisure.push(row)
     else work.push(row)
   }
   return { work, leisure }
