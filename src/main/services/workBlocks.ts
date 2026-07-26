@@ -5921,30 +5921,39 @@ function healStaleShapePersistedDay(
     + `re-derived ${persisted.length} block${persisted.length === 1 ? '' : 's'} into ${repaired.length} `
     + `under ${TIMELINE_HEURISTIC_VERSION}, carrying labels and corrections forward`,
   )
-  persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
   // The range readers' frozen snapshot fast-path never re-checks a
   // current-builder row; drop it so the healed day refreezes
-  // deterministically on the next period read. Stored wrap narratives are
+  // deterministically on the next period read. Dropped BEFORE the persist:
+  // a crash between the two then leaves stale-stamped blocks (the heal
+  // simply retries on the next open) and a missing snapshot (refrozen from
+  // the current blocks on the next range read) — both self-healing. The
+  // reverse order could seal the healed blocks while the old-shape snapshot
+  // survives forever behind isCurrentSnapshot. Stored wrap narratives are
   // deliberately NOT dropped — their factsHash comparison regenerates a wrap
   // lazily, and only when this day's facts genuinely moved.
   deleteDaySnapshotRow(db, dateStr)
+  persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
   return repaired
 }
 
 // Every persisted user label correction must still be in force on the rebuilt
 // day: a corrected label re-attaches through the review layer (block id or
-// session-set evidence key), so its text must appear as some rebuilt block's
-// current label. A category-only correction has no label text to look for —
-// some rebuilt block overlapping the corrected span must carry the corrected
+// session-set evidence key), so its text must appear on a rebuilt block
+// OVERLAPPING the corrected span — text alone is not enough, because two
+// blocks corrected to the same name ("Client X audit" at 9:00 and again at
+// 14:00) would let one surviving attachment vouch for the other's silent
+// loss. A category-only correction has no label text to look for — some
+// rebuilt block overlapping the corrected span must carry the corrected
 // state instead.
 function correctionsSurviveRebuild(persisted: WorkContextBlock[], repaired: WorkContextBlock[]): boolean {
   for (const block of persisted) {
     if (block.review?.state !== 'corrected') continue
     const correctedLabel = block.review.correctedLabel?.trim() || block.label.override?.trim()
+    const overlaps = (candidate: WorkContextBlock): boolean =>
+      candidate.startTime < block.endTime && candidate.endTime > block.startTime
     const survived = correctedLabel
-      ? repaired.some((candidate) => candidate.label.current === correctedLabel)
-      : repaired.some((candidate) => candidate.review?.state === 'corrected'
-        && candidate.startTime < block.endTime && candidate.endTime > block.startTime)
+      ? repaired.some((candidate) => overlaps(candidate) && candidate.label.current === correctedLabel)
+      : repaired.some((candidate) => overlaps(candidate) && candidate.review?.state === 'corrected')
     if (!survived) return false
   }
   return true

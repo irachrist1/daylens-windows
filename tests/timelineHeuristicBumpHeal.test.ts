@@ -168,6 +168,63 @@ test('a user-corrected label survives the heal when its stretch of work survives
   db.close()
 })
 
+test('one surviving correction cannot vouch for another with the same label text', () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'daylens — Ghostty', 9, 0, 55)
+  insertSession(db, 'daylens — Ghostty', 10, 0, 55)
+  insertSession(db, 'daylens — Ghostty', 11, 50, 55)
+
+  // Materialize once so real blocks (and their session-set evidence keys)
+  // exist to build the seal from.
+  materializeTimelineDayProjection(db, TEST_DATE, null)
+  const built = validBlockRows(db)
+  assert.equal(built.length, 2, 'the morning + post-absence sitting analyze into two blocks')
+
+  // Re-seal the same shapes under DIFFERENT (seal-era) block ids, stamped
+  // stale. Both blocks were corrected to the SAME label. The first
+  // correction keeps its real evidence key, so it re-attaches to the rebuilt
+  // block; the second is keyed only to its seal-era block id, so
+  // re-segmentation strands it — the trap: its TEXT still appears on the
+  // day, on the other block.
+  const now = Date.now()
+  const insertSeal = db.prepare(`
+    INSERT INTO timeline_blocks (
+      id, date, start_time, end_time, block_kind, dominant_category,
+      category_distribution_json, switch_count, label_current, label_source,
+      label_confidence, narrative_current, evidence_summary_json, is_live,
+      heuristic_version, computed_at, invalidated_at
+    ) VALUES (?, ?, ?, ?, 'deep-work', 'development', '{"development": 3300}', 0, 'Development', 'rule', 0.8, NULL, '{}', 0, ?, ?, NULL)
+  `)
+  db.transaction(() => {
+    db.prepare(`UPDATE timeline_blocks SET invalidated_at = ? WHERE date = ?`).run(now, TEST_DATE)
+    insertSeal.run('seal_a', TEST_DATE, built[0].start_time, built[0].end_time, STALE_VERSION, now)
+    insertSeal.run('seal_b', TEST_DATE, built[1].start_time, built[1].end_time, STALE_VERSION, now)
+    const retargetA = db.prepare(`
+      UPDATE timeline_block_reviews
+      SET block_id = 'seal_a', review_state = 'corrected', correction_json = '{"label":"Client X audit"}', updated_at = ?
+      WHERE block_id = ?
+    `).run(now, built[0].id)
+    assert.equal(retargetA.changes, 1)
+    const retargetB = db.prepare(`
+      UPDATE timeline_block_reviews
+      SET block_id = 'seal_b', evidence_key = 'seal-era-key-b', review_state = 'corrected', correction_json = '{"label":"Client X audit"}', updated_at = ?
+      WHERE block_id = ?
+    `).run(now, built[1].id)
+    assert.equal(retargetB.changes, 1)
+  })()
+
+  const blocks = rendererRead(db).blocks.filter((block) => !block.isLive)
+
+  assert.equal(blocks.length, 2, 'the sealed shape is kept — the stranded correction vetoes the heal')
+  assert.ok(blocks.every((block) => block.label.current === 'Client X audit'),
+    `BOTH corrections stay in force; got ${blocks.map((b) => `"${b.label.current}"`).join(', ')}`)
+  assert.deepEqual(validBlockRows(db).map((row) => row.id), ['seal_a', 'seal_b'],
+    'the seal-era blocks are still the persisted day')
+  assert.ok(validBlockRows(db).every((row) => row.heuristic_version !== STALE_VERSION),
+    'the declined day is stamped current so the attempt is one-shot')
+  db.close()
+})
+
 test('a heal that would strand a corrected label keeps the sealed shape', () => {
   const db = createProductionTestDatabase()
   seedBridgedSealedDay(db, null)
