@@ -119,19 +119,21 @@ export function initDb(): void {
         console.warn('[db] deferred repairs failed:', err)
       }
       // Heal stored block labels that today's work-name guards disqualify
-      // ("Working on Cursor Agents", leisure headlines on work blocks). Runs
-      // once per guard version (WORK_NAME_GUARD_VERSION stamp), in bounded
-      // batches, and is safe to interrupt. Dynamic import: labelGuardRepair
-      // pulls in the whole workBlocks module, which must not join the cold
-      // launch path.
+      // ("Working on Cursor Agents", leisure headlines on work blocks) and
+      // stored category facts the attention-clamped rules now contradict
+      // (a stale 'entertainment' dominant on a Slack/CI block). Runs once per
+      // guard version (WORK_NAME_GUARD_VERSION stamp), in bounded batches,
+      // and is safe to interrupt. Dynamic import: labelGuardRepair pulls in
+      // the whole workBlocks module, which must not join the cold launch path.
       if (_db) {
         const db = _db
         import('./labelGuardRepair')
           .then(({ runLabelGuardRepairIfNeeded }) => runLabelGuardRepairIfNeeded(db))
           .then((result) => {
-            if (result.status === 'ran' && result.healedBlocks > 0) {
+            if (result.status === 'ran' && (result.healedBlocks > 0 || result.healedCategoryBlocks > 0)) {
               console.log(
-                `[db] label guard repair healed ${result.healedBlocks} block(s) `
+                `[db] label guard repair healed ${result.healedBlocks} label(s) and `
+                + `${result.healedCategoryBlocks} category fact(s) `
                 + `across ${result.affectedDates.length} day(s)`,
               )
             }
