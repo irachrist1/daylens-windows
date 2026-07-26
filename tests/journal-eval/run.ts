@@ -28,9 +28,9 @@ const repoRoot = path.resolve(evalDir, '..', '..')
 // Thresholds for --strict. Deliberately not 100% out of the gate: the eval
 // exists to measure the distance; ratchet these up as fixes land, never down.
 const THRESHOLDS = {
-  primaryWorkRate: Number(process.env.EVAL_MIN_PRIMARY ?? 0.60),
-  toolSurfaceCleanRate: Number(process.env.EVAL_MIN_CLEAN ?? 0.90),
-  gapHonestyRate: Number(process.env.EVAL_MIN_GAPS ?? 0.80),
+  primaryWorkRate: Number(process.env.EVAL_MIN_PRIMARY ?? 0.85),
+  toolSurfaceCleanRate: Number(process.env.EVAL_MIN_CLEAN ?? 0.95),
+  gapHonestyRate: Number(process.env.EVAL_MIN_GAPS ?? 0.95),
   shapeJudgeMean: Number(process.env.EVAL_MIN_SHAPE ?? 6.0),
 }
 
