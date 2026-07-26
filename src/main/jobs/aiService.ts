@@ -2896,6 +2896,7 @@ export function workBlockPrompt(block: WorkContextBlock): string {
     '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
     '  - This block may already combine several stretches of one activity. Name the WHOLE thing in one coherent title that covers all the evidence (e.g. "Setting up the work network with the Ubiquiti dashboard and Terminal"), not just the first app.',
     '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek — people multi-task with media on the side while actually working.',
+    '  - When a terminal, editor, or agent runner (Ghostty, Warp, Codex, cmux, Claude Code) holds a substantial share of the block alongside media, the WORK is the headline and the media is at most an aside. Media titles are more descriptive than terminal windows, never more important: two hours of terminal time next to browser videos is a work block with videos on the side, not "watching videos".',
     '  - Name the site or tool where the work happened ("in Notion", "in Google Docs", "in Linear"), not the browser it was rendered in. Mention the browser only as secondary context ("in the Dia browser"), never as the headline location.',
     '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Cursor, Warp, and Terminal — focused work"). Never announce failure, never say "Computer activity" or "Uncategorized".',
     '',
