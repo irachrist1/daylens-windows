@@ -3108,6 +3108,7 @@ export const IPC = {
     LIST: 'entities:list',
     DETAIL: 'entities:detail',
     SUGGESTED_MERGES: 'entities:suggested-merges',
+    MERGE_ALL_DUPLICATES: 'entities:merge-all-duplicates',
     PREVIEW_CORRECTION: 'entities:preview-correction',
     APPLY_CORRECTION: 'entities:apply-correction',
     UNDO_CORRECTION: 'entities:undo-correction',

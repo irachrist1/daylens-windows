@@ -15,9 +15,11 @@ import { resolveEntityTimelineBlockRefs } from '../services/entities/blockRefRem
 import { mergeGroupIds } from '../services/entities/entityRepository'
 import {
   applyEntityCorrection,
+  mergeAllDuplicateEntities,
   previewEntityCorrection,
   type EntityCorrectionCommand,
 } from '../services/entities/entityCorrections'
+import { workerSuggestedMerges } from '../services/rangeWorker'
 import { undoCorrection } from '../services/correctionCommands'
 import { createProject } from '../core/query/attributionResolvers'
 import {
@@ -45,8 +47,28 @@ export function registerEntityHandlers(): void {
     return { ...detail, blockRefs }
   })
 
-  ipcMain.handle(IPC.ENTITIES.SUGGESTED_MERGES, () => {
-    return listSuggestedEntityMerges(getDb())
+  // The duplicate scan reads the whole entities table, so it runs in the
+  // read-only range worker (DEV-227 pattern) and never blocks the process
+  // drawing the screen; the inline query is the fallback, not the norm.
+  ipcMain.handle(IPC.ENTITIES.SUGGESTED_MERGES, async () => {
+    try {
+      return await workerSuggestedMerges()
+    } catch {
+      return listSuggestedEntityMerges(getDb())
+    }
+  })
+
+  ipcMain.handle(IPC.ENTITIES.MERGE_ALL_DUPLICATES, (
+    _e,
+    payload: { excludedPairs?: Array<{ leftId?: unknown; rightId?: unknown }> } = {},
+  ) => {
+    const excludedPairs = Array.isArray(payload?.excludedPairs)
+      ? payload.excludedPairs
+          .filter((pair): pair is { leftId: string; rightId: string } =>
+            typeof pair?.leftId === 'string' && typeof pair?.rightId === 'string')
+          .map((pair) => ({ leftId: pair.leftId, rightId: pair.rightId }))
+      : []
+    return mergeAllDuplicateEntities(getDb(), { excludedPairs })
   })
 
   ipcMain.handle(IPC.ENTITIES.PREVIEW_CORRECTION, (_e, command: EntityCorrectionCommand) => {

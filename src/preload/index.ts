@@ -544,6 +544,10 @@ const api = {
       ipcRenderer.invoke(IPC.ENTITIES.LIST, payload),
     detail: (entityId: string) => ipcRenderer.invoke(IPC.ENTITIES.DETAIL, entityId),
     suggestedMerges: () => ipcRenderer.invoke(IPC.ENTITIES.SUGGESTED_MERGES),
+    mergeAllDuplicates: (
+      payload: { excludedPairs?: Array<{ leftId: string; rightId: string }> } = {},
+    ): Promise<{ merged: number; failed: number; lastCorrectionId: string | null; lastDescription: string | null }> =>
+      ipcRenderer.invoke(IPC.ENTITIES.MERGE_ALL_DUPLICATES, payload),
     previewCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.PREVIEW_CORRECTION, command),
     applyCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.APPLY_CORRECTION, command),
     undoCorrection: (correctionId: string) => ipcRenderer.invoke(IPC.ENTITIES.UNDO_CORRECTION, correctionId),
