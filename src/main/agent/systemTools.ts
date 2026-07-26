@@ -63,16 +63,16 @@ const SEARCHABLE_EXTENSIONS = new Set([
 // that redirect output to files, re-point the repository, read files outside
 // the repository (`diff --no-index`), or run configured external drivers are
 // rejected below.
-const GIT_READ_SUBCOMMANDS = new Set(['log', 'show', 'diff', 'status', 'shortlog', 'branch', 'rev-parse', 'describe'])
-const FORBIDDEN_GIT_ARG = /^(--output|--exec-path|--upload-pack|--receive-pack|-c$|--config|--no-index|--ext-diff|--textconv|--git-dir|--work-tree)/
+export const GIT_READ_SUBCOMMANDS = new Set(['log', 'show', 'diff', 'status', 'shortlog', 'branch', 'rev-parse', 'describe'])
+export const FORBIDDEN_GIT_ARG = /^(--output|--exec-path|--upload-pack|--receive-pack|-c$|--config|--no-index|--ext-diff|--textconv|--git-dir|--work-tree)/
 // `branch` mutates through flags, so it is forced to --list mode and its
 // mutating flags are rejected outright.
-const FORBIDDEN_BRANCH_ARG = /^(-d$|-D$|--delete|-m$|-M$|--move|-c$|-C$|--copy|-f$|--force|--edit-description|--set-upstream-to|--unset-upstream|-u$)/
+export const FORBIDDEN_BRANCH_ARG = /^(-d$|-D$|--delete|-m$|-M$|--move|-c$|-C$|--copy|-f$|--force|--edit-description|--set-upstream-to|--unset-upstream|-u$)/
 // Flags that turn `git log` from metadata into file content (patches).
 const GIT_PATCH_ARG = /^(-p$|-u$|--patch|--full-diff|-L)/
 // Read-only means read-only even for opportunistic writes: never take
 // optional locks (status index refresh) and never prompt for credentials.
-const GIT_ENV = { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+export const GIT_ENV = { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
 
 function looksBinary(buffer: Buffer): boolean {
   const sample = buffer.subarray(0, Math.min(buffer.length, 4096))

@@ -8,14 +8,14 @@
 //
 // Pure (no React) so it can be unit-tested without the carousel.
 
-import type { AppCategory, DayTimelinePayload, DayWrapEntity, WorkContextBlock } from '@shared/types'
+import type { AppCategory, DayTimelinePayload, DayWrapEntity, TimelineGapSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { effectiveBlockKind, type WorkKind } from '@shared/workKind'
-import { inferWorkIntent } from '@shared/workIntent'
+import { effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
+import { inferWorkIntent, workSubjectCandidates } from '@shared/workIntent'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { friendlyDomain, humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { categoryForDomain } from '@shared/domainCategories'
-import { isDisqualifiedWorkSubject } from '@shared/workNameGuards'
+import { cleanWorkSubject } from '@shared/workNameGuards'
 import { buildDayTitleContext, type AppTitleContext } from '@shared/windowTitleContext'
 import { computeQuality, looksLikeRawArtifactLabel } from './wrappedFacts'
 
@@ -107,6 +107,51 @@ export type DayStory = DayStorySegment[]
 
 export type WrapQuality = 'empty' | 'tooEarly' | 'partial' | 'full'
 
+// ─── Gaps are facts (day-recap-and-analysis.md) ──────────────────────────────
+// Untracked time of 45 minutes or more inside the day's span is an explicit
+// fact with clock bounds, cross-referenced against the calendar when the
+// payload carries the day's scheduled events. The narrative layer already has
+// honesty directives about untracked time; giving it the gap as a FACT lets it
+// say something true ("5:14pm to 9:24pm away from the computer") instead of
+// avoiding the topic — or worse, implying a continuous grind.
+
+export type DayWrapGapKind = 'asleep' | 'locked' | 'idle' | 'passive' | 'paused' | 'untracked' | 'away'
+
+export interface DayWrapGap {
+  fromMs: number
+  toMs: number
+  fromClock: string
+  toClock: string
+  minutes: number
+  /** The strongest recorded cause (from the timeline's own gap segments):
+   *  asleep / locked / idle / passive / paused / untracked / away. */
+  kind: DayWrapGapKind
+  /** The scheduled calendar event this gap lines up with, when there is one
+   *  ("Run" for a 6pm–8pm event inside a 5:14pm–9:24pm hole). Title only. */
+  matchesEvent: string | null
+}
+
+// ─── Day threads (day-recap-and-analysis.md) ─────────────────────────────────
+// The same subject recurring in three or more blocks across three or more
+// hours is a DAY THREAD — a first-class fact ("Daylens ran through the whole
+// day"), so prose can tell the day's real shape instead of twelve fragments.
+
+export interface DayWrapThread {
+  /** The human work name, from the same naming ladder the blocks use. */
+  name: string
+  /** How many separate blocks the subject appeared in — as the block's own
+   *  name or as clean secondary evidence (a channel artifact, a workflow). */
+  blockCount: number
+  /** Active seconds ONLY across the blocks this subject headlined. A
+   *  secondary appearance proves recurrence, never claims the block's time. */
+  seconds: number
+  firstMs: number
+  lastMs: number
+  fromClock: string
+  toClock: string
+  category: AppCategory
+}
+
 export interface DayWrapFacts {
   date: string
   weekday: string      // "TUESDAY"
@@ -154,6 +199,16 @@ export interface DayWrapFacts {
    *  "what the day was about" scene. Empty or absent when the ledger has
    *  nothing to say — the scene simply doesn't exist then. */
   entities?: DayWrapEntity[]
+  /** Untracked stretches of 45+ minutes inside the day's span, with clock
+   *  bounds and (when known) the calendar event they line up with. Gaps are
+   *  facts: the deck and the model say them plainly instead of going silent.
+   *  Optional like `entities`: absent only on facts frozen before the field
+   *  existed; the builder always sets it. */
+  gaps?: DayWrapGap[]
+  /** Subjects that recurred across 3+ blocks spanning 3+ hours, biggest
+   *  first — the day's real through-lines ("Daylens ran through the whole
+   *  day"), so interleaving can be told honestly. Optional like `entities`. */
+  threads?: DayWrapThread[]
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -184,18 +239,20 @@ function correctedOrCurrentLabel(block: WorkContextBlock): string {
 /** The human name for a WORK block: a corrected intent subject wins over
  *  inference, then the inferred subject if it reads clean, else a humanized
  *  (corrected-or-current) label, else "" meaning "fold into a few smaller
- *  things". */
+ *  things". Every candidate goes through the shared sanitize-then-check gate
+ *  (cleanWorkSubject), so capture decorations — "✳ Debug Daylens…" from a
+ *  Claude Code window title — are stripped before the guard runs and a raw
+ *  glyph can never lead a floor line. */
 function workActivityName(block: WorkContextBlock): string {
-  const subject = (
-    block.review?.correctedIntentSubject?.trim()
-    || inferWorkIntent(block).subject?.trim()
-  )
-  if (subject && subject.length >= 3 && !looksLikeRawArtifactLabel(subject) && !isDisqualifiedWorkSubject(subject)) {
-    return cap(subject)
-  }
-  const humanized = humanizeTitle(correctedOrCurrentLabel(block))
-  if (humanized && humanized.length >= 3 && !looksLikeRawArtifactLabel(humanized) && !isDisqualifiedWorkSubject(humanized)) {
-    return cap(humanized)
+  const candidates = [
+    block.review?.correctedIntentSubject,
+    inferWorkIntent(block).subject,
+    humanizeTitle(correctedOrCurrentLabel(block)),
+  ]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const cleaned = cleanWorkSubject(candidate)
+    if (cleaned && !looksLikeRawArtifactLabel(cleaned)) return cap(cleaned)
   }
   return ''
 }
@@ -208,9 +265,12 @@ function blockDisplayName(block: WorkContextBlock, kind: WorkKind): string {
     return name || categoryWord(block.dominantCategory)
   }
   if (kind === 'leisure') {
+    // Name the leisure by its leisure domains only — a work tab open inside a
+    // leisure block (Slack, a CI dashboard) must never appear as "watching".
     const domains = block.websites
       .slice()
       .sort((a, b) => b.totalSeconds - a.totalSeconds)
+      .filter((w) => kindForDomain(w.domain) === 'leisure')
       .map((w) => w.domain)
     return leisureActivityTitle(domains)
   }
@@ -259,17 +319,181 @@ export function categoryAction(category: AppCategory): string {
   }
 }
 
+/** Imperative verbs a captured task title leads with ("Debug Daylens
+ *  freezing…", "Fix the sync race"). The title already IS the action, so the
+ *  lead verb becomes its gerund instead of getting a second verb stacked in
+ *  front ("building Debug Daylens freezing…"). */
+const IMPERATIVE_GERUNDS: Record<string, string> = {
+  add: 'adding', build: 'building', clean: 'cleaning', create: 'creating',
+  debug: 'debugging', design: 'designing', draft: 'drafting', edit: 'editing',
+  explore: 'exploring', fix: 'fixing', implement: 'implementing',
+  improve: 'improving', investigate: 'investigating', plan: 'planning',
+  prepare: 'preparing', refactor: 'refactoring', remove: 'removing',
+  review: 'reviewing', rewrite: 'rewriting', set: 'setting', ship: 'shipping',
+  test: 'testing', update: 'updating', write: 'writing',
+}
+
+/** A subject that already names the work AS work ("OAuth development",
+ *  "site maintenance") is a complete noun phrase; prepending the category
+ *  verb produced "writing Oauth development". */
+const WORK_NOUN_TAIL = /\b(development|design|research|planning|writing|review|reviews|testing|debugging|documentation|maintenance|cleanup|analysis|setup|prep|admin|work)$/i
+
 /** A human work phrase: the action plus the subject ("building Daylens"). Used in
  *  prose and the facts handed to the model, never the bare project noun. A name
  *  that already leads with a gerund ("Redesigning the SPCS website") IS the
  *  action — prepending the category verb produced "building Reviewing work
- *  projects", so those pass through with only the case lowered. */
+ *  projects", so those pass through with only the case lowered. The same goes
+ *  for names that lead with an imperative verb or end in a work noun: the
+ *  category verb is only for bare subjects ("Daylens", "the essay"). */
 export function workActionPhrase(name: string, category: AppCategory): string {
-  const firstWord = name.trim().split(/\s+/)[0] ?? ''
+  const trimmed = name.trim()
+  const firstWord = trimmed.split(/\s+/)[0] ?? ''
+  const passThrough = (value: string) =>
+    /^[A-Z]{2,}/.test(value) ? value : value.charAt(0).toLowerCase() + value.slice(1)
   if (/^[A-Za-z]+ing$/.test(firstWord) && firstWord.length > 4) {
-    return /^[A-Z]{2,}/.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1)
+    return passThrough(trimmed)
   }
-  return `${categoryAction(category)} ${name}`
+  const gerund = IMPERATIVE_GERUNDS[firstWord.toLowerCase()]
+  if (gerund) {
+    const rest = trimmed.slice(firstWord.length).trim()
+    return rest ? `${gerund} ${rest}` : gerund
+  }
+  if (WORK_NOUN_TAIL.test(trimmed)) {
+    return passThrough(trimmed)
+  }
+  return `${categoryAction(category)} ${trimmed}`
+}
+
+// ─── Gap facts ────────────────────────────────────────────────────────────────
+
+const GAP_FACT_MIN_MS = 45 * 60_000
+// A calendar event explains a gap only when the gap really held it: at least
+// half an hour of overlap, covering most of the event's scheduled length.
+const GAP_EVENT_MIN_OVERLAP_MS = 30 * 60_000
+const GAP_EVENT_MIN_COVERAGE = 0.6
+
+function gapKindFor(kind: TimelineGapSegment['kind']): DayWrapGapKind {
+  switch (kind) {
+    case 'asleep': return 'asleep'
+    case 'machine_off': return 'asleep'
+    case 'locked': return 'locked'
+    case 'idle': return 'idle'
+    case 'idle_gap': return 'idle'
+    case 'passive': return 'passive'
+    case 'paused': return 'paused'
+    case 'away': return 'away'
+    default: return 'untracked'
+  }
+}
+
+/** The plain-words read of a gap kind — what a person would say, never the
+ *  internal state name. Exported so the deck and the model-facing facts speak
+ *  the identical dialect. */
+export function gapKindPhrase(kind: DayWrapGapKind): string {
+  switch (kind) {
+    case 'passive': return 'screen on, hands off the keyboard'
+    case 'paused': return 'tracking was paused'
+    default: return 'away from the computer'
+  }
+}
+
+function buildGapFacts(payload: DayTimelinePayload): DayWrapGap[] {
+  const events = payload.scheduledMeetings ?? []
+  return (payload.segments ?? [])
+    .filter((segment): segment is TimelineGapSegment => segment.kind !== 'work_block')
+    .filter((segment) => segment.endTime - segment.startTime >= GAP_FACT_MIN_MS)
+    .sort((left, right) => left.startTime - right.startTime)
+    .map((segment) => {
+      let matchesEvent: string | null = null
+      let bestOverlap = 0
+      for (const event of events) {
+        const title = event.title?.trim()
+        if (!title) continue
+        const overlap = Math.min(segment.endTime, event.endMs) - Math.max(segment.startTime, event.startMs)
+        const eventLen = Math.max(1, event.endMs - event.startMs)
+        if (overlap >= GAP_EVENT_MIN_OVERLAP_MS && overlap >= eventLen * GAP_EVENT_MIN_COVERAGE && overlap > bestOverlap) {
+          bestOverlap = overlap
+          matchesEvent = title
+        }
+      }
+      return {
+        fromMs: segment.startTime,
+        toMs: segment.endTime,
+        fromClock: formatClock(segment.startTime),
+        toClock: formatClock(segment.endTime),
+        minutes: Math.round((segment.endTime - segment.startTime) / 60_000),
+        kind: gapKindFor(segment.kind),
+        matchesEvent,
+      }
+    })
+}
+
+// ─── Day threads ──────────────────────────────────────────────────────────────
+
+const THREAD_MIN_BLOCKS = 3
+const THREAD_MIN_SPAN_MS = 3 * 3_600_000
+const MAX_THREADS = 3
+
+function buildDayThreads(blocks: WorkContextBlock[]): DayWrapThread[] {
+  interface Accumulator { name: string; blockCount: number; seconds: number; firstMs: number; lastMs: number; category: AppCategory; headlined: boolean }
+  const byName = new Map<string, Accumulator>()
+  for (const block of blocks) {
+    if (effectiveBlockKind(block) !== 'work') continue
+    // The block's own name comes from the same ladder every surface uses:
+    // corrected subject → inferred intent subject → humanized label, through
+    // the shared sanitize-then-guard gate. Membership additionally counts the
+    // block's clean SECONDARY subjects (workSubjectCandidates: channel
+    // artifacts, workflows) — the daylens Slack channel inside an ML-study
+    // block proves daylens ran through the morning, without claiming its time.
+    const primary = workActivityName(block)
+    const names = new Map<string, string>()
+    if (primary) names.set(primary.toLowerCase(), primary)
+    for (const candidate of workSubjectCandidates(block)) {
+      const cleaned = cleanWorkSubject(candidate)
+      if (!cleaned || looksLikeRawArtifactLabel(cleaned)) continue
+      const display = cap(cleaned)
+      if (!names.has(display.toLowerCase())) names.set(display.toLowerCase(), display)
+    }
+    const seconds = blockActiveSeconds(block)
+    for (const [key, display] of names) {
+      const isPrimary = primary !== '' && key === primary.toLowerCase()
+      const existing = byName.get(key)
+      if (existing) {
+        existing.blockCount += 1
+        if (isPrimary) {
+          existing.seconds += seconds
+          existing.headlined = true
+          existing.category = block.dominantCategory
+        }
+        existing.firstMs = Math.min(existing.firstMs, block.startTime)
+        existing.lastMs = Math.max(existing.lastMs, block.endTime)
+      } else {
+        byName.set(key, {
+          name: display,
+          blockCount: 1,
+          seconds: isPrimary ? seconds : 0,
+          firstMs: block.startTime,
+          lastMs: block.endTime,
+          category: block.dominantCategory,
+          headlined: isPrimary,
+        })
+      }
+    }
+  }
+  return [...byName.values()]
+    .filter((acc) => acc.blockCount >= THREAD_MIN_BLOCKS && acc.lastMs - acc.firstMs >= THREAD_MIN_SPAN_MS)
+    .sort((left, right) => right.blockCount - left.blockCount || right.seconds - left.seconds)
+    .slice(0, MAX_THREADS)
+    .map((acc) => ({
+      name: acc.name,
+      blockCount: acc.blockCount,
+      seconds: acc.seconds,
+      firstMs: acc.firstMs,
+      lastMs: acc.lastMs,
+      fromClock: formatClock(acc.firstMs),
+      toClock: formatClock(acc.lastMs),
+      category: acc.category,
+    }))
 }
 
 // ─── Builder ──────────────────────────────────────────────────────────────────
@@ -304,6 +528,7 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     else if (kind === 'leisure') {
       leisureSeconds += seconds
       for (const site of block.websites) {
+        if (kindForDomain(site.domain) !== 'leisure') continue
         const name = friendlyDomain(site.domain)
         if (name) leisureByName.set(name, (leisureByName.get(name) ?? 0) + site.totalSeconds)
       }
@@ -380,6 +605,8 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     mainStartClock,
     titleContext,
     entities: payload.dayEntities ?? [],
+    gaps: buildGapFacts(payload),
+    threads: buildDayThreads(blocks),
   }
 }
 
@@ -554,7 +781,9 @@ function buildDayStory(blocks: WorkContextBlock[], dayStartMs: number): DayStory
           else byName.set(key, { phrase: workActionPhrase(name, placed.block.dominantCategory), seconds: placed.seconds })
         }
       } else if (kind === 'leisure' && credits) {
-        const domains = placed.block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds).map((w) => w.domain)
+        const domains = placed.block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds)
+          .filter((w) => kindForDomain(w.domain) === 'leisure')
+          .map((w) => w.domain)
         const friendly = leisureActivityTitle(domains)
         if (placed.seconds > asideSeconds) { asideSeconds = placed.seconds; asideName = friendly }
       }

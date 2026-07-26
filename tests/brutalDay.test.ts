@@ -1,19 +1,18 @@
 // The brutal day: ONE adversarial simulated day exercising every subsystem at
 // once, through the real capture-pipeline seams — the tracking-FSM test rig,
-// the connector fake providers, the fixture embedder, and the fixture model.
+// the fixture embedder, and the fixture model.
 // Every assertion states a spec-mandated invariant of the capture, timeline,
-// memory, agent, wrapped, briefs, connector, billing, and screen-context
+// memory, agent, wrapped, briefs, billing, and screen-context
 // systems; nothing here invents behavior the product does not promise.
 //
 // The day:
 //   - morning full-screen Coursera in Dia on monitor 2 while Notion holds
 //     input focus on monitor 1 (passive presence + display visibility);
 //   - an incognito window interleaved with normal browsing (must vanish);
-//   - three meetings: one Google-calendar+captured (matched), one
-//     captured-only Zoom call with no event, one calendar-only double-booked
-//     overlap (scheduled context, never additive time) — with a Granola note
+//   - three meetings: one calendar+captured (matched), one captured-only
+//     Zoom call with no event, one calendar-only double-booked overlap
+//     (scheduled context, never additive time) — with a meeting note
 //     attached to the matched one;
-//   - GitHub commits + a merged PR and a Linear issue moved that day;
 //   - an afternoon correction ("that block was client research") through the
 //     agent's propose → confirm flow;
 //   - a site purge plus backup-restore replay honesty;
@@ -47,17 +46,6 @@ import { __setSettings, __resetSettings, getSettings, setApiKey, clearApiKey } f
 import { driveCaptureDay, fixtureClockMs } from './support/captureDay.ts'
 import type { CaptureEventsDayFixture } from './support/dayFixture.ts'
 import { findDatabaseTextMatches } from './support/dayFixturePrivacy.ts'
-import { OPEN_GATE as CONNECTOR_OPEN_GATE } from './support/connectorContractSuite.ts'
-import { createFakeGoogleCalendarApi, createFakeSecretStore, FAKE_GOOGLE_ENDPOINTS } from './support/fakeGoogleCalendarApi.ts'
-import { createFakeGithubApi, FAKE_GITHUB_ENDPOINTS } from './support/fakeGithubApi.ts'
-import { createFakeLinearApi, FAKE_LINEAR_API_KEY, FAKE_LINEAR_ENDPOINT } from './support/fakeLinearApi.ts'
-import { createFakeGranolaFilesystem, FAKE_GRANOLA_CACHE_PATH } from './support/fakeGranolaCache.ts'
-import type { GoogleApiEvent } from '../src/main/connectors/googleCalendar/api.ts'
-import { createGoogleCalendarAdapter } from '../src/main/connectors/googleCalendar/adapter.ts'
-import { createGithubAdapter } from '../src/main/connectors/github/adapter.ts'
-import { createLinearAdapter } from '../src/main/connectors/linear/adapter.ts'
-import { createGranolaAdapter } from '../src/main/connectors/granola/adapter.ts'
-import { connectConnector } from '../src/main/connectors/service.ts'
 
 import { projectDay } from '../src/main/core/projections/chunk2.ts'
 import { insertFocusEvents } from '../src/main/db/focusEventRepository.ts'
@@ -66,8 +54,8 @@ import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import { getAppSummariesForTimelineDay } from '../src/main/services/appsFacts.ts'
 import { blockActiveSeconds } from '../src/shared/blockDuration.ts'
 import { resolveDayMeetingReport } from '../src/main/services/meetingResolution.ts'
-import { getExternalSignal } from '../src/main/services/externalSignals.ts'
-import type { CalendarSignal, GitActivitySignal } from '../src/shared/types.ts'
+import { getExternalSignal, putExternalSignal } from '../src/main/services/externalSignals.ts'
+import type { CalendarSignal } from '../src/shared/types.ts'
 import { indexMemoryForDay, ensureDayMemoryIndexed } from '../src/main/services/memoryIndex.ts'
 import { searchExact } from '../src/main/services/exactSearch.ts'
 import { searchAll } from '../src/main/db/queries.ts'
@@ -162,13 +150,6 @@ function localDateDaysAgo(days: number): string {
   d.setDate(d.getDate() - days)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-
-function isoDaysAgo(days: number, hour: number, minute = 0): string {
-  const d = new Date()
-  d.setDate(d.getDate() - days)
-  d.setHours(hour, minute, 0, 0)
-  return d.toISOString()
 }
 
 const DAY = localDateDaysAgo(1)
@@ -386,116 +367,34 @@ test('display visibility: the second-monitor Coursera stretch is presence eviden
   assert.equal(payload.totalSeconds, blockSum, 'Invariant 7: blocks are the canonical day facts')
 })
 
-test('connectors: calendar, GitHub, Linear, and Granola sync through their fake providers into connected memory', async () => {
-  // Google Calendar: the matched event and the double-booked calendar-only pair.
-  const calendarEvents: GoogleApiEvent[] = [
-    {
-      id: 'ev-acme', status: 'confirmed', summary: 'Acme launch sync',
-      start: { dateTime: isoDaysAgo(1, 10, 20) }, end: { dateTime: isoDaysAgo(1, 10, 50) },
-      attendees: [
-        { email: 'owner@example.com', self: true, responseStatus: 'accepted' },
-        { email: 'ana@example.com', displayName: 'Ana Silva', responseStatus: 'accepted' },
-        { email: 'ben@example.com', responseStatus: 'accepted' },
-      ],
-    },
-    {
-      id: 'ev-roadmap', status: 'confirmed', summary: 'Roadmap review',
-      start: { dateTime: isoDaysAgo(1, 13, 0) }, end: { dateTime: isoDaysAgo(1, 14, 0) },
-    },
-    {
-      id: 'ev-hiring', status: 'confirmed', summary: 'Hiring sync',
-      start: { dateTime: isoDaysAgo(1, 13, 30) }, end: { dateTime: isoDaysAgo(1, 14, 30) },
-    },
-  ]
-  const fakeGoogle = createFakeGoogleCalendarApi(calendarEvents)
-  const googleAdapter = createGoogleCalendarAdapter({
-    fetchImpl: fakeGoogle.fetchImpl,
-    openExternal: (url) => fakeGoogle.browse(url),
-    secretStore: createFakeSecretStore(),
-    endpoints: FAKE_GOOGLE_ENDPOINTS,
-    env: {},
-    authTimeoutMs: 10_000,
-  })
-  const calResult = await connectConnector(
-    db, 'google_calendar', { clientId: 'testclient.apps.googleusercontent.com' },
-    { adapter: googleAdapter, gate: CONNECTOR_OPEN_GATE },
+test('day signals: the calendar day layer and a meeting note land for resolution', () => {
+  // The stored external_signals 'calendar' layer — the same shape the live
+  // zero-setup calendar probe writes (calendarSignals.ts).
+  putExternalSignal(db, DAY, 'calendar', {
+    events: [
+      { title: 'Acme launch sync', startClock: '10:20', durationMinutes: 30, attendeeCount: 3 },
+      { title: 'Roadmap review', startClock: '13:00', durationMinutes: 60, attendeeCount: null },
+      { title: 'Hiring sync', startClock: '13:30', durationMinutes: 60, attendeeCount: null },
+    ],
+  } satisfies CalendarSignal)
+
+  // A meeting-notes record in the connected ledger. The connector_records
+  // table outlives the removed OAuth connector framework, and meeting
+  // resolution still reads it for note corroboration.
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO connector_records
+      (id, connector_id, source_record_id, kind, date, retrieved_at, permission_scope, envelope_json, created_at, updated_at)
+    VALUES (?, 'granola', 'note:doc-acme', 'meeting_record', ?, ?, 'local_file', ?, ?, ?)
+  `).run(
+    'rec-granola-acme', DAY, now,
+    JSON.stringify({ notesSignal: { title: 'Acme launch sync', scheduledClock: '10:20' } }),
+    now, now,
   )
-  assert.equal(calResult.status, 'ok')
 
-  // GitHub: commits and a merged PR on the day.
-  const fakeGithub = createFakeGithubApi({ login: 'ada-dev' })
-  fakeGithub.addRepo('spcs/daylens-app')
-  fakeGithub.addCommit('spcs/daylens-app', { sha: 'c0ffee01', message: 'Ship wrapped deck export', date: isoDaysAgo(1, 16, 5) })
-  fakeGithub.addCommit('spcs/daylens-app', { sha: 'c0ffee02', message: 'Fix meeting resolution overlap', date: isoDaysAgo(1, 16, 40) })
-  fakeGithub.putPull('spcs/daylens-app', {
-    number: 7, title: 'Wrapped deck export', state: 'closed',
-    merged_at: isoDaysAgo(1, 17, 0), created_at: isoDaysAgo(2, 9, 0), updated_at: isoDaysAgo(1, 17, 0),
-    user: { login: 'ada-dev' },
-  })
-  const githubAdapter = createGithubAdapter({
-    fetchImpl: fakeGithub.fetchImpl,
-    openExternal: () => fakeGithub.approveDevice(),
-    secretStore: createFakeSecretStore(),
-    endpoints: FAKE_GITHUB_ENDPOINTS,
-    env: {},
-    authTimeoutMs: 10_000,
-  })
-  const ghResult = await connectConnector(
-    db, 'github', { clientId: 'Iv1.testdeviceclient01', repositories: 'spcs/daylens-app' },
-    { adapter: githubAdapter, gate: CONNECTOR_OPEN_GATE },
-  )
-  assert.equal(ghResult.status, 'ok')
-
-  // Linear: an issue moved that day.
-  const fakeLinear = createFakeLinearApi({
-    id: 'user-self', name: 'Ada Lovelace', displayName: 'Ada', email: 'ada@acme.test',
-    organization: { id: 'org-1', name: 'Acme', urlKey: 'acme' },
-  })
-  fakeLinear.putIssue({
-    id: 'issue-brutal', identifier: 'DAY-42', title: 'Meeting blocks land on the timeline',
-    createdAt: isoDaysAgo(3, 9, 0), updatedAt: isoDaysAgo(1, 16, 30),
-    state: { name: 'In Progress', type: 'started' },
-    team: { id: 'team-1', key: 'DAY', name: 'Daylens' },
-    project: { id: 'proj-1', name: 'V2 integration' },
-    assignee: { id: 'user-self', name: 'Ada Lovelace' },
-    creator: { id: 'user-self', name: 'Ada Lovelace' },
-  })
-  const linearAdapter = createLinearAdapter({
-    fetchImpl: fakeLinear.fetchImpl, secretStore: createFakeSecretStore(), endpoint: FAKE_LINEAR_ENDPOINT,
-  })
-  const linResult = await connectConnector(db, 'linear', { apiKey: FAKE_LINEAR_API_KEY }, { adapter: linearAdapter, gate: CONNECTOR_OPEN_GATE })
-  assert.equal(linResult.status, 'ok')
-
-  // Granola: the note for the matched meeting, attached by source identity.
-  const granolaFs = createFakeGranolaFilesystem()
-  granolaFs.writeCache({
-    user: { email: 'owner@example.com' },
-    documents: [{
-      id: 'doc-acme', title: 'Acme launch sync',
-      created_at: isoDaysAgo(1, 10, 20), updated_at: isoDaysAgo(1, 11, 0),
-      notes_plain: 'Decided on the phased rollout with ACME',
-      google_calendar_event: { id: 'ev-acme', start: { dateTime: isoDaysAgo(1, 10, 20) }, end: { dateTime: isoDaysAgo(1, 10, 50) } },
-    }],
-  })
-  const granolaAdapter = createGranolaAdapter({ readFileImpl: granolaFs.readFileImpl, homeDir: '/granola-home' })
-  const graResult = await connectConnector(db, 'granola', { cachePath: FAKE_GRANOLA_CACHE_PATH }, { adapter: granolaAdapter, gate: CONNECTOR_OPEN_GATE })
-  assert.equal(graResult.status, 'ok')
-
-  // The day signals landed.
   const calendarSignal = getExternalSignal<CalendarSignal>(db, DAY, 'calendar')?.payload
   assert.ok(calendarSignal, 'the calendar day signal exists')
   assert.equal(calendarSignal!.events.length, 3)
-  const gitSignal = getExternalSignal<GitActivitySignal>(db, DAY, 'git')?.payload
-  assert.ok(gitSignal, 'the git day signal exists')
-  assert.ok(gitSignal!.repos.some((repo) => repo.repo.includes('daylens-app')))
-
-  // Connected activity is searchable memory after the day indexes.
-  indexMemoryForDay(db, DAY)
-  const connected = db.prepare(`SELECT statement FROM memory_records WHERE record_kind = 'connected_activity'`).all() as Array<{ statement: string }>
-  assert.ok(connected.some((row) => row.statement.startsWith('GitHub:')), `GitHub activity projected: ${connected.map((r) => r.statement).join(' | ')}`)
-  assert.ok(connected.some((row) => row.statement.startsWith('Linear:')), 'Linear activity projected')
-  const ghHits = searchExact(db, 'wrapped deck export').filter((hit) => hit.sourceType === 'connected')
-  assert.ok(ghHits.length >= 1, 'the merged PR is retrievable by name with connected provenance')
 })
 
 test('meetings: matched, captured-only, and double-booked calendar-only resolve honestly; scheduled context adds no time', () => {

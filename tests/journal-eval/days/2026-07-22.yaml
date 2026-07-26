@@ -1,0 +1,37 @@
+# Ground truth from the owner's Obsidian journal (hour-by-hour table).
+date: "2026-07-22"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-07-22 (hour table, pomodoro-timed)"
+summary: >
+  Morning was ML study: cost functions and linear regression on Coursera,
+  6:39–7:00 at home and then a long 9:01–12:01 block at the office, finishing
+  Coursera week 1, with two interruptions from Allen and a detour writing a
+  fix prompt because Daylens kept freezing. After a week-1 revision until
+  12:30 the rest of the workday was Daylens: implementation, journal
+  automation with Claude Code, and Linear issues from 12:30 to about 5:20pm,
+  the longest stretch being 2:21–5:21. Evening was journaling from the
+  notebook plus timers.
+primaryWork:
+  - name: ML study (Coursera)
+    aliases: [coursera, machine learning, cost function, linear regression, "ml study", "ai/ml"]
+  - name: Daylens development
+    aliases: [daylens]
+secondary:
+  - name: Journal / vault system work with Claude Code
+    aliases: [journal, obsidian, vault]
+  - name: Linear issue triage
+    aliases: [linear]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { until: "12:01", desc: "ML study on Coursera (cost functions, linear regression), interrupted twice by Allen (~9:50 and 10:11–10:43) and once by Daylens freezing (~10:49, wrote a fix prompt)" }
+  - { from: "12:02", until: "12:30", desc: "Coursera week 1 revision and docs" }
+  - { from: "12:30", until: "17:20", desc: "Daylens: implementation, journal automation with Claude Code, Linear issues; longest stretch 14:21–17:21" }
+  - { from: "20:00", desc: "evening journal from notebook and timers" }
+notes: >
+  Capture is missing before ~11:19 — the journal itself records Daylens
+  freezing repeatedly that morning, so the 6:39–11:19 activity (including
+  most of the ML study) was never observed. Do not punish missing morning
+  data; do punish narrating the day as if it started at 11:19 by choice.

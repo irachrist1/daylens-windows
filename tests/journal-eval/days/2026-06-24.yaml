@@ -1,0 +1,62 @@
+# Machine-reconstructed: no journal entry. Ground truth model: the day is what
+# the HUMAN did at the keyboard. The 30 daylens commits are real, but the
+# foreground (window titles present this day) shows they were driven through
+# Warp/Codex/Terminal Claude agents while the human's hands-on time went to
+# Andersen website content, a BofA internship essay, and Mobbin design
+# research. Anchored on raw app/window/domain facts + git authorship.
+date: "2026-06-24"
+confidence: machine
+sources:
+  - "git: daylens (30 commits, 09:42-23:47; authors mix Christian Tonny, the spcsgaba agent identity, and his andersen.com email)"
+  - "foreground: ChatGPT + Cursor on Andersen_Rwanda files (virtual-assets.html, tax-update.html, news.html) 07:51-09:40"
+  - "foreground: Warp/Codex/Terminal agent sessions with task titles ('Implement memory v2 with chat-triggered updates', 'Pull recent features from web', 'onboarding-ux-redesign', 'claude --dangerously-skip-permissions') 10:08-21:00"
+  - "foreground: Microsoft Word 'BofA_Internship_Essay + Guide' 13:55-14:36 (~42 min) + claude.ai 'Crafting an authentic Bank of America internship essay' 18:25-19:59"
+  - "domains: netflix.com 51min (evening), claude.ai 47min, mobbin.com 40min, youtube 45min"
+summary: >
+  A three-thread day that git alone gets wrong. Hands-on morning on the
+  Andersen Rwanda website: ChatGPT drafting and Cursor edits across
+  virtual-assets.html, tax-update.html and news.html from 07:51 to about
+  09:40, with the live Andersen news page open for review. From 10:08 to
+  early afternoon he drives agents on Daylens — Codex, Warp tasks like
+  "Implement memory v2 with chat-triggered updates" and "Research AI-powered
+  widget change patterns" — while the DEV-87/106/107/108 commits land
+  (12:08-13:18). Around 13:16 a Bank of America summer-internship application
+  appears, and 13:55-14:36 is a solid Word session on "BofA_Internship_Essay
+  + Guide", picked up again on claude.ai ("Crafting an authentic Bank of
+  America internship essay") between 18:25 and 19:59. Late afternoon is
+  Mobbin design research (web flows, Copilot Money, Alan iOS) feeding the
+  onboarding redesign, whose commits keep landing through agent Terminal
+  sessions ("onboarding-ux-redesign", "Pull recent features from web") into
+  the evening. From about 22:00 it is Netflix and streaming; a final agent
+  run ("Implement Linear issues DEV-113…") produces the 23:47 test commit.
+primaryWork:
+  - name: Andersen Rwanda website content (virtual assets, tax update, news pages)
+    aliases: [andersen]
+  - name: BofA internship essay and application
+    aliases: [bofa, bank of america, internship, essay]
+  - name: Driving agents on Daylens (memory v2, billing/usage, onboarding redesign)
+    aliases: [daylens, onboarding, memory]
+secondary:
+  - name: Mobbin onboarding/design research
+    aliases: [mobbin, design research]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "07:51", until: "09:40", desc: "Andersen Rwanda site work: ChatGPT drafting + Cursor on virtual-assets/tax-update/news.html, Andersen news page review; Spotify on" }
+  - { from: "10:08", until: "13:40", desc: "driving Codex/Warp/Claude agents on Daylens (memory v2, widget research) while DEV-87/106/107/108 commits land; Teams calendar and Intune touches; BofA internship application found ~13:16" }
+  - { from: "13:55", until: "14:40", desc: "BofA internship essay in Word (~42 min)" }
+  - { from: "15:42", until: "17:45", desc: "Mobbin design research (web flows, Copilot Money, Alan iOS) interleaved with Terminal Claude agents on daylens ('Pull recent features from web')" }
+  - { from: "18:25", until: "20:00", desc: "BofA essay round 2 on claude.ai + 'Best Essays Ever Written' research; Config 2026 keynote on YouTube ~19:54" }
+  - { from: "20:06", until: "21:30", desc: "evening agent supervision: onboarding-ux-redesign and multi-block-merge Terminal sessions, Daylens app checks, a 15-min Claude desktop session" }
+  - { from: "22:00", desc: "Netflix and streaming; a last agent run yields the 23:47 client-memory test commit" }
+notes: >
+  Machine-reconstructed; no journal exists for this day. The old git-only
+  reading ("a Daylens onboarding-rebuild day, one repo") is wrong as a
+  description of the person: window titles show the daylens commits flowing
+  through Warp/Codex/Terminal Claude sessions (several titled 'claude
+  --dangerously-skip-permissions'), i.e. agent lanes he was steering between
+  other work. Andersen site work and the BofA essay are fully hands-on and
+  must be named. Commit authorship is split across three identities
+  (github-noreply, spcsgaba agent, andersen.com) — another sign of mixed
+  human/agent lanes. Evening streaming from ~22:00 is leisure, not work.

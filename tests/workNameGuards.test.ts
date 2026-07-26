@@ -27,6 +27,38 @@ test('terminal commands are never work subjects', () => {
   assert.ok(!looksLikeCommandLine('Q3 proposal'))
 })
 
+// The v2 predicate flagged ANY sentence starting with a binary's name and the
+// startup repair then deleted the label rows unrecoverably. A command is an
+// invocation shape, not a leading word.
+test('prose that merely starts with a binary name is a work name, not a command', () => {
+  const prose = [
+    'Git workflow cleanup',
+    'Make the onboarding deck',
+    'Go over the quarterly budget',
+    'Docker image size investigation',
+    'Node upgrade planning for the API',
+    'Go to market messaging draft',
+  ]
+  for (const label of prose) {
+    assert.ok(!looksLikeCommandLine(label), `flagged prose as a command: "${label}"`)
+  }
+  // …while real invocations after a CLI verb are still flagged: flags,
+  // paths/repo refs, shell syntax, and bare lowercase argument runs.
+  const commands = [
+    'npx @agent-native/core@latest skills add',
+    'git checkout feature/evidence-seams',
+    'npm install --save-dev vitest',
+    'cargo build --release',
+    'kubectl get pods -n daylens',
+    'git rebase main',
+    'brew install sqlite',
+    'make VERBOSE=1',
+  ]
+  for (const label of commands) {
+    assert.ok(looksLikeCommandLine(label), `missed a real command: "${label}"`)
+  }
+})
+
 test('joined tab titles are never work subjects', () => {
   assert.ok(looksLikeJoinedTabTitle('Branch · Branch · Space Visualization Prep'))
   assert.ok(looksLikeJoinedTabTitle('OC | Apply founder design'))
@@ -49,4 +81,16 @@ test('cleanWorkSubject strips decorations but keeps the real subject', () => {
   assert.equal(cleanWorkSubject('npx @agent-native/core@latest skills add visual-plans'), null)
   assert.equal(cleanWorkSubject('  '), null)
   assert.equal(cleanWorkSubject('Q3 proposal'), 'Q3 proposal')
+})
+
+test('a tool brand plus its own surface words is a panel title, never work', () => {
+  assert.equal(isDisqualifiedWorkSubject('Cursor Agents'), true)
+  assert.equal(isDisqualifiedWorkSubject('Copilot Chat'), true)
+  assert.equal(isDisqualifiedWorkSubject('ChatGPT'), true)
+  assert.equal(isDisqualifiedWorkSubject('New chat - Claude'), true)
+  assert.equal(isDisqualifiedWorkSubject('Untitled chat'), true)
+  // A brand followed by a REAL subject is still a valid work name.
+  assert.equal(isDisqualifiedWorkSubject('Cursor rules for the billing service'), false)
+  // Generic agent words inside a real subject survive.
+  assert.equal(isDisqualifiedWorkSubject('Designing the interpretation agent'), false)
 })

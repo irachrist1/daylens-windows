@@ -48,12 +48,12 @@ import {
   type FileSensitivity,
 } from './fileAccess'
 import { getScopedMemoryProfile } from './workMemoryProfile'
+import { extractGranolaTranscript, getGranolaConnection } from './granolaCache'
 import {
   browserPageCoverageNoteText,
   getCorrectedPageFactsForRange,
   hasMaterialPageCoverageShortfall,
 } from './activityFacts'
-import { extractTranscriptText as extractGranolaTranscript } from '../connectors/granola/cache'
 
 /** Bump when the assembly rules change; part of every packet and fingerprint,
  *  so two packets are only comparable under the same policy. */
@@ -650,18 +650,15 @@ function granolaTranscriptItems(
   // The explicit-need gate: no transcript-shaped question, no retrieval —
   // not even a file read happens.
   if (!TRANSCRIPT_REQUEST_RE.test(question)) return []
+  // The SAME policy switch the read_meeting_notes tool enforces
+  // (contextTools.ts): Granola access off means no meeting content reaches a
+  // prompt through ANY path — the packet must not ship what the tool refuses.
+  if (getSettings().granolaAccessEnabled === false) return []
   const items: ContextPacketItem[] = []
   try {
-    const connection = db.prepare(
-      `SELECT status, config_json FROM connector_connections WHERE connector_id = 'granola'`,
-    ).get() as { status: string; config_json: string } | undefined
-    if (!connection || connection.status === 'disconnected') return []
-    let cachePath: string | null = null
-    try {
-      const config = JSON.parse(connection.config_json) as { cachePath?: unknown }
-      cachePath = typeof config.cachePath === 'string' && config.cachePath.trim() ? config.cachePath : null
-    } catch { /* no readable config */ }
-    if (!cachePath) return []
+    const connection = getGranolaConnection(db)
+    if (!connection) return []
+    const cachePath = connection.cachePath
 
     const tokens = questionTokens(question)
     const marks = dates.map(() => '?').join(', ')

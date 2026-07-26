@@ -1,0 +1,52 @@
+# Machine-reconstructed: no journal entry. Ground truth model: the day is what
+# the HUMAN did at the keyboard; commits landing while agent runners (Codex,
+# cmux) hold the foreground count as "driving agents", not hands-on coding.
+# Anchored on raw app/domain facts + git authorship, never on Daylens's own
+# block labels or narratives.
+date: "2026-03-23"
+confidence: machine
+sources:
+  - "git: daylens (20 commits, 00:08-08:00, author Christian Tonny)"
+  - "git: daylens-swift (15 commits, 00:08-08:13, releases v1.0.8-v1.0.13)"
+  - "foreground: Codex 00:00-00:45, cmux 05:59-08:28 — agent runners matching the commit stream"
+  - "foreground: Teams/Outlook/M365 admin/Intune/Odoo through 10:26-17:22 (Andersen)"
+  - "domains: rw-andersen.odoo.com 65min, admin.cloud.microsoft 24min, goojara.to 56min, youtube 53min, x.com 55min"
+summary: >
+  An overnight-into-morning Daylens release run driven through coding agents:
+  the foreground is Codex just after midnight and the cmux agent multiplexer
+  from about 06:00 to 08:30, while 35 commits land under his name across
+  daylens and daylens-swift (dashboard fixes, liquid glass UI, PIN-protected
+  privacy section, releases v1.0.8-v1.0.13) from 00:08 to 08:13. From
+  mid-morning the day turns into Andersen Rwanda admin: Teams and Outlook
+  around 10:26-12:24, the Microsoft 365 admin center and Intune at
+  13:16-13:30, and Odoo quotations 16:42-17:22. Mid-afternoon has a Cursor +
+  iOS Simulator stretch (14:48-16:36, nothing committed, subject unproven)
+  and YouTube breaks; the evening is leisure — a buildathon email at 19:54,
+  ChatGPT, and Billions episodes on goojara.to from about 21:00.
+primaryWork:
+  - name: Daylens release run (app + dashboard, agent-driven)
+    aliases: [daylens]
+  - name: Andersen Rwanda admin (M365, Intune, Odoo)
+    aliases: [andersen, odoo, intune, admin center]
+secondary:
+  - name: Cursor + iOS Simulator session (uncommitted, subject unproven)
+    aliases: [simulator]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { until: "00:45", desc: "Codex sessions while the first daylens/daylens-swift commits land (00:08-00:52)" }
+  - { from: "05:59", until: "08:30", desc: "cmux agent multiplexer driving the release run: liquid glass UI, privacy/hiding features, v1.0.10-v1.0.13" }
+  - { from: "10:26", until: "13:30", desc: "Andersen admin: Teams, Outlook, M365 admin center user management, Intune" }
+  - { from: "14:48", until: "16:40", desc: "Cursor + iOS Simulator work (uncommitted; subject not provable) with YouTube around 15:30" }
+  - { from: "16:42", until: "17:25", desc: "Andersen Odoo: homepage and quotations (S00236)" }
+  - { from: "21:00", desc: "evening wind-down: Billions season 1 on goojara.to" }
+notes: >
+  Machine-reconstructed; no journal exists for this day. The commits are all
+  authored by him, but the foreground during the commit windows is Codex and
+  cmux — agent runners — so this was driving agents on Daylens, not IDE
+  hands-on coding. The local Dayflow clone shows same-day commits, but they
+  are authored by Jerry Liu (upstream JerryZLiu/Dayflow); they are NOT this
+  person's work and must not be narrated as such. Capture has no sessions
+  between ~00:45 and 05:59 even though daylens-swift commits land at
+  05:39-05:40 — treat that as a capture hole, not verified time away.

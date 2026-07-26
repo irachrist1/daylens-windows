@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDayWrapFacts, workActionPhrase } from '../src/renderer/lib/dayWrapScenes.ts'
+import { planDayWrapSlides } from '../src/renderer/lib/wrapDeck.ts'
 import { looksLikeRawArtifactLabel } from '../src/renderer/lib/wrappedFacts.ts'
 import type { AppCategory, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
@@ -363,4 +364,192 @@ test('an app/site slice carries the SITE own category, not the block one', () =>
 test('workActionPhrase never stacks a verb on a gerund label', () => {
   assert.equal(workActionPhrase('Reviewing work projects', 'development'), 'reviewing work projects')
   assert.equal(workActionPhrase('Daylens', 'development'), 'building Daylens')
+})
+
+test('workActionPhrase never stacks a verb on an imperative-led task title', () => {
+  // "building Debug Daylens freezing..." shipped in a real floor line; the
+  // captured title already leads with the verb, so it becomes the gerund.
+  assert.equal(
+    workActionPhrase('Debug Daylens freezing and sleep tracking issues', 'aiTools'),
+    'debugging Daylens freezing and sleep tracking issues',
+  )
+  assert.equal(workActionPhrase('Fix the sync race', 'development'), 'fixing the sync race')
+})
+
+test('workActionPhrase never stacks a verb on a subject that already names the work', () => {
+  // "Morning went to writing Oauth development" shipped in a real floor line:
+  // the category verb was blindly prepended to a noun phrase that already IS
+  // the work. Such subjects pass through as their own phrase.
+  assert.equal(workActionPhrase('Oauth development', 'writing'), 'oauth development')
+  assert.equal(workActionPhrase('OAuth development', 'writing'), 'OAuth development')
+  assert.equal(workActionPhrase('Site maintenance', 'productivity'), 'site maintenance')
+  // A bare subject still gets the category verb.
+  assert.equal(workActionPhrase('The essay', 'writing'), 'writing The essay')
+})
+
+test('a Claude Code window title with a spinner glyph never reaches a floor line verbatim', () => {
+  // Observed in a real wrap: "building ✳ Debug Daylens freezing and sleep
+  // tracking issues" — the raw window title, glyph included, straight into a
+  // deterministic fallback line. The only naming candidate this block offers
+  // IS that title; the glyph must be stripped and the phrase must read as an
+  // action, or the name must die to the category floor. Never the raw title.
+  const RAW_TITLE = '✳ Debug Daylens freezing and sleep tracking issues'
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: RAW_TITLE, start: NINE_AM, durationSeconds: 120 * 60, category: 'aiTools' }),
+    makeBlock({ label: 'Design review', start: NINE_AM + 130 * 60_000, durationSeconds: 40 * 60, category: 'design' }),
+  ]))
+
+  for (const activity of facts.workActivities) {
+    assert.ok(!activity.name.includes('✳'), `glyph leaked into an activity name: ${activity.name}`)
+  }
+  for (const seg of facts.dayStory) {
+    for (const item of seg.items) assert.ok(!item.includes('✳'), `glyph leaked into the story: ${item}`)
+  }
+
+  for (const spec of planDayWrapSlides(facts)) {
+    assert.ok(!spec.fallbackLine.includes(RAW_TITLE), `raw window title verbatim in a floor line: ${spec.fallbackLine}`)
+    assert.ok(!spec.fallbackLine.includes('✳'), `glyph in a floor line: ${spec.fallbackLine}`)
+    assert.ok(!/\b(building|writing|designing) Debug\b/.test(spec.fallbackLine),
+      `verb stacked on the imperative title: ${spec.fallbackLine}`)
+  }
+})
+
+test('a subject carrying a category noun composes into an honest story line', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Oauth development', start: NINE_AM, durationSeconds: 90 * 60, category: 'writing' }),
+  ]))
+  for (const spec of planDayWrapSlides(facts)) {
+    assert.ok(!/writing [Oo]auth development/.test(spec.fallbackLine),
+      `nonsense verb+noun composition in a floor line: ${spec.fallbackLine}`)
+  }
+})
+
+// ─── Gaps are facts (day-recap-and-analysis.md) ───────────────────────────────
+
+function gapSegment(startMs: number, endMs: number, kind: 'untracked' | 'asleep' | 'idle' | 'passive' = 'untracked') {
+  return { kind, startTime: startMs, endTime: endMs, label: 'No data captured', source: 'derived_gap' as const }
+}
+
+function withSegmentsAndMeetings(
+  payload: DayTimelinePayload,
+  segments: DayTimelinePayload['segments'],
+  scheduledMeetings?: DayTimelinePayload['scheduledMeetings'],
+): DayTimelinePayload {
+  return { ...payload, segments, ...(scheduledMeetings ? { scheduledMeetings } : {}) }
+}
+
+const FIVE_14_PM = new Date('2026-06-23T17:14:00').getTime()
+const NINE_24_PM = new Date('2026-06-23T21:24:00').getTime()
+
+test('an untracked 45m+ hole becomes an explicit gap fact with clock bounds', () => {
+  const blocks = [
+    makeBlock({ label: 'Daylens development', start: NINE_AM, durationSeconds: 3 * 3600, category: 'development' }),
+    makeBlock({ label: 'CI migration', start: NINE_24_PM, durationSeconds: 90 * 60, category: 'development' }),
+  ]
+  const payload = withSegmentsAndMeetings(makeDayPayload(blocks), [
+    gapSegment(FIVE_14_PM, NINE_24_PM),
+  ])
+  const facts = buildDayWrapFacts(payload)
+  assert.equal(facts.gaps.length, 1)
+  const gap = facts.gaps[0]
+  assert.equal(gap.fromClock, '5:14pm')
+  assert.equal(gap.toClock, '9:24pm')
+  assert.equal(gap.minutes, 250)
+  assert.equal(gap.kind, 'untracked')
+  assert.equal(gap.matchesEvent, null)
+
+  // The deterministic deck gets an honest line instead of silence.
+  const slides = planDayWrapSlides(facts)
+  const away = slides.find((s) => s.id === 'away')
+  assert.ok(away, 'expected an away-from-the-computer slide')
+  assert.ok(away!.fallbackLine.includes('5:14pm to 9:24pm away from the computer'),
+    `fallback does not state the gap plainly: ${away!.fallbackLine}`)
+})
+
+test('a gap under 45 minutes stays out of the gap facts', () => {
+  const blocks = [
+    makeBlock({ label: 'Daylens development', start: NINE_AM, durationSeconds: 3600, category: 'development' }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 100 * 60_000, durationSeconds: 3600, category: 'development' }),
+  ]
+  const payload = withSegmentsAndMeetings(makeDayPayload(blocks), [
+    gapSegment(NINE_AM + 60 * 60_000, NINE_AM + 100 * 60_000), // 40 minutes
+  ])
+  const facts = buildDayWrapFacts(payload)
+  assert.equal(facts.gaps.length, 0)
+  assert.ok(!planDayWrapSlides(facts).some((s) => s.id === 'away'))
+})
+
+test('a gap fact names the calendar event that explains it', () => {
+  const sixPm = new Date('2026-06-23T18:00:00').getTime()
+  const eightPm = new Date('2026-06-23T20:00:00').getTime()
+  const blocks = [
+    makeBlock({ label: 'Daylens development', start: NINE_AM, durationSeconds: 3 * 3600, category: 'development' }),
+    makeBlock({ label: 'CI migration', start: NINE_24_PM, durationSeconds: 90 * 60, category: 'development' }),
+  ]
+  const payload = withSegmentsAndMeetings(
+    makeDayPayload(blocks),
+    [gapSegment(FIVE_14_PM, NINE_24_PM, 'asleep')],
+    [{
+      title: 'Run',
+      startMs: sixPm,
+      endMs: eightPm,
+      attendeeCount: null,
+      participants: [],
+      attendance: 'calendar_only',
+      marked: null,
+      matchedBlockId: null,
+    }],
+  )
+  const facts = buildDayWrapFacts(payload)
+  assert.equal(facts.gaps.length, 1)
+  assert.equal(facts.gaps[0].matchesEvent, 'Run')
+  const away = planDayWrapSlides(facts).find((s) => s.id === 'away')
+  assert.ok(away)
+  assert.ok(away!.fallbackLine.includes('matching "Run" on your calendar'), away!.fallbackLine)
+  assert.ok(away!.factsNote.includes('Run'))
+})
+
+// ─── Day threads (day-recap-and-analysis.md) ──────────────────────────────────
+
+test('a subject recurring across 4 blocks over 5 hours becomes a day thread', () => {
+  const hour = 3_600_000
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Daylens development', start: NINE_AM, durationSeconds: 45 * 60, category: 'development' }),
+    makeBlock({ label: 'ML coursework', start: NINE_AM + hour, durationSeconds: 40 * 60, category: 'research' }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 2 * hour, durationSeconds: 45 * 60, category: 'development' }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 3.5 * hour, durationSeconds: 30 * 60, category: 'development' }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 5 * hour, durationSeconds: 40 * 60, category: 'development' }),
+  ]))
+  assert.equal(facts.threads.length, 1)
+  const thread = facts.threads[0]
+  assert.match(thread.name.toLowerCase(), /daylens/)
+  assert.equal(thread.blockCount, 4)
+  assert.equal(thread.seconds, (45 + 45 + 30 + 40) * 60)
+  assert.equal(thread.fromClock, '9am')
+  assert.equal(thread.toClock, '2:40pm')
+
+  const spec = planDayWrapSlides(facts).find((s) => s.id === 'daythread')
+  assert.ok(spec, 'expected a through-line slide')
+  assert.ok(spec!.fallbackLine.includes('4 separate blocks'), spec!.fallbackLine)
+})
+
+test('three blocks squeezed into under three hours are not a thread', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Daylens development', start: NINE_AM, durationSeconds: 40 * 60, category: 'development' }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 50 * 60_000, durationSeconds: 40 * 60, category: 'development' }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 100 * 60_000, durationSeconds: 40 * 60, category: 'development' }),
+  ]))
+  assert.equal(facts.threads.length, 0)
+  assert.ok(!planDayWrapSlides(facts).some((s) => s.id === 'daythread'))
+})
+
+test('a disqualified tool surface never becomes a day thread', () => {
+  const hour = 3_600_000
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Cursor Agents', start: NINE_AM, durationSeconds: 45 * 60, category: 'aiTools' }),
+    makeBlock({ label: 'Cursor Agents', start: NINE_AM + 2 * hour, durationSeconds: 45 * 60, category: 'aiTools' }),
+    makeBlock({ label: 'Cursor Agents', start: NINE_AM + 4 * hour, durationSeconds: 45 * 60, category: 'aiTools' }),
+    makeBlock({ label: 'Cursor Agents', start: NINE_AM + 6 * hour, durationSeconds: 45 * 60, category: 'aiTools' }),
+  ]))
+  assert.equal(facts.threads.length, 0)
 })

@@ -11,6 +11,7 @@ import type {
 
 import { effectiveBlockKind } from './workKind'
 import { humanizeTitle } from './humanize'
+import { isDisqualifiedWorkSubject } from './workNameGuards'
 
 type BlockLike = Pick<
   WorkContextBlock,
@@ -165,12 +166,21 @@ function looksGenericSubject(label: string | null | undefined): boolean {
   return false
 }
 
+const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/
+
 function normalizeSubjectLabel(label: string | null | undefined): string | null {
   const cleaned = usefulText(label)
   if (!cleaned) return null
 
-  const titleHead = cleaned.split(/\s+[—-]\s+/)[0]?.trim()
-  if (titleHead && !looksGenericSubject(titleHead)) {
+  // Multi-segment page/window titles ("Inbox - user@school.edu - ALU Mail"):
+  // prefer the first segment that names a real thing; when the head is
+  // generic, the LAST segment (the site/app name) beats echoing the raw
+  // title. En dash included — Apple Notes joins with " – ".
+  const segments = cleaned.split(/\s+[—–-]\s+|\s\|\s/).map((s) => s.trim()).filter(Boolean)
+  const usable = (segment: string): boolean =>
+    !looksGenericSubject(segment) && !EMAIL_RE.test(segment)
+  const titleHead = segments[0]
+  if (titleHead && usable(titleHead)) {
     return titleHead
   }
 
@@ -181,6 +191,13 @@ function normalizeSubjectLabel(label: string | null | undefined): string | null 
   }
 
   if (/\/\s*X$/i.test(cleaned) && cleaned.length > 72) return 'X (Twitter) thread'
+
+  if (segments.length > 1) {
+    const tail = segments[segments.length - 1]
+    if (tail && usable(tail)) return tail
+  }
+  // A subject must never carry an email address into prose.
+  if (EMAIL_RE.test(cleaned)) return null
   return cleaned
 }
 
@@ -229,8 +246,27 @@ function workflowLabelLooksLikeToolMix(label: string, block: BlockLike, pages: P
 }
 
 function subjectFromArtifact(artifact: ArtifactRef | undefined): SubjectCandidate | null {
+  // A Slack/Teams channel artifact names the project it hosts, not a chat
+  // surface: "daylens (Channel)" is evidence the work was about daylens. A DM
+  // or thread is different: "Sarah Chen (DM)" names the PERSON talked to, and
+  // a person is never the work's subject — drop the artifact entirely rather
+  // than falling through to the raw title.
+  const channelMatch = artifact?.displayTitle?.match(/^\s*#?([\w][\w .-]*?)\s*\((Channel|DM|Thread)\)\s*$/i)
+  if (channelMatch?.[1]) {
+    if (channelMatch[2].toLowerCase() !== 'channel') return null
+    const channel = usefulText(channelMatch[1])
+    if (channel && !looksGenericSubject(channel) && !isDisqualifiedWorkSubject(channel)) {
+      return { label: channel, source: 'artifact' }
+    }
+  }
   const label = normalizeSubjectLabel(artifact?.displayTitle)
   if (!label || looksGenericSubject(label)) return null
+  // A tool's own surface ("Cursor Agents", "New chat - Claude") is the
+  // instrument of the work, never its subject — skip it so the NEXT artifact
+  // (a real document, channel, or repo) can name the block instead. This
+  // exact title once named 8 of 12 slides of a real day whose actual project
+  // never appeared.
+  if (isDisqualifiedWorkSubject(label)) return null
   return { label, source: 'artifact' }
 }
 
@@ -631,6 +667,34 @@ function rationaleFor(
   }
 
   return reasons.slice(0, 3)
+}
+
+/** Every clean subject this block's evidence names: the chosen intent subject
+ *  plus the secondary candidates from the same ladder (document/channel
+ *  artifacts, workflow labels). Day threads use this for MEMBERSHIP — a
+ *  subject that only headlines a few blocks can still run through others as
+ *  secondary evidence ("daylens (Channel)" inside an ML-study block). Every
+ *  candidate passes the same guards as the headline subject, so a tool
+ *  surface or raw artifact can never join a thread. */
+export function workSubjectCandidates(block: BlockLike): string[] {
+  if (effectiveBlockKind(block) !== 'work') return []
+  const out = new Map<string, string>()
+  const add = (label: string | null | undefined) => {
+    const text = usefulText(label)
+    if (!text || looksGenericSubject(text) || isDisqualifiedWorkSubject(text)) return
+    // A breadcrumb or joined tab title ("Daylens v2 › Issues") is raw page
+    // evidence, not a subject a person would name the work by.
+    if (/[›»|]/.test(text)) return
+    const humanized = humanizeTitle(text) ?? text
+    if (!out.has(humanized.toLowerCase())) out.set(humanized.toLowerCase(), humanized)
+  }
+  add(inferWorkIntent(block).subject)
+  for (const artifact of [...block.documentRefs, ...block.topArtifacts]) {
+    const candidate = subjectFromArtifact(artifact)
+    if (candidate) add(candidate.label)
+  }
+  for (const workflow of block.workflowRefs) add(workflow.label)
+  return [...out.values()]
 }
 
 export function inferWorkIntent(block: BlockLike): WorkIntentSummary {

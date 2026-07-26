@@ -21,6 +21,9 @@ async function getStore() {
 }
 
 const DEFAULTS: AppSettings = {
+  mcpServers: [],
+  granolaAccessEnabled: true,
+  terminalAccessEnabled: false,
   shareAIFeedbackExamples: false,
   launchOnLogin: true,
   theme: 'system',
@@ -75,9 +78,6 @@ const DEFAULTS: AppSettings = {
   billingInstallationId: '',
   activityColorOverrides: {},
   dimLeisureBlocks: true,
-  // DEV-186: connected sources are allowed by default, but nothing syncs until
-  // a connector is explicitly connected AND capture consent is current.
-  connectedSourcesEnabled: true,
 }
 
 // M1: model ids that have been shut down at the provider and now 404. Existing
@@ -116,6 +116,11 @@ export function getSettings(): AppSettings {
   const onboardingComplete = (_store.get('onboardingComplete', false) as boolean)
   const onboardingState = normalizeOnboardingState(_store.get('onboardingState', null), onboardingComplete)
   return {
+    // User-configured MCP servers for the chat agent. Must be read here or
+    // aiService's `settings.mcpServers ?? []` silently drops every entry.
+    mcpServers: (_store.get('mcpServers', []) as AppSettings['mcpServers']) ?? [],
+    granolaAccessEnabled: (_store.get('granolaAccessEnabled', true) as boolean),
+    terminalAccessEnabled: (_store.get('terminalAccessEnabled', false) as boolean),
     shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', false) as boolean),
     launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
@@ -171,7 +176,6 @@ export function getSettings(): AppSettings {
     billingInstallationId: (_store.get('billingInstallationId', '') as string),
     activityColorOverrides: sanitizeActivityColorOverrides(_store.get('activityColorOverrides', {})),
     dimLeisureBlocks: (_store.get('dimLeisureBlocks', true) as boolean),
-    connectedSourcesEnabled: (_store.get('connectedSourcesEnabled', true) as boolean),
     // Screen-context experiment (DEV-197/DEV-198). Absent means not consented;
     // the experiment surface (screenContext/experiment.ts) is the only writer.
     screenContextExperimentEnabled: (_store.get('screenContextExperimentEnabled', false) as boolean),

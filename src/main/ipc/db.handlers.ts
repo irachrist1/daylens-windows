@@ -81,7 +81,6 @@ import { getProcessMetrics } from '../services/processMonitor'
 import {
   getBlockDetailPayload,
   getDistractionCostPayload,
-  getRecapRange,
   writeTimelineBlockReview,
   writeIgnoredBlockReviewBackstop,
   reviewEvidenceKeyForBlock,
@@ -470,10 +469,6 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.DB.RESOLVE_DAY_CLARIFICATION, (_e, dateStr: string, answer: TimelineClarificationAnswer) => {
     applyClarificationAnswer(getDb(), dateStr, answer)
     return { ok: true }
-  })
-
-  ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {
-    return getRecapRange(getDb(), dates)
   })
 
   // Calendar month grid — persisted blocks for a date range, one light query.

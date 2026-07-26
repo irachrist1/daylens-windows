@@ -40,7 +40,6 @@ import { registerIntercomHandlers } from '../src/main/ipc/intercom.handlers.ts'
 import { registerNotificationHandlers } from '../src/main/ipc/notifications.handlers.ts'
 import { registerSearchHandlers } from '../src/main/ipc/search.handlers.ts'
 import { registerSyncHandlers } from '../src/main/ipc/sync.handlers.ts'
-import { registerConnectorHandlers } from '../src/main/ipc/connectors.handlers.ts'
 import { registerExportHandlers } from '../src/main/ipc/export.handlers.ts'
 import { registerScreenContextHandlers } from '../src/main/ipc/screenContext.handlers.ts'
 import { registerDistractionAlerterHandlers } from '../src/main/services/distractionAlerter.ts'
@@ -62,7 +61,6 @@ const REGISTER_FNS: Array<[string, () => void]> = [
   ['notifications', registerNotificationHandlers],
   ['search', registerSearchHandlers],
   ['sync', registerSyncHandlers],
-  ['connectors', registerConnectorHandlers],
   ['export', registerExportHandlers],
   ['screenContext', registerScreenContextHandlers],
   ['distractionAlerter', registerDistractionAlerterHandlers],
@@ -151,11 +149,6 @@ test('behaviour: core handlers answer over a seeded real-world DB', async () => 
   const apps = await call(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, REAL_WORLD_DATE)
   assert.ok(Array.isArray(apps) && apps.length > 0, 'app summaries should be non-empty')
   assert.ok(apps.every((a: { appName?: unknown }) => typeof a.appName === 'string'), 'each app summary needs an appName')
-
-  // Recap range: drives the multi-day recap. Same payload shape as a single day.
-  const recap = await call(IPC.DB.GET_RECAP_RANGE, [REAL_WORLD_DATE])
-  assert.ok(Array.isArray(recap) && recap.length === 1, 'recap range should return one payload per date')
-  assert.equal(recap[0].date, REAL_WORLD_DATE)
 
   // Search over the day: window-title match returns the coding session. Search
   // channels live in their own SEARCH_CHANNELS constant, not the IPC registry,

@@ -34,9 +34,6 @@ import type {
   AIProviderMode,
   BrowserLinkResult,
   BillingAccessSnapshot,
-  ConnectorId,
-  ConnectorListing,
-  ConnectorSyncSummary,
   HistoryExportPlan,
   ScreenContextBacklogFrame,
   ScreenContextStatus,
@@ -235,7 +232,6 @@ const api = {
     // resolve one (DEV-247/270 clarification).
     getDayClarifications: (date: string): Promise<TimelineClarification[]> => ipcRenderer.invoke(IPC.DB.GET_DAY_CLARIFICATIONS, date),
     resolveDayClarification: (date: string, answer: TimelineClarificationAnswer): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.DB.RESOLVE_DAY_CLARIFICATION, date, answer),
-    getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
     getTimelineRangeBlocks: (fromDate: string, toDate: string): Promise<CalendarRangeDay[]> =>
       ipcRenderer.invoke(IPC.DB.GET_TIMELINE_RANGE_BLOCKS, fromDate, toDate),
     getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
@@ -564,29 +560,6 @@ const api = {
       ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
     pickPath: (payload: { scopeKind?: 'file' | 'folder' } = {}): Promise<{ path: string; scopeKind: 'file' | 'folder' } | null> =>
       ipcRenderer.invoke(IPC.FILE_ACCESS.PICK_PATH, payload),
-  },
-  connectors: {
-    // DEV-186 listing + DEV-188 lifecycle. The renderer only ever receives
-    // the ConnectorListing projection and sanitized action summaries — never
-    // credentials, cursors, or paths. `connect` runs the provider's
-    // authorization flow (for OAuth connectors this opens the system browser)
-    // and the first sync; `disconnect` carries the person's explicit
-    // keep-or-delete choice for already-imported data.
-    list: (): Promise<ConnectorListing[]> => ipcRenderer.invoke(IPC.CONNECTORS.LIST),
-    connect: (connectorId: ConnectorId, config: Record<string, unknown> = {}): Promise<ConnectorSyncSummary> =>
-      ipcRenderer.invoke(IPC.CONNECTORS.CONNECT, connectorId, config),
-    sync: (connectorId: ConnectorId): Promise<ConnectorSyncSummary> =>
-      ipcRenderer.invoke(IPC.CONNECTORS.SYNC, connectorId),
-    disconnect: (connectorId: ConnectorId, options: { deleteData: boolean }): Promise<void> =>
-      ipcRenderer.invoke(IPC.CONNECTORS.DISCONNECT, connectorId, options),
-    onConnectProgress: (
-      callback: (event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing'; notice?: string }) => void,
-    ): (() => void) => {
-      const handler = (_e: Electron.IpcRendererEvent, event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing'; notice?: string }) =>
-        callback(event)
-      ipcRenderer.on(IPC.CONNECTORS.PROGRESS, handler)
-      return () => { ipcRenderer.removeListener(IPC.CONNECTORS.PROGRESS, handler) }
-    },
   },
   screenContext: {
     // DEV-198: the screen-context experiment surface. Status, the explicit

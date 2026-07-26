@@ -1,0 +1,139 @@
+{
+  "summary": {
+    "primaryWorkRate": 1,
+    "toolSurfaceCleanRate": 0.5789473684210527,
+    "gapHonestyRate": 1,
+    "shapeJudgeMean": null
+  },
+  "thresholds": {
+    "primaryWorkRate": 0.6,
+    "toolSurfaceCleanRate": 0.9,
+    "gapHonestyRate": 0.8,
+    "shapeJudgeMean": 6
+  },
+  "results": [
+    {
+      "date": "2026-07-20",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 2,
+        "max": 2,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 5,
+        "max": 12,
+        "violations": [
+          "block label matches banned-as-work \"cursor agents\": \"Learning ML fundamentals and building with Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Reviewing Cursor Agents and Daylens issues\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"watching netflix\": \"Watching Netflix & YouTube\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"You spent the morning digging into Cursor Agents.\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"You spent the morning digging into Cursor Agents.\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"The entire morning from 9:13am to 10:38am went to looking into Cursor Agents.\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"You came in at 9:13am and went straight into looking into Cursor Agents, staying with it f\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"The whole morning was one unbroken 1h 4m run on Cursor Agents from 9:13am onward, nothing \"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"Short day on the screen, but the one hour you had was clean and whole. You went in with Cu\""
+        ]
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Setting up GitHub Actions secrets",
+          "Exploring ML tools and reviewing agent documentation",
+          "Reviewing ML fundamentals and course settings",
+          "Learning ML fundamentals and building with Cursor Agents",
+          "Reviewing Cursor Agents and Daylens issues",
+          "Working on Cursor Agents",
+          "Working on Cursor Agents",
+          "Working on Cursor Agents",
+          "Working on Cursor Agents",
+          "Checking messages and the forum invite",
+          "Watching Netflix & YouTube",
+          "Journal entry and Daylens Slack discussion"
+        ],
+        "wrappedLead": "You spent the morning digging into Cursor Agents.",
+        "wrappedLines": [
+          "You spent the morning digging into Cursor Agents.",
+          "The entire morning from 9:13am to 10:38am went to looking into Cursor Agents.",
+          "Built from 8h 15m of tracked activity, 9:13am to 11:07pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "You came in at 9:13am and went straight into looking into Cursor Agents, staying with it for the full hour until 10:38am. Datacamp, GitHub, and a few other stops along the way, but the run was unbroken.",
+          "Afternoon went to building Overview of ML and looking into Daylens.",
+          "Evening went to building 2026-07-20 and talking through ALU Mail.",
+          "Cursor held 1h 56m, more than anything else.",
+          "94% work, 6% leisure. That is the real ratio.",
+          "2h 25m, your longest unbroken stretch, on overview of ML.",
+          "The morning split across a few surfaces: Datacamp took the biggest piece at 17 minutes, then GitHub at 12, with the rest scattered. Linear, Code, Cursor itself, and a security check all got their moment.",
+          "The last activity landed at 11:07pm.",
+          "The whole morning was one unbroken 1h 4m run on Cursor Agents from 9:13am onward, nothing breaking the thread.",
+          "Coursera quietly took 40m today.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 8h 15m today, most of it digging into Overview of ML. That is the day, plainly told.",
+          "That's the day.",
+          "Short day on the screen, but the one hour you had was clean and whole. You went in with Cursor Agents on your mind and stayed there without interruption, sampling reference materials as you needed them. The calendar held a lot of blocks for the rest of today, so this morning win reads like you got your exploration in before the day scattered."
+        ],
+        "blockCount": 12,
+        "trackedSeconds": 29687
+      }
+    },
+    {
+      "date": "2026-07-21",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 6,
+        "max": 7,
+        "violations": [
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\""
+        ]
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Setting up agent authentication",
+          "Setting up cloud authentication",
+          "Setting up Daylens server",
+          "Working on Cursor Agents",
+          "Developing Traycer",
+          "Fixing Factory issues and debugging Daylens",
+          "Digitizing daily journal entries"
+        ],
+        "wrappedLead": "Not much tracked yet. Come back once the day has more in it.",
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 11:48am to 11:26pm.",
+          "Built from 6h 19m of tracked activity, 11:48am to 11:26pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Mostly Invitation: Maj Andersen (RW) Limited<>Odoo-Fiduciary training @ Weekly from 10:15am to 12pm on Tuesday, Thursday from …, with Grocery in the mix.",
+          "Afternoon went to developing Traycer and building Hub.",
+          "Evening went to developing Traycer and building ✳ Digitize daily journal entries.",
+          "The last activity landed at 11:26pm.",
+          "Claude led the day.",
+          "3h 56m, on developing Traycer, more than anything else.",
+          "Platform quietly took 29m today.",
+          "Claude held 2h 7m, more than anything else.",
+          "3h 56m straight on developing Traycer, 2:49pm to 7:22pm. Nothing broke it.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 6h 19m today, most of it developing Traycer. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 7,
+        "trackedSeconds": 31295
+      }
+    }
+  ]
+}

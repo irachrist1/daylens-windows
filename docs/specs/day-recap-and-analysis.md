@@ -28,6 +28,11 @@ internal vocabulary ("trusted blocks", "strongest evidence") into prose a person
 is meant to read. The account of the day must be grounded in what actually
 happened, said in Daylens's own voice, and honest about what it does not know.
 
+The reference failure set is
+[the 2026-07-20 gap analysis](../reviews/gap-analysis-2026-07-20.md): a real
+day's journal ground truth against what Daylens produced. Every rule in this
+specification and in [timeline.md](timeline.md) traces to a failure there.
+
 ## Principles
 
 1. **One interpreted account, many sources.** The recap and the block labels are
@@ -60,15 +65,20 @@ type, identifier, and effective time:
 
 - **Corrected timeline blocks** — the same partition the timeline shows
   (boundaries, active duration, evidence), including user corrections. This is
-  the spine; recap totals equal the timeline's totals.
+  the spine; recap totals equal the timeline's totals, and both obey the
+  attention accounting rules in [timeline.md](timeline.md): time comes only from
+  foreground attention, website credit is reconciled and clamped, media in a
+  background tab is ambience, not activity.
 - **Calendar events + attendance marks** — scheduled context and the person's
   attended / skipped / moved / unrelated marks (see
   [DEV-273 spec](calendar-and-blocks.md) once written). Scheduling is authoritative
   for what was planned; attendance the person confirmed is authoritative for
   presence.
-- **Connector records** — git activity (commits, PRs), Granola meeting notes and
-  permitted transcript excerpts, and other connected sources, retrieved on demand
-  within the block's time and entity scope.
+- **External signals** — git activity (commits, PRs) and calendar enrichment via
+  the zero-setup local probes in `externalSignals.ts`, retrieved on demand within
+  the block's time and entity scope. (The OAuth connector framework was removed
+  2026-07-26; any reborn integration lands here as agent-pluggable evidence, not
+  a settings page.)
 - **Resolved entities** — clients, projects, people, meetings, repositories the
   day's evidence supports naming.
 - **Work-memory profile** — the editable, human-readable "who you are" context.
@@ -78,6 +88,40 @@ type, identifier, and effective time:
 The agent retrieves detail through narrow read tools rather than receiving one
 dump, keeping the run fast, cheap, and inspectable. Retrieval obeys the same
 exclusion, sensitivity, and disclosure rules as every other packet.
+
+### Gaps are facts
+
+Untracked time of 45 minutes or more inside the day's span becomes an explicit
+`gap` fact with clock bounds ("17:14–21:24 away from the computer"),
+cross-referenced against calendar when available ("matches 'Run' 18:00–20:00").
+The narrative layer already has honesty directives about untracked time; giving
+it the gap as a *fact* lets it say something true instead of avoiding the topic
+— or worse, implying a continuous grind.
+
+### Day threads
+
+The same subject recurring in three or more blocks across three or more hours is
+a *day thread*, and the day facts carry it as a first-class fact ("Daylens ran
+through the whole day: morning fixes, afternoon repo sync, evening CI"), so
+prose can tell the day's real shape instead of twelve app fragments.
+
+### What the model may see
+
+The facts fed to the model (`compactDayFacts`) are *day facts*, never
+presentation artifacts: no "Other" chart bucket as a named surface, no
+self-referential plumbing. If a fact is not something a human assistant would
+say about the day, it does not go in the prompt.
+
+## Freshness: a report is a view of facts, not a snapshot
+
+A stored day narrative whose `facts_hash` no longer matches the day's facts:
+
+- **Same-day open** — reconcile deterministically, without regenerating: no
+  churn while the day accrues.
+- **Later-day open** — regenerate once. A completed day whose stored narrative
+  was generated mid-day is permanently wrong (the reference failure froze
+  2026-07-20 at 10:38am as a "short day"). One provider call fixes it forever;
+  after that the hash matches.
 
 ## The clarification contract
 
@@ -129,6 +173,13 @@ this contract is its product surface for the day path.
   blocks", no "strongest evidence").
 - A partial interpretation failure keeps the deterministic blocks with factual
   fallback labels and reports what failed.
+- **Privacy propagates in both directions.** Exclusions hold everywhere —
+  everything AI-bound passes the `filterTrackingExcludedEvidence` boundary —
+  but redaction must not over-fire: excluding an app with a common-word name
+  ("Messages", "Notes", "Music", "Mail") must not redact ordinary prose
+  containing that word. Exclusion tokens need case- and context-sensitive
+  matching, and a redaction that fires on a label while leaving the block's
+  evidence visible protects nothing.
 
 ## Evaluation
 
@@ -145,8 +196,22 @@ this contract is its product surface for the day path.
 
 ## Build order (shipped together)
 
-Built as one feature, integrated and verified before it ships, in this internal
-order so each stage is testable:
+The underlying inference model lands in this order, each step pure and testable,
+with fixture coverage in `tests/timeline-eval/` and validation against the real
+2026-07-20 day:
+
+1. Reconciled website credits everywhere + kind voting on clamped seconds
+   (fixes the Netflix-block class of errors).
+2. Name guards for agent-surface titles + the entity-first naming ladder.
+3. Gap facts + day threads in the day facts and the model-facing compact facts.
+4. Completed-day regeneration policy for stored narratives.
+5. The common-word redaction fix.
+6. The interpretation agent (see
+   [agent-runtime-and-context.md](agent-runtime-and-context.md) §Tiered context
+   escalation) for the ambiguity deterministic rules cannot resolve.
+
+The recap feature itself is built as one coherent whole, integrated and verified
+before it ships, in this internal order so each stage is testable:
 
 1. **Grounded day context** — assemble the day context from all permitted sources
    with provenance and authority order; recap + labels read it. (Delivers DEV-247
@@ -155,8 +220,9 @@ order so each stage is testable:
    factual line; no silent failure. (Delivers DEV-275.)
 3. **Clarification** — the material-ambiguity detector, the answer-or-skip
    question card, and durable answers → memory/corrections.
-4. **Connector depth** — richer git/Granola/calendar grounding as those
-   connectors land, reusing the same retrieval and disclosure.
+4. **External-signal depth** — richer git/calendar grounding through
+   `externalSignals.ts` probes and agent-pluggable evidence, reusing the same
+   retrieval and disclosure.
 
 ## Acceptance
 

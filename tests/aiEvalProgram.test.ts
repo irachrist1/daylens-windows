@@ -38,6 +38,10 @@ const REQUIRED_FAMILIES = [
   'files',              // Q2 — files != pages
   'meta',               // Q3 — identity + follow-ups
   'consistency',        // Q1 — one grounded number
+  'specific_day',       // Q13 — "what did I do on <date>" as activities, not app lists
+  'agent_native',       // Q13 — asks whose answer is a real artifact
+  'timeline_edit',      // Q13 — merge/relabel intent → propose_correction flow
+  'tool_transparency',  // Q13 — honest "what can you see about me"
 ]
 
 test('eval set is well-formed (id/question/family/gold/rubric, unique ids)', () => {
@@ -66,6 +70,59 @@ test('the meta scenario guards templated follow-ups (Q3)', () => {
   const meta = loadScenarios().find((s) => s.family === 'meta')
   assert.ok(meta, 'no meta scenario in the eval set')
   assert.equal(meta?.rubric.follow_ups_must_not_template_meta_entity, true)
+})
+
+// ── Q13 family guards: each new family must keep the rubric flags that make
+//    it worth having. Without these, a scenario edit could keep the family
+//    name while dropping the actual bar it enforces.
+
+test('specific-day scenarios grade activity, not app lists', () => {
+  const days = loadScenarios().filter((s) => s.family === 'specific_day')
+  assert.ok(days.length >= 2, 'expected at least two specific-day scenarios')
+  for (const s of days) {
+    assert.equal(s.rubric.must_describe_activity_not_just_minutes, true, `${s.id}: missing the activity-not-app flag`)
+  }
+})
+
+test('agent-native scenarios require a real artifact', () => {
+  const native = loadScenarios().filter((s) => s.family === 'agent_native')
+  assert.ok(native.length >= 2, 'expected at least two agent-native scenarios')
+  for (const s of native) {
+    assert.equal(s.rubric.must_produce_artifact, true, `${s.id}: agent-native scenario without must_produce_artifact`)
+  }
+  // The weekly Excel ask must pin the deterministic export, not hand-typed rows.
+  assert.ok(
+    native.some((s) => s.rubric.must_use_deterministic_week_export === true),
+    'no agent-native scenario guards the deterministic weekly export',
+  )
+})
+
+test('timeline-edit scenarios enforce propose → preview, never silent edits', () => {
+  const edits = loadScenarios().filter((s) => s.family === 'timeline_edit')
+  assert.ok(edits.length >= 2, 'expected at least two timeline-edit scenarios')
+  for (const s of edits) {
+    assert.equal(s.rubric.must_use_correction_proposal_flow, true, `${s.id}: missing the correction-flow flag`)
+    assert.equal(s.rubric.must_not_claim_unapplied_edit, true, `${s.id}: missing the no-silent-edit flag`)
+  }
+})
+
+test('tool-transparency scenario demands both sides of the honesty ledger', () => {
+  const transparency = loadScenarios().find((s) => s.family === 'tool_transparency')
+  assert.ok(transparency, 'no tool-transparency scenario in the eval set')
+  assert.equal(transparency?.rubric.must_list_real_capabilities, true)
+  assert.equal(transparency?.rubric.must_name_what_is_not_captured, true)
+  assert.equal(transparency?.rubric.must_mention_consent_gates, true)
+})
+
+test('hallucination traps cover fabricated client, pre-tracking date, and nonexistent person', () => {
+  const traps = loadScenarios().filter((s) => s.family === 'hallucination_trap')
+  assert.ok(traps.length >= 3, 'expected at least three hallucination traps')
+  for (const s of traps) {
+    assert.equal(s.rubric.must_admit_no_data, true, `${s.id}: trap without must_admit_no_data`)
+  }
+  assert.ok(traps.some((s) => s.rubric.must_name_tracking_start === true), 'no pre-tracking-date trap')
+  assert.ok(traps.some((s) => s.rubric.must_not_invent_meetings_or_people === true), 'no nonexistent-person trap')
+  assert.ok(traps.some((s) => s.rubric.must_not_invent_blocks === true && s.question.toLowerCase().includes('client')), 'no fabricated-client trap')
 })
 
 test('judge rubric documents the gold-answer-bar axes', () => {

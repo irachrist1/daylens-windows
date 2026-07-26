@@ -1,0 +1,46 @@
+# Ground truth from the owner's Obsidian journal (time-tabled office day).
+date: "2026-05-26"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-05-26 (morning/afternoon/evening tables)"
+summary: >
+  Office day. Coursera / ML study 08:30–10:45, then class 11:00–13:00 —
+  Session 7, CNN fundamentals, with full class notes filed and the
+  Formative 2 brief parsed from Canvas (group confirmed). After lunch,
+  14:30–16:30 went to the Andersen carousel "How Are Businesses Using AI
+  Today?" (topic changed from due diligence; research, drafting, design;
+  scheduled for Wednesday 9 a.m.). 16:30–17:15 was system fixes — CLAUDE.md
+  rules, a new AGENTS.md, content-strategy and log updates — plus CBC
+  hackathon scoping, where the real deadline surfaced: Thursday May 28,
+  11:59 a.m. A 7 km run and dinner in the early evening, then 20:00–21:30
+  hackathon ideation — roughly 25 ideas rejected, research agents run
+  (GitHub trending, YC W26), no idea locked.
+primaryWork:
+  - name: ML class + study (Session 7, Coursera)
+    aliases: [coursera, cnn, session 7, class, machine learning, formative]
+  - name: Andersen carousel
+    aliases: [andersen, carousel, businesses using ai]
+  - name: CBC hackathon scoping and ideation
+    aliases: [hackathon, cbc, ideation]
+secondary:
+  - name: System / vault doc fixes
+    aliases: [claude.md, agents.md, content strategy, vault]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { until: "10:45", desc: "Coursera / ML study at the office (from ~08:30)" }
+  - { from: "11:00", until: "13:00", desc: "class: Session 7, CNN fundamentals; notes filed, Formative 2 brief parsed from Canvas" }
+  - { from: "13:00", until: "14:15", desc: "post-class routine (Granola notes) and lunch; actual desk break ~13:40–14:05" }
+  - { from: "14:30", until: "16:30", desc: "Andersen carousel 'How Are Businesses Using AI Today?' — research, drafting, design" }
+  - { from: "16:30", until: "18:40", desc: "system fixes (CLAUDE.md, AGENTS.md, strategy docs), CBC hackathon scoping, Formative 2 group message" }
+  - { from: "19:50", until: "21:30", desc: "hackathon ideation: ~25 ideas rejected, research agents, HyperAgent subscription" }
+gaps:
+  - { from: "13:40", to: "14:05", reason: "lunch (journal says 13:00–14:15, but capture shows the desk break was ~13:40–14:05)" }
+  - { from: "18:45", to: "19:50", reason: "7 km easy run + dinner" }
+notes: >
+  The journal mixes completed rows with leftover plan rows; the run appears
+  in two conflicting time tables (17:30–19:59 and 18:30–20:30) — capture
+  shows the actual off-computer stretch was ~18:42–19:53, which the gap
+  above follows. About 30 minutes of screen time 22:00–23:30 is not
+  described in the journal; treat it as wind-down, not primary work.
