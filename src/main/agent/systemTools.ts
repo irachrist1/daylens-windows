@@ -63,8 +63,8 @@ const SEARCHABLE_EXTENSIONS = new Set([
 // that redirect output to files, re-point the repository, read files outside
 // the repository (`diff --no-index`), or run configured external drivers are
 // rejected below.
-const GIT_READ_SUBCOMMANDS = new Set(['log', 'show', 'diff', 'status', 'shortlog', 'branch', 'rev-parse', 'describe'])
-const FORBIDDEN_GIT_ARG = /^(--output|--exec-path|--upload-pack|--receive-pack|-c$|--config|--no-index|--ext-diff|--textconv|--git-dir|--work-tree)/
+export const GIT_READ_SUBCOMMANDS = new Set(['log', 'show', 'diff', 'status', 'shortlog', 'branch', 'rev-parse', 'describe'])
+export const FORBIDDEN_GIT_ARG = /^(--output|--exec-path|--upload-pack|--receive-pack|-c$|--config|--no-index|--ext-diff|--textconv|--git-dir|--work-tree)/
 // `branch` mutates through flags, so it is forced to --list mode and its
 // mutating flags are rejected outright.
 const FORBIDDEN_BRANCH_ARG = /^(-d$|-D$|--delete|-m$|-M$|--move|-c$|-C$|--copy|-f$|--force|--edit-description|--set-upstream-to|--unset-upstream|-u$)/
