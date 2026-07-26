@@ -115,7 +115,7 @@ import { recoverInterruptedTurns } from './services/agentTurnState'
 import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { getCurrentSession, getLinuxTrackingDiagnostics, startTracking, stopTracking, trackingStatus } from './services/tracking'
-import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
+import { startFocusCapture, stopFocusCapture, purgeFocusCaptureSpool } from './services/focusCapture'
 import { startWindowsFocusCapture, stopWindowsFocusCapture } from './services/windowsFocusCapture'
 import { ensureProcessMonitor } from './services/processMonitor'
 import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
@@ -592,18 +592,22 @@ function startCaptureServices(): void {
   }
 }
 
-function stopCaptureServices(): void {
+/** `purgeSpool` is the consent-revocation path (DEV-262): spooled-but-not-yet
+ *  ingested events are deleted instead of drained into the database — nothing
+ *  observed may outlive the user's decision. Ordinary stops keep the drain. */
+function stopCaptureServices(options: { purgeSpool?: boolean } = {}): void {
   if (captureAdapterStartupTimer) {
     clearTimeout(captureAdapterStartupTimer)
     captureAdapterStartupTimer = null
   }
   stopTracking()
-  stopFocusCapture()
+  stopFocusCapture({ finalDrain: !options.purgeSpool })
   stopWindowsFocusCapture()
   stopBrowserTracking()
   stopProcessMonitor()
   stopExternalSignalCollection()
   stopConnectorSyncSchedule()
+  if (options.purgeSpool) purgeFocusCaptureSpool()
 }
 
 function startBackgroundServices(): void {
@@ -1192,7 +1196,7 @@ ipcMain.handle(IPC.APP.SET_CAPTURE_CONSENT, async (_e, granted: unknown) => {
   if (decision) {
     startBackgroundServices()
   } else {
-    stopCaptureServices()
+    stopCaptureServices({ purgeSpool: true })
   }
   return getSettings().captureConsent
 })

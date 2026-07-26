@@ -2735,6 +2735,14 @@ interface LinuxDesktopDiagnostics {
   secretServiceReachable: boolean | null
 }
 
+/** DEV-261: present while the recorder has stalled enough this session that
+ *  the day probably has holes — drives the persistent in-app banner. Null or
+ *  absent once stalls have stopped long enough to trust recording again. */
+export interface RecorderStallBannerState {
+  stallCount: number
+  longestStallSeconds: number
+}
+
 /** DEV-229: the permission watcher's live verdict on whether capture can
  *  actually read window titles — the OS grant flag AND a real-read proxy
  *  (titled share of recently persisted samples). 'blind' = flag revoked or
@@ -2745,6 +2753,8 @@ export interface CaptureVerificationState {
   axTrusted: boolean
   recentSamples: number
   recentSamplesWithTitle: number
+  /** DEV-261: repeated main-thread stalls ride the same banner channel. */
+  recorderStall?: RecorderStallBannerState | null
   checkedAt: number
 }
 

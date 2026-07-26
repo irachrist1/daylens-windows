@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import type Database from 'better-sqlite3'
 import type { AppCategory, CorrectionCommand } from '../src/shared/types.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
+import { EDITABLE_BLOCK_CATEGORY_OPTIONS } from '../src/shared/activityCategories.ts'
 import {
   applyCorrection,
   previewCorrection,
@@ -155,6 +156,38 @@ test('a category correction reaches Timeline and Apps and undo restores both', (
   db.close()
 })
 
+test('correction descriptions speak the human category vocabulary, never raw enums', () => {
+  // DEV-271: "change its category to aiTools" is machine talk. Every category
+  // a person can pick must be described with its human label ("AI Tools"),
+  // and the raw enum token must never leak into the description or notes.
+  const db = createProductionTestDatabase()
+  seedTwoTopicDay(db)
+  const target = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  for (const { value, label } of EDITABLE_BLOCK_CATEGORY_OPTIONS) {
+    if (value === target.dominantCategory) continue
+    const preview = previewCorrection(db, {
+      kind: 'edit', date: TEST_DATE, blockId: target.id, category: value,
+    }, null)
+    assert.ok(
+      preview.description.includes(`to ${label}`),
+      `description must use "${label}", got: ${preview.description}`,
+    )
+    assert.ok(
+      !preview.description.includes(`to ${value}`),
+      `raw enum "${value}" leaked into: ${preview.description}`,
+    )
+    assert.ok(
+      preview.surfaces.some((note) => note.includes(`as ${label}.`)),
+      `surface note must use "${label}", got: ${preview.surfaces.join(' | ')}`,
+    )
+    assert.ok(
+      !preview.surfaces.some((note) => note.includes(`as ${value}.`)),
+      `raw enum "${value}" leaked into a surface note: ${preview.surfaces.join(' | ')}`,
+    )
+  }
+  db.close()
+})
+
 test('merge previews the block-count change, applies, survives a rebuild, and undoes', () => {
   const db = createProductionTestDatabase()
   seedTwoTopicDay(db)
@@ -168,6 +201,15 @@ test('merge previews the block-count change, applies, survives a rebuild, and un
   assert.equal(preview.blockCountBefore, 2)
   assert.equal(preview.blockCountAfter, 1)
   assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 2, 'preview persisted nothing')
+  // DEV-271: the note says what the person gets, in their words.
+  assert.ok(
+    preview.surfaces.some((note) => note.includes('one block') && note.includes('come back')),
+    'the merge note must promise one block that is kept when they leave and return',
+  )
+  assert.ok(
+    !preview.surfaces.some((note) => /re-analysis|survives/.test(note)),
+    'system internals must not leak into the merge note',
+  )
 
   const { correctionId } = applyCorrection(db, command, null)
   assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 1)
