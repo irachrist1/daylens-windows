@@ -2369,6 +2369,14 @@ export interface AppSettings {
   // experiment status so the person can see exactly when they agreed.
   // Cleared on revoke.
   screenContextConsentAt?: number
+  // Tier-2 agent capability (docs/north-star/context-agent.md): may the chat
+  // agent read Granola meeting notes from the local cache? On by default —
+  // turning it off makes read_meeting_notes refuse honestly.
+  granolaAccessEnabled?: boolean
+  // Consent-gated agent capability: may the chat agent run allowlisted
+  // read-only terminal commands (run_command)? OFF by default; first use in a
+  // session additionally raises the in-chat permission card.
+  terminalAccessEnabled?: boolean
 }
 
 // ─── Screen-context experiment surface (DEV-198) ─────────────────────────────

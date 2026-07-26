@@ -23,8 +23,10 @@ import { recordProviderCall } from '../services/aiRateLimiter'
 import { verifyTimestamps, verifyCitedEntities } from '../ai/citations'
 import { languageModelFor } from './providerModel'
 import { buildDaylensTools } from './daylensTools'
+import { buildContextTools } from './contextTools'
 import { buildScreenTools } from './screenTools'
 import { buildSystemTools, type FileAccessAnswer } from './systemTools'
+import { buildTerminalTools, type TerminalAccessAnswer } from './terminalTools'
 import type { FileDisclosureRow } from '../services/fileAccess'
 import { buildExportTools, buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
 import { buildMemoryTools } from './memoryTools'
@@ -224,8 +226,26 @@ export async function runChatAgentTurn(
       if (normalized === 'allow this folder') return 'allow_folder'
       return 'deny'
     }
+    // The consent card for run_command rides the SAME permission machinery as
+    // file reads: the turn pauses as awaiting_user(file_permission), and only
+    // an explicit allow runs anything.
+    const requestTerminalAccess = async (request: { command: string; args: string[]; cwd: string; reason: string }): Promise<TerminalAccessAnswer> => {
+      const commandLine = [request.command, ...request.args].join(' ')
+      const answer = await askFilePermission({
+        question: `Daylens wants to run \`${commandLine}\` in ${request.cwd} — ${request.reason}`,
+        options: ['Allow once', 'Allow for this session', 'Deny'],
+        allowFreeText: false,
+      })
+      const normalized = answer.trim().toLowerCase()
+      if (normalized === 'allow once') return 'allow_once'
+      if (normalized === 'allow for this session') return 'allow_session'
+      return 'deny'
+    }
     const tools: ToolSet = {
       ...buildDaylensTools(deps.db),
+      // Calendar, git-signal, and meeting-notes context: same executors as
+      // the wrap/MCP surface, policy-gated in the tools themselves.
+      ...buildContextTools(deps.db),
       ...buildSystemTools({
         db: deps.db,
         fileAccess: {
@@ -240,6 +260,15 @@ export async function runChatAgentTurn(
       // Tier-3 live-screen escalation; consent-gated in Settings, refuses
       // honestly when off (docs/specs/agent-runtime-and-context.md).
       ...buildScreenTools(),
+      // Consent-gated read-only terminal access: allowlist-first, no shell,
+      // off by default, first use per session confirmed on the same card.
+      ...buildTerminalTools({
+        db: deps.db,
+        threadId: deps.threadId ?? null,
+        destination: `${deps.config.provider}:${deps.config.model}`,
+        requestTerminalAccess,
+        onDisclosure: (row) => fileDisclosures.push(row),
+      }),
       ...buildExportTools(deps.db, interactionDeps),
       // The confirmed-memory proposal card (DEV-185): a durable personal fact
       // pauses the turn through the same askUser machinery as file access;

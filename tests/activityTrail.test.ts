@@ -93,6 +93,47 @@ test('stepsFromToolTrace rebuilds the trail with live labels and honest failure 
   assert.deepEqual(stepsFromToolTrace([{ tool: 42, input: {}, output: '' } as never]), [])
 })
 
+test('statusForTool produces real phrases for every agent tool, including the escalation tools', () => {
+  assert.equal(
+    statusForTool('capture_screen', { reason: 'the active window has no title' }),
+    'Looking at your screen — the active window has no title',
+    'the capture reason is shown verbatim — the user always sees why the agent looked',
+  )
+  assert.equal(statusForTool('capture_screen', {}), 'Looking at your screen')
+
+  assert.equal(
+    statusForTool('run_command', { command: 'ls', reason: 'checking what is in the project folder' }),
+    'Running ls — checking what is in the project folder',
+  )
+  assert.equal(statusForTool('run_command', {}), 'Running a command')
+  // A command value that is not a bare binary name never reaches the label.
+  assert.equal(
+    statusForTool('run_command', { command: '/usr/bin/env FOO=1 evil' }),
+    'Running a command',
+  )
+
+  assert.equal(statusForTool('export_week_excel', { weekStartDate: '2026-07-20' }), 'Building your weekly export')
+  assert.equal(statusForTool('get_calendar_events', { date: '2026-07-20' }), 'Checking your calendar for 2026-07-20')
+  assert.equal(statusForTool('get_git_activity', { date: '2026-07-20' }), 'Checking your commits for 2026-07-20')
+  assert.equal(statusForTool('read_meeting_notes', {}), 'Looking through your meetings')
+  assert.equal(statusForTool('read_meeting_notes', { meetingId: 'note:doc-1' }), 'Reading meeting notes')
+  assert.equal(statusForTool('get_attribution', { entityName: 'ACME' }), 'Checking attributed work')
+  assert.equal(statusForTool('list_clients', {}), 'Reading your client roster')
+
+  // No agent tool falls through to the generic "Working" row anymore.
+  const allAgentTools = [
+    'get_moment', 'get_time_chunks', 'get_day_overview', 'search_history', 'list_page_visits',
+    'get_app_usage', 'get_week_summary', 'get_calendar_events', 'get_git_activity',
+    'read_meeting_notes', 'get_attribution', 'list_clients', 'discover_repositories',
+    'search_files', 'git', 'read_file', 'list_dir', 'create_artifact', 'export_week_excel',
+    'capture_screen', 'run_command', 'ask_user', 'propose_memory', 'propose_correction',
+    'undo_correction', 'forget_memory',
+  ]
+  for (const tool of allAgentTools) {
+    assert.notEqual(statusForTool(tool, {}), 'Working', `${tool} needs a real trail phrase`)
+  }
+})
+
 test('statusForTool never leaks secrets, prompts, or payloads riding in tool arguments', () => {
   const poison = {
     date: '2026-07-06',
@@ -107,7 +148,9 @@ test('statusForTool never leaks secrets, prompts, or payloads riding in tool arg
   }
   const tools = [
     'get_moment', 'get_time_chunks', 'get_day_overview', 'search_history', 'list_page_visits',
-    'get_app_usage', 'get_week_summary', 'discover_repositories', 'search_files', 'git',
+    'get_app_usage', 'get_week_summary', 'get_calendar_events', 'get_git_activity',
+    'read_meeting_notes', 'export_week_excel', 'run_command', 'capture_screen',
+    'discover_repositories', 'search_files', 'git',
     'read_file', 'list_dir', 'create_artifact', 'ask_user', 'propose_memory',
     'mcp_notion_search', 'some_future_tool',
   ]

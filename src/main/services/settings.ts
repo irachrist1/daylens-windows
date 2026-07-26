@@ -21,6 +21,9 @@ async function getStore() {
 }
 
 const DEFAULTS: AppSettings = {
+  mcpServers: [],
+  granolaAccessEnabled: true,
+  terminalAccessEnabled: false,
   shareAIFeedbackExamples: false,
   launchOnLogin: true,
   theme: 'system',
@@ -113,6 +116,11 @@ export function getSettings(): AppSettings {
   const onboardingComplete = (_store.get('onboardingComplete', false) as boolean)
   const onboardingState = normalizeOnboardingState(_store.get('onboardingState', null), onboardingComplete)
   return {
+    // User-configured MCP servers for the chat agent. Must be read here or
+    // aiService's `settings.mcpServers ?? []` silently drops every entry.
+    mcpServers: (_store.get('mcpServers', []) as AppSettings['mcpServers']) ?? [],
+    granolaAccessEnabled: (_store.get('granolaAccessEnabled', true) as boolean),
+    terminalAccessEnabled: (_store.get('terminalAccessEnabled', false) as boolean),
     shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', false) as boolean),
     launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
