@@ -182,6 +182,12 @@ export async function workerAppDetail<T>(
   return runWorkerOp<T>({ op: 'appDetail', canonicalAppId, daysOrDate, liveSession })
 }
 
+/** Duplicate-entity scan for Settings -> Entities (DEV-257). Read-only, like
+ *  every worker op; the caller falls back inline when the worker is missing. */
+export async function workerSuggestedMerges<T>(): Promise<T> {
+  return runWorkerOp<T>({ op: 'suggestedMerges' })
+}
+
 export function stopRangeWorker(): void {
   if (!_proc || _proc.killed) return
   _stopping = true

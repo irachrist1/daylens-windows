@@ -617,38 +617,64 @@ export interface SuggestedEntityMerge {
 }
 
 /** Low-confidence merge candidates stay SUGGESTED (spec): same-type active
- *  entities sharing a display name. Alias self-joins are too expensive on
- *  large stores and froze Settings; name matches catch the real duplicates
+ *  entities sharing a display name. Name matches catch the real duplicates
  *  users see (Canva/Canva, Traycer/Traycer). Never auto-applied. Meetings
- *  stay out — identity is the source event id. */
-export function listSuggestedEntityMerges(db: Database.Database, limit = 20): SuggestedEntityMerge[] {
-  const rows = db.prepare(`
-    SELECT e1.entity_type AS type,
-           e1.id AS left_id, e1.canonical_name AS left_name,
-           e2.id AS right_id, e2.canonical_name AS right_name
-    FROM entities e1
-    JOIN entities e2
-      ON e2.entity_type = e1.entity_type
-     AND e2.status = 'active'
-     AND e2.id > e1.id
-     AND lower(e2.canonical_name) = lower(e1.canonical_name)
-    WHERE e1.status = 'active'
-      AND e1.entity_type != 'meeting'
-    ORDER BY e1.last_observed_at IS NULL, e1.last_observed_at DESC
-    LIMIT ?
-  `).all(limit) as Array<{
-    type: EntityType
-    left_id: string
-    left_name: string
-    right_id: string
-    right_name: string
-  }>
-  return rows.map((row) => ({
-    type: row.type,
-    leftId: row.left_id,
-    leftName: row.left_name,
-    rightId: row.right_id,
-    rightName: row.right_name,
-    reason: 'Same name — likely the same thing twice',
-  }))
+ *  stay out — identity is the source event id.
+ *
+ *  A cluster of n same-name entities yields the n-1 pairs a person actually
+ *  has to act on, anchored on one deterministic survivor — never the
+ *  n*(n-1)/2 pair explosion a self-join emits (DEV-257: six Netflix rows
+ *  produced fifteen pairs pointing at each other). The anchor is the entity
+ *  a merge should keep: a user-renamed one first (explicit corrections
+ *  outrank inference), then the most recently observed. The scan is one
+ *  GROUP BY pass plus one small lookup per cluster, not the O(n²)
+ *  entity/alias self-join that froze Settings on large stores.
+ *
+ *  `limit` is a transport guard for the Settings page, not a work cap: the
+ *  default is high enough that the Needs-attention count tells the truth on
+ *  any realistic store, and merge-all runs against the unlimited listing. */
+export function listSuggestedEntityMerges(
+  db: Database.Database,
+  limit = 500,
+): SuggestedEntityMerge[] {
+  const clusters = db.prepare(`
+    SELECT entity_type AS type, lower(canonical_name) AS name_key
+    FROM entities
+    WHERE status = 'active' AND entity_type != 'meeting'
+    GROUP BY entity_type, lower(canonical_name)
+    HAVING COUNT(*) > 1
+    ORDER BY MAX(COALESCE(last_observed_at, 0)) DESC, name_key ASC
+  `).all() as Array<{ type: EntityType; name_key: string }>
+
+  const membersStmt = db.prepare(`
+    SELECT id, canonical_name, name_source
+    FROM entities
+    WHERE status = 'active' AND entity_type = ? AND lower(canonical_name) = ?
+    ORDER BY (name_source = 'user') DESC,
+             last_observed_at IS NULL, last_observed_at DESC,
+             id ASC
+  `)
+
+  const suggestions: SuggestedEntityMerge[] = []
+  for (const cluster of clusters) {
+    const members = membersStmt.all(cluster.type, cluster.name_key) as Array<{
+      id: string
+      canonical_name: string
+      name_source: 'inferred' | 'user'
+    }>
+    const [anchor, ...duplicates] = members
+    if (!anchor) continue
+    for (const duplicate of duplicates) {
+      if (suggestions.length >= limit) return suggestions
+      suggestions.push({
+        type: cluster.type,
+        leftId: anchor.id,
+        leftName: anchor.canonical_name,
+        rightId: duplicate.id,
+        rightName: duplicate.canonical_name,
+        reason: 'Same name, likely the same thing twice',
+      })
+    }
+  }
+  return suggestions
 }
