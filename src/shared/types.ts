@@ -1968,6 +1968,13 @@ export type HistoryExportRunResult =
       incompleteSections: string[]
     }
 
+/** DEV-248: result of the per-slide wrap export. `canceled` means the person
+ *  dismissed the folder picker; otherwise every requested slide was written
+ *  (a partial write cleans up after itself and rejects instead). */
+export type WrapSlidesExportResult =
+  | { canceled: true }
+  | { canceled: false; dir: string; files: string[] }
+
 /** The day's external signals, RESOLVED for the wrap writer: sanitized,
  *  humanized, pre-formatted, and stripped of anything the model must never
  *  echo (raw paths, branches, clock times it can't ground). Each block is
@@ -3164,6 +3171,9 @@ export const IPC = {
     RUN: 'export:run',
     VERIFY: 'export:verify',
     PROGRESS: 'export:progress',
+    // DEV-248: the wrap deck exports one PNG per slide into a folder the
+    // person picks once. One dialog, many files, never a glued mega-image.
+    WRAP_SLIDES: 'export:wrap-slides',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',

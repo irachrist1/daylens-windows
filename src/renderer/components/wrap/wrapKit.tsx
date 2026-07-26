@@ -21,6 +21,25 @@ export function prefersReducedMotion(): boolean {
 
 export interface Theme { bg: string; accent: string; glow: string }
 
+// ─── Opaque slide surface (DEV-248) ─────────────────────────────────────────────
+// Every full-screen wrap surface paints a SOLID color under its gradient. The
+// shipped bleed-through bug: a slide's visibility rode a `forwards`-fill opacity
+// animation on the overlay root, and when that animation stalled the whole
+// frame stayed translucent — the timeline showed through and "Save slide" sat
+// on top of the sidebar's Settings button. Two invariants prevent any repeat:
+//  1. a wrap root's steady state is fully opaque with NO opacity animation on
+//     the root itself (entrance fades run on inner layers only), and
+//  2. the gradient rides backgroundImage over this opaque backstop, so a
+//     missing or broken gradient still leaves a solid wall, never a window.
+
+export const WRAP_SURFACE_BACKSTOP = '#05060c'
+
+/** The style for any layer that must never let the app show through: solid
+ *  backstop first, the theme gradient painted over it. */
+export function opaqueSlideSurface(theme: Theme): CSSProperties {
+  return { backgroundColor: WRAP_SURFACE_BACKSTOP, backgroundImage: theme.bg }
+}
+
 export const THEME = {
   cover:    { bg: 'linear-gradient(160deg,#0a0f20 0%,#161f52 54%,#2a3fa6 100%)', accent: '#b9ccff', glow: 'rgba(77,120,255,0.42)' },
   headline: { bg: 'linear-gradient(160deg,#0b1224 0%,#15235e 52%,#2747b8 100%)', accent: '#bcd0ff', glow: 'rgba(77,120,255,0.5)' },
@@ -172,7 +191,11 @@ export function WrapGate({ theme, kicker, title, body, onClose, children }: {
   theme: Theme; kicker: string; title: string; body?: string; onClose: () => void; children?: ReactNode
 }) {
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: theme.bg, animation: 'wrappedOverlayIn 280ms ease forwards', overflow: 'hidden' }}>
+    // The root is opaque and never animates opacity; the fade-in runs on the
+    // inner gradient layer so a stalled animation shows the dark backstop,
+    // never the app underneath (see opaqueSlideSurface).
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: WRAP_SURFACE_BACKSTOP, overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', inset: 0, ...opaqueSlideSurface(theme), animation: 'wrappedOverlayIn 280ms ease' }} />
       <div style={{ position: 'absolute', inset: 0, background: `radial-gradient(ellipse 75% 60% at 50% 40%, ${theme.glow}, transparent 72%)` }} />
       <MessageScene kicker={kicker} title={title} body={body} theme={theme}>
         {children}

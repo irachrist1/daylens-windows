@@ -3,13 +3,18 @@
 // Two layers, split for testability:
 //  1. `buildWrapExportModels` — PURE: deck specs + resolved lines → flat draw
 //     models. No DOM. Unit-testable with real facts.
-//  2. `renderWrapExport` / `saveWrapExport` — canvas rendering with injectable
-//     canvas/save deps, so tests can verify a file is produced without a DOM.
+//  2. `renderWrapSlide` / `saveWrapSlide` / `exportWrapDeck` — canvas rendering
+//     with injectable canvas/save deps, so tests can verify files are produced
+//     without a DOM.
 //
-// The finale's Export button renders EVERY slide into one tall 1080-wide image
-// (one 1080×1350 panel per slide) — the whole story in a single graphic, clean
-// enough to post. Individual slides still save as single panels.
+// DEV-248: export follows the story format — each slide is its own 1080×1350
+// image, shareable on its own, exactly like the Spotify Wrapped it borrows
+// from. The finale's Export button renders every slide and saves one PNG per
+// slide through a single folder pick. The old path that glued the whole deck
+// into one giant vertical image is gone: it capped out against browser canvas
+// limits on month decks and nobody can post a 20-panel strip anyway.
 
+import type { DaylensAPI } from '../../../preload/index'
 import type { WrapDeckMeta, WrapSlideSpec } from '../../lib/wrapDeck'
 import { formatHm, resolveSlideLine } from '../../lib/wrapDeck'
 import { slideGradient } from './wrapKit'
@@ -105,6 +110,13 @@ export function buildWrapExportModels(
   return models
 }
 
+/** The filename for one exported slide: `<stem>-slide-NN-<scene id>.png`.
+ *  Zero-padded so a folder of slides sorts in story order. Pure. */
+export function wrapSlideFilename(stem: string, index: number, model: Pick<WrapExportSlideModel, 'id'>): string {
+  const n = String(index + 1).padStart(2, '0')
+  return `${stem}-slide-${n}-${model.id}.png`
+}
+
 // ─── Canvas rendering (injectable for tests) ──────────────────────────────────
 
 /** The 2D surface the renderer needs — a strict subset of CanvasRenderingContext2D
@@ -135,7 +147,11 @@ export interface WrapExportCanvas {
 export interface WrapExportDeps {
   createCanvas: (width: number, height: number) => WrapExportCanvas
   toBlob: (canvas: WrapExportCanvas) => Promise<Blob | null>
+  /** Single-slide save: browser download (plus best-effort clipboard copy). */
   save: (blob: Blob, filename: string) => Promise<void>
+  /** Whole-deck save: hands every rendered slide to the main process, which
+   *  asks for a destination folder ONCE and writes one PNG per slide. */
+  saveAll: (stem: string, files: Array<{ filename: string; blob: Blob }>) => Promise<{ canceled: boolean }>
 }
 
 function domDeps(): WrapExportDeps {
@@ -162,43 +178,42 @@ function domDeps(): WrapExportDeps {
         }
       } catch { /* clipboard is best-effort */ }
     },
+    saveAll: async (stem, files) => {
+      const payload = await Promise.all(files.map(async ({ filename, blob }) => ({
+        filename,
+        bytes: new Uint8Array(await blob.arrayBuffer()),
+      })))
+      const api = (window as unknown as { daylens: DaylensAPI }).daylens
+      const result = await api.export.wrapSlides({ stem, files: payload })
+      return { canceled: result.canceled }
+    },
   }
 }
 
 const PAD = 96
 
-/** Browsers cap canvas dimensions around 32k px. One column of 1350px panels
- *  blows past that at ~24 slides (a month deck), making toBlob return null and
- *  the export silently fail. Two columns keep a 30-slide deck at ~20k px. */
-export const EXPORT_MAX_SINGLE_COLUMN = 12
-
-export function exportGrid(count: number): { cols: number; rows: number } {
-  const cols = count > EXPORT_MAX_SINGLE_COLUMN ? 2 : 1
-  return { cols, rows: Math.ceil(count / cols) }
-}
-
-function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number, top: number, footer: string): void {
+function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, footer: string): void {
   const W = EXPORT_PANEL_W
   const H = EXPORT_PANEL_H
-  const bg = ctx.createLinearGradient(left, top, left + W, top + H)
+  const bg = ctx.createLinearGradient(0, 0, W, H)
   bg.addColorStop(0, model.gradient[0])
   bg.addColorStop(0.55, model.gradient[1])
   bg.addColorStop(1, model.gradient[2])
   ctx.fillStyle = bg
-  ctx.fillRect(left, top, W, H)
+  ctx.fillRect(0, 0, W, H)
 
   ctx.textBaseline = 'alphabetic'
   ctx.textAlign = 'left'
 
   // Brand row.
-  let y = top + 150
+  let y = 150
   ctx.fillStyle = model.accent
   ctx.font = '700 28px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
-  ctx.fillText('DAYLENS', left + PAD, y)
+  ctx.fillText('DAYLENS', PAD, y)
   ctx.textAlign = 'right'
   ctx.fillStyle = 'rgba(255,255,255,0.6)'
   ctx.font = '700 26px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
-  ctx.fillText(model.kicker.toUpperCase().slice(0, 42), left + W - PAD, y)
+  ctx.fillText(model.kicker.toUpperCase().slice(0, 42), W - PAD, y)
   ctx.textAlign = 'left'
 
   y += 170
@@ -206,12 +221,12 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
   if (model.headline) {
     ctx.fillStyle = '#ffffff'
     ctx.font = '900 132px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
-    ctx.fillText(truncateToWidth(ctx, model.headline, W - PAD * 2), left + PAD, y)
+    ctx.fillText(truncateToWidth(ctx, model.headline, W - PAD * 2), PAD, y)
     y += 56
     if (model.sublabel) {
       ctx.fillStyle = 'rgba(255,255,255,0.62)'
       ctx.font = '400 34px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
-      ctx.fillText(truncateToWidth(ctx, model.sublabel, W - PAD * 2), left + PAD, y)
+      ctx.fillText(truncateToWidth(ctx, model.sublabel, W - PAD * 2), PAD, y)
       y += 40
     }
     y += 60
@@ -221,7 +236,7 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
     ctx.fillStyle = 'rgba(255,255,255,0.92)'
     ctx.font = '600 44px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
     for (const line of wrapText(ctx, model.line, W - PAD * 2).slice(0, 10)) {
-      ctx.fillText(line, left + PAD, y)
+      ctx.fillText(line, PAD, y)
       y += 62
     }
     y += 40
@@ -230,17 +245,17 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
   for (const row of model.rows) {
     ctx.fillStyle = '#ffffff'
     ctx.font = '600 36px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
-    ctx.fillText(truncateToWidth(ctx, row.name, W - PAD * 2 - 240), left + PAD, y)
+    ctx.fillText(truncateToWidth(ctx, row.name, W - PAD * 2 - 240), PAD, y)
     ctx.textAlign = 'right'
     ctx.fillStyle = 'rgba(255,255,255,0.6)'
     ctx.font = '500 32px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
-    ctx.fillText(row.value, left + W - PAD, y)
+    ctx.fillText(row.value, W - PAD, y)
     ctx.textAlign = 'left'
     y += 26
     ctx.fillStyle = 'rgba(255,255,255,0.12)'
-    ctx.fillRect(left + PAD, y, W - PAD * 2, 10)
+    ctx.fillRect(PAD, y, W - PAD * 2, 10)
     ctx.fillStyle = model.accent
-    ctx.fillRect(left + PAD, y, Math.max(10, Math.round((W - PAD * 2) * (row.pct / 100))), 10)
+    ctx.fillRect(PAD, y, Math.max(10, Math.round((W - PAD * 2) * (row.pct / 100))), 10)
     y += 66
   }
 
@@ -248,58 +263,112 @@ function drawPanel(ctx: WrapExportCtx, model: WrapExportSlideModel, left: number
   ctx.fillStyle = 'rgba(255,255,255,0.45)'
   ctx.font = '500 28px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif'
   ctx.textAlign = 'center'
-  ctx.fillText(footer, left + W / 2, top + H - 84)
+  ctx.fillText(footer, W / 2, H - 84)
   ctx.textAlign = 'left'
 }
 
-/** Render the models into one canvas (a single panel is just N=1). Decks past
- *  EXPORT_MAX_SINGLE_COLUMN lay out in two columns, reading order left-right
- *  then down, to stay inside browser canvas limits. */
-export async function renderWrapExport(
-  models: WrapExportSlideModel[],
+/** Render ONE slide into its own 1080×1350 canvas. Every slide is a complete,
+ *  postable image on its own — never a panel inside a glued strip. */
+export async function renderWrapSlide(
+  model: WrapExportSlideModel,
   footer: string,
   deps: WrapExportDeps,
 ): Promise<Blob | null> {
-  if (models.length === 0) return null
-  const { cols, rows } = exportGrid(models.length)
-  const canvas = deps.createCanvas(EXPORT_PANEL_W * cols, EXPORT_PANEL_H * rows)
+  const canvas = deps.createCanvas(EXPORT_PANEL_W, EXPORT_PANEL_H)
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
-  // A ragged last row leaves a transparent gap; paint the sheet black first.
-  ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, EXPORT_PANEL_W * cols, EXPORT_PANEL_H * rows)
-  models.forEach((model, i) => drawPanel(ctx, model, (i % cols) * EXPORT_PANEL_W, Math.floor(i / cols) * EXPORT_PANEL_H, footer))
+  drawPanel(ctx, model, footer)
   return deps.toBlob(canvas)
 }
 
-/** Render + save. Returns true when a file was actually produced; false when
- *  the canvas/encoder produced nothing (e.g. a null toBlob). A throwing save
- *  sink rejects, so callers can surface the failure — silence is never an
- *  outcome here. */
-export async function saveWrapExport(
-  models: WrapExportSlideModel[],
+/** Render + save one slide (the per-slide "Save slide" button). Returns true
+ *  when a file was actually produced; false when the canvas/encoder produced
+ *  nothing. A throwing save sink rejects, so callers can surface the failure —
+ *  silence is never an outcome here. */
+export async function saveWrapSlide(
+  model: WrapExportSlideModel,
   filename: string,
   footer: string,
   deps: WrapExportDeps = domDeps(),
 ): Promise<boolean> {
-  const blob = await renderWrapExport(models, footer, deps)
+  const blob = await renderWrapSlide(model, footer, deps)
   if (!blob) return false
   await deps.save(blob, filename)
   return true
+}
+
+/** The whole-deck export outcome, as the finale button reports it. A render
+ *  failure names the scenes that did not render (wrapped.md: export failure
+ *  reports which scenes rendered). */
+export type WrapDeckExportOutcome =
+  | { kind: 'saved'; count: number }
+  | { kind: 'canceled' }
+  | { kind: 'failed'; rendered: number; total: number; failedIds: string[] }
+
+/** Export every slide as its own PNG. All slides render FIRST; if any slide
+ *  fails to render, nothing is saved and the outcome names the coverage — an
+ *  export never leaves a partial set behind pretending to be the whole story.
+ *  A throwing save sink rejects so the caller can surface it. */
+export async function exportWrapDeck(
+  models: WrapExportSlideModel[],
+  stem: string,
+  footer: string,
+  deps: WrapExportDeps = domDeps(),
+): Promise<WrapDeckExportOutcome> {
+  if (models.length === 0) return { kind: 'failed', rendered: 0, total: 0, failedIds: [] }
+  const blobs = await Promise.all(models.map((model) => renderWrapSlide(model, footer, deps)))
+  const failedIds = models.filter((_, i) => blobs[i] == null).map((m) => m.id)
+  if (failedIds.length > 0) {
+    return { kind: 'failed', rendered: models.length - failedIds.length, total: models.length, failedIds }
+  }
+  const files = models.map((model, i) => ({ filename: wrapSlideFilename(stem, i, model), blob: blobs[i]! }))
+  const result = await deps.saveAll(stem, files)
+  if (result.canceled) return { kind: 'canceled' }
+  return { kind: 'saved', count: files.length }
 }
 
 // ─── Export status labels (honest, voice.md §errors: one calm line, no sorry) ─
 // Pure so the hermetic suite can pin that a failure is VISIBLE — the old UI
 // mapped every failure back to the idle label and the user learned nothing.
 
-export type WrapExportState = 'idle' | 'working' | 'done' | 'failed'
+export type WrapExportState =
+  | { kind: 'idle' }
+  | { kind: 'working' }
+  | { kind: 'done'; count: number }
+  | { kind: 'failed'; rendered?: number; total?: number; failedIds?: string[]; detail?: string }
+
+/** The human-worthy line inside a save/write rejection. Electron wraps every
+ *  invoke rejection in "Error invoking remote method 'x': Error: <message>";
+ *  strip that machinery so the person reads the message, not the transport.
+ *  Pure, so the honest-failure path is pinnable in the hermetic suite. */
+export function wrapExportFailureDetail(error: unknown): string | null {
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : null
+  if (!raw) return null
+  const detail = raw
+    .replace(/^Error invoking remote method '[^']*':\s*/, '')
+    .replace(/^Error:\s*/, '')
+    .trim()
+    .replace(/\.$/, '')
+  if (!detail) return null
+  return detail.length > 140 ? `${detail.slice(0, 139)}…` : detail
+}
 
 export function exportButtonLabel(state: WrapExportState): string {
-  switch (state) {
+  switch (state.kind) {
     case 'working': return 'Exporting…'
-    case 'done': return 'Exported ✓'
-    case 'failed': return "Export didn't finish. Try again"
-    default: return 'Export wrap'
+    case 'done': return `Saved ${state.count} ${state.count === 1 ? 'slide' : 'slides'} ✓`
+    case 'failed': {
+      // wrapped.md: export failure reports which scenes rendered.
+      if (state.rendered != null && state.total != null && state.total > 0 && state.rendered < state.total) {
+        const missing = state.failedIds && state.failedIds.length > 0
+          ? ` (missing: ${state.failedIds.slice(0, 4).join(', ')}${state.failedIds.length > 4 ? ', …' : ''})`
+          : ''
+        return `Only ${state.rendered} of ${state.total} slides rendered${missing}. Nothing was saved. Try again`
+      }
+      if (state.detail) return `${state.detail}. Try again`
+      return "Export didn't finish. Try again"
+    }
+    default: return 'Export all slides'
   }
 }
 
