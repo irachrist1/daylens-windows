@@ -3291,7 +3291,11 @@ const migrations: Migration[] = [
         if (changed) updateBlock.run(distributionJson, evidenceJson, block.id)
       }
 
-      db.exec(`DELETE FROM day_snapshots`)
+      // day_snapshots is created lazily, not by the base schema.
+      const hasDaySnapshots = db.prepare(
+        `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'day_snapshots'`,
+      ).get()
+      if (hasDaySnapshots) db.exec(`DELETE FROM day_snapshots`)
     },
   },
   {
