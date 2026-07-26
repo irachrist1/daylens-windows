@@ -3217,6 +3217,21 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 67,
+    description:
+      'external_signal_scans — the "collected, nothing found" ledger for the external-signal connectors (git / calendar / focus apps). external_signals only ever stores NON-EMPTY results, so a finished day whose connectors ran and found nothing was indistinguishable from a day never collected — and the on-demand wrap backfill would re-run git/icalBuddy on every regeneration of a commit-less historical day. One row per (date, source) marks "a connector completed for this finished day"; live days are never marked (an empty morning says nothing about the finished day). LOCAL-ONLY, no sync-allowlist keys.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS external_signal_scans (
+          date       TEXT NOT NULL,
+          source     TEXT NOT NULL,
+          scanned_at INTEGER NOT NULL,
+          PRIMARY KEY (date, source)
+        );
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0
