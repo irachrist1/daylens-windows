@@ -6,6 +6,15 @@
 // really about": "✳ Claude Code", "npx @agent-native/core@latest skills add
 // visual-plans", "Branch · Branch · Space Visualization Prep".
 
+/**
+ * Version of the guard rules in this file (plus the stored-label checks built
+ * on them in workBlocks.ts `storedLabelViolatesWorkNameGuards`). Bump this
+ * whenever the rules change so the startup repair pass
+ * (labelGuardRepair.ts) re-scans labels persisted under the older rules —
+ * stored labels must heal without the user re-analyzing every day.
+ */
+export const WORK_NAME_GUARD_VERSION = 1
+
 /** Tool brands that are the INSTRUMENT of the work, never its subject. */
 export const TOOL_BRAND_NAMES = new Set([
   'claude code', 'claude', 'chatgpt', 'cursor', 'warp', 'raycast', 'raycast beta',
