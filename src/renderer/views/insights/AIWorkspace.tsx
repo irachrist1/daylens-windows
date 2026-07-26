@@ -14,7 +14,7 @@ import {
 } from '../../lib/commandSurface'
 import ConnectAI from '../../components/ConnectAI'
 import { ContextPacketInspector } from '../../components/ContextPacketInspector'
-import { consumePendingChatSeed } from '../../lib/aiSeed'
+import { consumePendingChatSeedWhenReady } from '../../lib/aiSeed'
 import { AICompose, type AIComposeHandle } from './AICompose'
 import { ConversationSidebar } from './ConversationSidebar'
 import { MessageList } from './MessageList'
@@ -281,10 +281,14 @@ export default function AIWorkspace() {
   // This view mounts only after navigation, so a seed queued before navigate
   // (Settings stashes it, then navigates here) is read on mount. The old
   // event-only path fired before this listener existed and dropped the prompt.
+  // Consumption waits for the access gate: on a fresh mount settings/hasApiKey
+  // are still null and the loading gate renders with no composer, so consuming
+  // then would destroy the seed for everyone. The one-shot stash means the
+  // effect firing again after the gate resolves cannot double-send.
   useEffect(() => {
-    const pending = consumePendingChatSeed()
+    const pending = consumePendingChatSeedWhenReady(settings, hasApiKey)
     if (pending) seedChat(pending)
-  }, [seedChat])
+  }, [seedChat, settings, hasApiKey])
 
   // Also honour live events for the case where this view is already mounted.
   useEffect(() => {

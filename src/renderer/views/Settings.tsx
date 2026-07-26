@@ -1090,7 +1090,7 @@ function TrackingControlsContent({
         <SettingsRow
           first
           title="Activity capture is off"
-          description="Let Daylens record which apps and pages you use. It never captures screenshots, audio, keystrokes, or message contents."
+          description="Let Daylens record which apps, window titles, and pages you use, and when your machine is active. It never captures private windows, screenshots, audio, keystrokes, message contents, or file contents."
           control={(
             <button
               type="button"
@@ -1122,7 +1122,7 @@ function TrackingControlsContent({
       />
       <SettingsRow
         title="Limit what's tracked"
-        description="Keep specific apps and sites out of your history and AI answers. Excluding one also deletes what was already captured."
+        description="Keep specific apps and sites out of your history and AI answers. Excluding one also deletes its activity history."
         control={<Toggle checked={enabled} onChange={(value) => void persist({ trackingControlsEnabled: value })} />}
       />
       {enabled && (
