@@ -38,6 +38,11 @@ import { getWindowsBrowserHistoryLocations } from './windowsBrowserRegistry'
 import { decideAppCapture, decideSiteCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
 import { getSettings } from './settings'
 import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
+import {
+  historyPathAvailability,
+  isPermissionDeniedError,
+  registerSafariHistoryAccessProvider,
+} from './browserCapability'
 
 // ─── Chrome timestamp arithmetic ─────────────────────────────────────────────
 // Chrome stores timestamps as microseconds since 1601-01-01 00:00:00 UTC.
@@ -460,15 +465,14 @@ const browserStatus = {
 
 // Safari's History.db lives under ~/Library/Safari, which is TCC-protected and
 // requires Full Disk Access (FDA). macOS has no programmatic "is FDA granted?"
-// API, so this is inferred purely from whether the WebKit poll's copyFileSync of
-// History.db succeeds. Starts 'unknown' until the first WebKit poll attempt.
+// API, so this is inferred from filesystem access to History.db: either the
+// pre-poll stat or the WebKit poll's snapshot copy failing with a permission
+// error. Starts 'unknown' until the first check runs.
 let safariHistoryAccessStatus: SafariHistoryAccessStatus = 'unknown'
+registerSafariHistoryAccessProvider(() => safariHistoryAccessStatus)
 
-function isPermissionDeniedError(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException | undefined)?.code
-  if (code === 'EPERM' || code === 'EACCES') return true
-  const message = err instanceof Error ? err.message : String(err)
-  return message.includes('Operation not permitted') || message.includes('EPERM') || message.includes('EACCES')
+function isSafariBundleId(bundleId: string): boolean {
+  return bundleId.toLowerCase().startsWith('com.apple.safari')
 }
 
 // Updates the persistent Safari FDA status and logs the transition once — not on
@@ -853,7 +857,17 @@ async function pollAllInner(): Promise<void> {
   let lastError: string | null = null
 
   for (const browser of browsers) {
-    if (!fs.existsSync(browser.historyPath)) continue
+    const availability = historyPathAvailability(browser.historyPath)
+    if (availability !== 'readable') {
+      // A TCC-blocked Safari History.db stats as denied even though it exists.
+      // Record the state so capture health can name the missing grant instead
+      // of reporting 'unknown' forever; the poller keeps retrying and picks the
+      // history up automatically once Full Disk Access is granted.
+      if (availability === 'denied' && browser.type === 'webkit' && isSafariBundleId(browser.bundleId)) {
+        setSafariHistoryAccessStatus('denied', browser)
+      }
+      continue
+    }
     const controls = trackingControlsStateFromSettings(getSettings())
     if (!decideAppCapture(controls, { bundleId: browser.bundleId, appName: browser.name }).capture) continue
     pollable++

@@ -661,6 +661,42 @@ export function browserPageCoverageNotes(coverage: readonly BrowserPageCoverage[
   return coverage.filter(hasMaterialPageCoverageShortfall).map(browserPageCoverageNoteText)
 }
 
+// Why a browser's unattributed time has no page attached, as one plain
+// sentence for the "No page recorded" row (DEV-238). The reason is derived
+// from capability evidence, never guessed from the gap itself: a missing
+// Full Disk Access grant for Safari, a browser that exposes neither its
+// active tab nor window titles (Dia), or the ordinary case of browser UI
+// and pages history did not record.
+export interface BrowserUnattributedContext {
+  canonicalBrowserId: string
+  displayName: string
+  platform: NodeJS.Platform
+  safariHistoryAccess: 'ok' | 'denied' | 'unknown'
+  attributedSeconds: number
+  hasLiveTabSamples: boolean
+  hasUsefulWindowTitles: boolean
+}
+
+export function browserUnattributedReason(context: BrowserUnattributedContext): string {
+  if (
+    context.platform === 'darwin'
+    && context.canonicalBrowserId === 'safari'
+    && context.safariHistoryAccess !== 'ok'
+    && context.attributedSeconds === 0
+  ) {
+    return 'Daylens cannot read Safari history without Full Disk Access. '
+      + 'Grant it to Daylens in System Settings under Privacy & Security, Full Disk Access, '
+      + 'and Safari pages will start appearing within a minute.'
+  }
+  if (!context.hasLiveTabSamples && !context.hasUsefulWindowTitles) {
+    return `${context.displayName} does not share its active tab or window titles with Daylens, `
+      + 'so pages come from its browsing history alone. Time with no recorded navigation nearby '
+      + 'stays here instead of being guessed.'
+  }
+  return `Time in ${context.displayName} with no page evidence, `
+    + 'such as new tabs, browser UI, or pages its history did not record.'
+}
+
 export interface CorrectedPeakHoursResult {
   peakStart: number
   peakEnd: number

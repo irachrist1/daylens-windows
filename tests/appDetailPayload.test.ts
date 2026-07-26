@@ -118,12 +118,15 @@ test('browser detail reconciles overlapping visits into deduped pages under thei
   // The overlapping YouTube visits claim disjoint slices of Safari's hour —
   // never each other's seconds. That was the whole bug: raw sums let a
   // background tab outgrow the browser itself. As history-sourced visits they
-  // also fill forward: the first video owns its two minutes until the second
-  // video's navigation, and the second — the last recorded navigation — fills
-  // Safari's remaining foreground time.
+  // also fill forward, but YouTube is a media domain and its fill is
+  // evidence-gated (DEV-290): the first video owns its slice until the second
+  // video's navigation, and the second — the last recorded navigation, with
+  // no playback hold or matching title past it — runs only to its stored end
+  // plus the uncorroborated cap (9:16 + 15m), never Safari's whole hour.
+  // First video: 9:04–9:06. Second video: 9:06–9:31. Total 27 minutes.
   const youtube = activity.domains.find((d) => d.domain === 'youtube.com')
   assert.ok(youtube)
-  assert.equal(youtube.totalSeconds, 3360)
+  assert.equal(youtube.totalSeconds, 27 * 60)
   assert.equal(youtube.pages.length, 2)
   const youtubeUrls = youtube.pages.map((p) => p.normalizedUrl).sort()
   assert.deepEqual(youtubeUrls, [youtubeUrl, secondYoutubeUrl].sort())
@@ -136,11 +139,12 @@ test('browser detail reconciles overlapping visits into deduped pages under thei
   assert.equal(github.pages[0].visitCount, 2)
   assert.equal(github.totalSeconds, 240)
 
-  // The full hour reconciles exactly — every foreground second belongs to
-  // exactly one page, and pages never exceed the browser's own hour.
+  // The hour still reconciles exactly — every attributed second belongs to
+  // exactly one page, pages never exceed the browser's own hour, and the
+  // uncorroborated tail past the last video stays an honest remainder.
   assert.equal(activity.totalSeconds, 3600)
-  assert.equal(activity.attributedSeconds, 3600)
-  assert.equal(activity.unattributedSeconds, 0)
+  assert.equal(activity.attributedSeconds, 240 + 27 * 60)
+  assert.equal(activity.unattributedSeconds, 3600 - (240 + 27 * 60))
   db.close()
 })
 

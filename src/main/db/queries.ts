@@ -33,6 +33,7 @@ import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 import { activityCategoryLabel } from '@shared/activityCategories'
+import { policyForHost } from '@shared/domainPolicy'
 import { REAL_ABSENCE_MIN_MS } from '../lib/absenceGuard'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
@@ -100,6 +101,25 @@ const SESSION_OVERLAP_LOOKBACK_MS = 12 * 60 * 60 * 1000
 // (see reconcileWebsiteVisits). Long enough for a whole morning on one course
 // page; anything beyond stays an honest "no page recorded" remainder.
 const HISTORY_FILL_MAX_MS = 4 * 60 * 60 * 1000
+
+// Product decision (DEV-290): a media or feed page (the policyForHost domains -
+// Netflix, YouTube, X, ...) may fill past its stored duration WITHOUT
+// corroborating evidence for at most this long. A titleless browser (Dia)
+// records one Netflix row and then hours of foreground work in its AI panel
+// with no further navigation; an unbounded fill credited that whole dwell to
+// Netflix. Fifteen minutes covers the tail of a clip past the stored estimate
+// while making it impossible for a stale media row to absorb hours. Evidence
+// (a media-playback hold, a window title naming the site, or a same-domain
+// re-visit at watching cadence) restores the full HISTORY_FILL_MAX_MS cap,
+// so a real binge or a long movie still reconciles to its true length.
+const HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS = 15 * 60 * 1000
+
+// Product decision (DEV-290): a same-domain re-visit corroborates the stretch
+// between two media navigations only when they are close enough to be one
+// viewing session. Ninety minutes spans the longest common episode gap
+// (episode length plus a pause); two media rows further apart than this are
+// two separate visits, not proof the page stayed active in between.
+const HISTORY_FILL_MEDIA_REVISIT_BRACKET_MAX_MS = 90 * 60 * 1000
 
 // Columns hydrated into AppSessionRow / clipRowToRange. Selecting them
 // explicitly (instead of SELECT *) keeps these hot range reads from pulling
@@ -2800,6 +2820,17 @@ interface ReconciledVisitCredit {
 // a domain or browser id happens to contain a space or other punctuation.
 const KEY_SEP = String.fromCharCode(0)
 
+// The site-naming token a window title would contain ('netflix' from
+// netflix.com, 'youtube' from music.youtube.com). Cores under four characters
+// (x.com) are rejected: they would match unrelated words and fabricate
+// corroboration.
+function domainCoreToken(domain: string | null | undefined): string | null {
+  if (!domain) return null
+  const parts = domain.trim().toLowerCase().replace(/^www\./, '').split('.')
+  const core = parts.length >= 2 ? parts[parts.length - 2] : parts[0]
+  return core && core.length >= 4 ? core : null
+}
+
 // The shared reconciliation engine behind every website-time total in
 // Daylens. A site (or one of its pages) is a breakdown of the browser's own
 // tracked time, never additional time on top of it (spec: timeline.md S3.0
@@ -2859,8 +2890,13 @@ function reconcileWebsiteVisits(
 
   // Foreground intervals per browser, from the same session records every
   // other total is built on (one truth: sites reconcile with app time).
+  // Titled intervals are kept alongside: a window title naming a site is the
+  // corroborating evidence that lets a media page's history fill run past the
+  // uncorroborated cap (DEV-290).
   const foregroundByBundle = new Map<string, { start: number; end: number }[]>()
   const foregroundByCanonical = new Map<string, { start: number; end: number }[]>()
+  const titledByBundle = new Map<string, { start: number; end: number; title: string }[]>()
+  const titledByCanonical = new Map<string, { start: number; end: number; title: string }[]>()
   const allForeground: { start: number; end: number }[] = []
   for (const session of foregroundSessions ?? getSessionsForRange(db, fromMs, toMs)) {
     const interval = {
@@ -2876,6 +2912,18 @@ function reconcileWebsiteVisits(
       const byCanonical = foregroundByCanonical.get(session.canonicalAppId)
       if (byCanonical) byCanonical.push(interval)
       else foregroundByCanonical.set(session.canonicalAppId, [interval])
+    }
+    const title = session.windowTitle?.trim().toLowerCase()
+    if (title) {
+      const titled = { ...interval, title }
+      const titledBundle = titledByBundle.get(session.bundleId)
+      if (titledBundle) titledBundle.push(titled)
+      else titledByBundle.set(session.bundleId, [titled])
+      if (session.canonicalAppId) {
+        const titledCanonical = titledByCanonical.get(session.canonicalAppId)
+        if (titledCanonical) titledCanonical.push(titled)
+        else titledByCanonical.set(session.canonicalAppId, [titled])
+      }
     }
   }
 
@@ -2904,6 +2952,15 @@ function reconcileWebsiteVisits(
     if (openAbsenceStart != null && ts > openAbsenceStart) absences.push({ start: openAbsenceStart, end: ts })
     openAbsenceStart = null
   }
+  // Passive-media holds (idle_start stamped heldForMediaPlayback): something
+  // was demonstrably playing while the user idled. These are the audible-state
+  // evidence that corroborates a media page's history fill (DEV-290).
+  const mediaHolds: { start: number; end: number }[] = []
+  let openMediaHoldStart: number | null = null
+  const closeMediaHold = (ts: number) => {
+    if (openMediaHoldStart != null && ts > openMediaHoldStart) mediaHolds.push({ start: openMediaHoldStart, end: ts })
+    openMediaHoldStart = null
+  }
   for (const event of getActivityStateEventsForRange(db, fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs)) {
     switch (event.eventType) {
       case 'suspend':
@@ -2911,15 +2968,23 @@ function reconcileWebsiteVisits(
       case 'away_start':
       case 'tracking_paused':
         closeAbsence(event.eventTs)
+        closeMediaHold(event.eventTs)
         openAbsenceStart = event.eventTs
         break
       case 'idle_start': {
         let idleSeconds = 0
+        let heldForMedia = false
         try {
-          idleSeconds = Number(JSON.parse(event.metadataJson || '{}').idleSeconds) || 0
+          const metadata = JSON.parse(event.metadataJson || '{}') as Record<string, unknown>
+          idleSeconds = Number(metadata.idleSeconds) || 0
+          heldForMedia = Boolean(metadata.heldForMediaPlayback)
         } catch { /* malformed metadata reads as idle-from-now */ }
         closeAbsence(event.eventTs)
+        closeMediaHold(event.eventTs)
         openAbsenceStart = event.eventTs - idleSeconds * 1000
+        // Playback covered the whole idle run-up, so the hold backdates the
+        // same way the absence does.
+        if (heldForMedia) openMediaHoldStart = event.eventTs - idleSeconds * 1000
         break
       }
       case 'resume':
@@ -2928,13 +2993,16 @@ function reconcileWebsiteVisits(
       case 'idle_end':
       case 'tracking_resumed':
         closeAbsence(event.eventTs)
+        closeMediaHold(event.eventTs)
         break
       default:
         break
     }
   }
   closeAbsence(toMs)
+  closeMediaHold(toMs)
   absences.sort((a, b) => a.start - b.start)
+  mediaHolds.sort((a, b) => a.start - b.start)
   const untracked: { start: number; end: number }[] = []
   for (const gap of gaps) {
     let cursor = gap.start
@@ -3050,16 +3118,19 @@ function reconcileWebsiteVisits(
     // multi-million-entry array that was then sorted — the dominant cost that
     // froze the Apps view for ~15s on a 30-day browser-heavy range.
     const foregroundPieces: { start: number; end: number }[] = []
+    const titledPieces: { start: number; end: number; title: string }[] = []
     const seenBundleKeys = new Set<string>()
     const seenCanonicalKeys = new Set<string>()
     for (const visit of browserVisits) {
       if (visit.browser_bundle_id && !seenBundleKeys.has(visit.browser_bundle_id)) {
         seenBundleKeys.add(visit.browser_bundle_id)
         foregroundPieces.push(...(foregroundByBundle.get(visit.browser_bundle_id) ?? []))
+        titledPieces.push(...(titledByBundle.get(visit.browser_bundle_id) ?? []))
       }
       if (visit.canonical_browser_id && !seenCanonicalKeys.has(visit.canonical_browser_id)) {
         seenCanonicalKeys.add(visit.canonical_browser_id)
         foregroundPieces.push(...(foregroundByCanonical.get(visit.canonical_browser_id) ?? []))
+        titledPieces.push(...(titledByCanonical.get(visit.canonical_browser_id) ?? []))
       }
     }
     // The corrected read model clips strictly to foreground browser time
@@ -3081,14 +3152,56 @@ function reconcileWebsiteVisits(
     // verified foreground time until the next recorded navigation, bounded by
     // HISTORY_FILL_MAX_MS. Live active-tab samples still claim their seconds
     // first, so this only fills time no better evidence owns.
+    //
+    // Media and feed pages carry a tighter rule (DEV-290): their fill past the
+    // stored duration must be corroborated — by a passive-media hold (audible
+    // playback), a window title naming the site, or a same-domain re-visit at
+    // watching cadence — or it stops at the uncorroborated cap. Without this,
+    // a titleless browser's last-visited Netflix row absorbed hours of
+    // foreground work done in tabs that never produced a navigation.
+    const mediaCorroborationByDomain = new Map<string, { start: number; end: number }[]>()
+    const mediaCorroborationFor = (domain: string): { start: number; end: number }[] => {
+      const cached = mediaCorroborationByDomain.get(domain)
+      if (cached) return cached
+      const core = domainCoreToken(domain)
+      const titleMatches = core
+        ? titledPieces.filter((piece) => piece.title.includes(core))
+        : []
+      const merged = mergeIntervals([...mediaHolds, ...titleMatches])
+      mediaCorroborationByDomain.set(domain, merged)
+      return merged
+    }
+    // Chain the fill limit across corroborating intervals: each piece of
+    // evidence keeps the page's fill alive for one more uncorroborated grace
+    // past its end, up to the hard cap.
+    const corroboratedMediaFillLimit = (domain: string, storedEndMs: number, hardCapMs: number): number => {
+      let limit = storedEndMs + HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS
+      for (const interval of mediaCorroborationFor(domain)) {
+        if (interval.start > limit) break
+        if (interval.end <= storedEndMs) continue
+        limit = Math.max(limit, interval.end + HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS)
+        if (limit >= hardCapMs) return hardCapMs
+      }
+      return Math.min(limit, hardCapMs)
+    }
     const ascendingHistory = [...browserVisits].sort((a, b) => a.visit_time - b.visit_time || a.id - b.id)
     const historyFillEnd = new Map<number, number>()
     for (let index = 0; index < ascendingHistory.length; index++) {
       const visit = ascendingHistory[index]
       if (visit.source === 'active_browser_context') continue
       const storedEndMs = visit.visit_time + visit.duration_sec * 1000
-      const nextStartMs = ascendingHistory[index + 1]?.visit_time ?? Number.POSITIVE_INFINITY
-      const fillEnd = Math.min(nextStartMs, storedEndMs + HISTORY_FILL_MAX_MS)
+      const nextVisit = ascendingHistory[index + 1]
+      const nextStartMs = nextVisit?.visit_time ?? Number.POSITIVE_INFINITY
+      const hardCapMs = storedEndMs + HISTORY_FILL_MAX_MS
+      let fillEnd = Math.min(nextStartMs, hardCapMs)
+      if (policyForHost(visit.domain) !== null) {
+        const bracketedBySameDomainRevisit = nextVisit != null
+          && nextVisit.domain === visit.domain
+          && nextStartMs - storedEndMs <= HISTORY_FILL_MEDIA_REVISIT_BRACKET_MAX_MS
+        if (!bracketedBySameDomainRevisit) {
+          fillEnd = Math.min(fillEnd, corroboratedMediaFillLimit(visit.domain, storedEndMs, hardCapMs))
+        }
+      }
       if (fillEnd > storedEndMs) historyFillEnd.set(visit.id, fillEnd)
     }
     // The observed active tab beats a history record; among equals the later
@@ -3452,6 +3565,25 @@ export function getReconciledDomainIntervals(
     }
   }
   return out
+}
+
+// Whether a browser produced any live active-tab observation in the range.
+// Capability evidence for the coverage reason on unattributed browser time:
+// a browser with zero live samples is running on history corroboration alone.
+export function browserHasLiveTabSamples(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  canonicalBrowserId: string,
+): boolean {
+  const row = db.prepare(`
+    SELECT 1 FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ?
+      AND source = 'active_browser_context'
+      AND (canonical_browser_id = ? OR browser_bundle_id = ?)
+    LIMIT 1
+  `).get(fromMs, toMs, canonicalBrowserId, canonicalBrowserId)
+  return row != null
 }
 
 export interface WebsiteVisitRecord {

@@ -125,13 +125,15 @@ test('overlapping visits of one domain count each second once', () => {
   // Two history rows record the same stretch on one domain. Their slices stay
   // disjoint (never 600+600 over the same minutes), and the later row — the
   // last recorded navigation — fills the browser's remaining foreground time.
-  insertVisit(db, 'x.com', localMs(10, 5), 600)
-  insertVisit(db, 'x.com', localMs(10, 10), 600)
+  // (A neutral work domain: media/feed domains carry the evidence-gated fill
+  // pinned by historyForegroundFill.test.ts and stop earlier by design.)
+  insertVisit(db, 'github.com', localMs(10, 5), 600)
+  insertVisit(db, 'github.com', localMs(10, 10), 600)
 
   const sites = getWebsiteSummariesForRange(db, localMs(10), localMs(11))
-  const x = sites.find((site) => site.domain === 'x.com')
-  assert.ok(x)
-  assert.equal(x.totalSeconds, 3300, '10:05–11:00 partitioned once, never double-counted')
-  assert.equal(x.visitCount, 2)
+  const github = sites.find((site) => site.domain === 'github.com')
+  assert.ok(github)
+  assert.equal(github.totalSeconds, 3300, '10:05–11:00 partitioned once, never double-counted')
+  assert.equal(github.visitCount, 2)
   db.close()
 })

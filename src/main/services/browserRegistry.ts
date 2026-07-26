@@ -443,6 +443,19 @@ export function discoverMacBrowserHistoryLocations(
       [...roots].flatMap((root) => scanForHistoryFiles(root)),
       normalizedPath,
     )
+    // Without Full Disk Access, TCC makes readdir on ~/Library/Safari fail
+    // with EPERM, so the scan sees nothing and Safari used to vanish from
+    // discovery entirely — its history poll never ran and the access state
+    // could never be diagnosed (DEV-238). Safari's history lives at exactly
+    // one canonical path; emit it even when the scan cannot see it and let
+    // the poller distinguish denied from missing.
+    if (
+      application.family === 'webkit'
+      && application.bundleId.toLowerCase() === 'com.apple.safari'
+      && historyPaths.length === 0
+    ) {
+      historyPaths.push(path.join(home, 'Library', 'Safari', 'History.db'))
+    }
     for (const historyPath of historyPaths) {
       if (!historyPathMatchesFamily(historyPath, application.family)) continue
       locations.push({

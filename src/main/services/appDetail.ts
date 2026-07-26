@@ -10,13 +10,16 @@ import type {
 } from '@shared/types'
 import { appDetailRangeKey } from '@shared/appNarrativeContract'
 import {
+  browserHasLiveTabSamples,
   getBrowserActivityBreakdown,
 } from '../db/queries'
 import {
   aggregateAppSummaries,
+  browserUnattributedReason,
   getCorrectedSessionFactsForRange,
   getIgnoredBlockSpansForRange,
 } from './activityFacts'
+import { currentSafariHistoryAccessStatus } from './browserCapability'
 import { localDayBounds, shiftLocalDateString } from '../lib/localDate'
 import {
   artifactIdFor,
@@ -255,10 +258,27 @@ export function getAppDetailPayload(
       excludeSpans: correctionSpans,
       sessions: rawSessions,
     })
+    const unattributedSeconds = Math.max(0, totalSeconds - breakdown.attributedSeconds)
+    // The "No page recorded" row must say why the time has no page, not sit
+    // there as a dead end (DEV-238). The reason comes from capability
+    // evidence: live-tab samples, window titles, and the Safari Full Disk
+    // Access state.
+    const coverageNote = unattributedSeconds > 0
+      ? browserUnattributedReason({
+          canonicalBrowserId: canonicalAppId,
+          displayName,
+          platform: process.platform,
+          safariHistoryAccess: currentSafariHistoryAccessStatus(),
+          attributedSeconds: breakdown.attributedSeconds,
+          hasLiveTabSamples: browserHasLiveTabSamples(db, fromMs, todayTo, canonicalAppId),
+          hasUsefulWindowTitles: sessions.some((session) => usefulWindowTitle(session) != null),
+        })
+      : undefined
     browserActivity = {
       totalSeconds,
       attributedSeconds: breakdown.attributedSeconds,
-      unattributedSeconds: Math.max(0, totalSeconds - breakdown.attributedSeconds),
+      unattributedSeconds,
+      coverageNote,
       domains: breakdown.domains.map((domain) => ({
         domain: domain.domain,
         totalSeconds: domain.totalSeconds,

@@ -123,6 +123,105 @@ test('a live active-tab sample keeps priority over the history fill', () => {
   db.close()
 })
 
+// ─── Media pages: the fill is evidence-gated (DEV-290) ───────────────────────
+// A titleless browser's last-visited media page must never absorb hours of
+// foreground time on the strength of one stale history row. Fill past the
+// stored duration requires corroboration: a passive-media hold, a window
+// title naming the site, or a same-domain re-visit at watching cadence.
+
+const UNCORROBORATED_MEDIA_FILL_SEC = 15 * 60
+
+function seedTitledDiaSession(db: Database.Database, startMs: number, endMs: number, title: string): void {
+  db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES (?, 'Dia', ?, ?, ?, 'browsing', 0, ?, 'Dia', 'dia', ?, 'test', 1)
+  `).run(DIA_BUNDLE, startMs, endMs, Math.round((endMs - startMs) / 1000), title, DIA_BUNDLE)
+}
+
+test('an uncorroborated media row cannot absorb hours of a titleless browser', () => {
+  const db = createProductionTestDatabase()
+  // Four hours of foreground Dia after one Netflix navigation, with no
+  // playback hold, no titles, and no later navigation: the work dwell in
+  // Dia's titleless tabs must stay "no page recorded", not become Netflix.
+  seedDiaSession(db, localMs(20, 0), localMs(24, 0))
+  seedHistoryVisit(db, localMs(20, 0), 30, 'https://netflix.com/watch/81234567', 'Netflix', 'netflix.com')
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].domain, 'netflix.com')
+  assert.equal(summaries[0].totalSeconds, 30 + UNCORROBORATED_MEDIA_FILL_SEC)
+  db.close()
+})
+
+test('a passive-media hold corroborates the media fill for as long as playback held', () => {
+  const db = createProductionTestDatabase()
+  seedDiaSession(db, localMs(20, 0), localMs(24, 0))
+  seedHistoryVisit(db, localMs(20, 0), 30, 'https://netflix.com/watch/81234567', 'Netflix', 'netflix.com')
+  // The user idles at 20:10 (idle detection backdates two minutes) while
+  // Netflix keeps playing, and comes back at 22:30.
+  db.prepare(`
+    INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
+    VALUES (?, 'idle_start', 'tracking', '{"idleSeconds":120,"heldForMediaPlayback":true}'),
+           (?, 'idle_end', 'tracking', '{}')
+  `).run(localMs(20, 10), localMs(22, 30))
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  // Credit runs to the hold's end plus one uncorroborated grace, then stops:
+  // 20:00 through 22:45. The 22:45-24:00 stretch stays unattributed.
+  assert.equal(
+    summaries[0].totalSeconds,
+    Math.round((localMs(22, 45) - localMs(20, 0)) / 1000),
+  )
+  db.close()
+})
+
+test('a window title naming the site corroborates the media fill', () => {
+  const db = createProductionTestDatabase()
+  // The browser reports titles here: two hours titled with the show, then a
+  // titleless tail. Credit follows the title evidence, not the whole session.
+  seedTitledDiaSession(db, localMs(20, 0), localMs(22, 0), 'Stranger Things | Netflix')
+  seedDiaSession(db, localMs(22, 0), localMs(24, 0))
+  seedHistoryVisit(db, localMs(20, 0), 30, 'https://netflix.com/watch/81234567', 'Netflix', 'netflix.com')
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  assert.equal(
+    summaries[0].totalSeconds,
+    Math.round((localMs(22, 15) - localMs(20, 0)) / 1000),
+  )
+  db.close()
+})
+
+test('same-domain re-visits at watching cadence keep the stretch between them', () => {
+  const db = createProductionTestDatabase()
+  seedDiaSession(db, localMs(20, 0), localMs(22, 0))
+  // Two episodes: rows 45 minutes apart bracket the first stretch. The last
+  // row has no evidence past it and stops at the uncorroborated cap.
+  seedHistoryVisit(db, localMs(20, 0), 30, 'https://netflix.com/watch/1', 'Netflix', 'netflix.com')
+  seedHistoryVisit(db, localMs(20, 45), 30, 'https://netflix.com/watch/2', 'Netflix', 'netflix.com')
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  const bracketedSec = Math.round((localMs(20, 45) - localMs(20, 0)) / 1000)
+  const tailSec = 30 + UNCORROBORATED_MEDIA_FILL_SEC
+  assert.equal(summaries[0].totalSeconds, bracketedSec + tailSec)
+  db.close()
+})
+
+test('a non-media page keeps the full corroborated fill (the Coursera morning survives)', () => {
+  const db = createProductionTestDatabase()
+  seedDiaSession(db, localMs(9, 0), localMs(12, 0))
+  seedHistoryVisit(db, localMs(9, 0), 30, 'https://www.coursera.org/learn/ml', 'Supervised ML | Coursera')
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].totalSeconds, Math.round((localMs(12, 0) - localMs(9, 0)) / 1000))
+  db.close()
+})
+
 // ─── Privacy: the fill never weakens the unverifiable-mode rule ──────────────
 
 function snapshot(overrides: Partial<ActiveBrowserWindowSnapshot> = {}): ActiveBrowserWindowSnapshot {

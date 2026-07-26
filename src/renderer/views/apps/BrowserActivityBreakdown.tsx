@@ -199,11 +199,18 @@ export default function BrowserActivityBreakdown({
         </>
       )}
       {activity.unattributedSeconds > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: (domainSplit.work.length > 0 || domainSplit.leisure.length > 0) ? 12 : 0, opacity: 0.75 }}>
-          <span aria-hidden="true" style={{ width: 10 }} />
-          <span aria-hidden="true" style={{ width: 26, height: 26, borderRadius: 7, background: 'var(--color-surface-high)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>—</span>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--color-text-tertiary)' }}>No page recorded</div>
-          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>{formatDuration(activity.unattributedSeconds)}</div>
+        <div style={{ marginTop: (domainSplit.work.length > 0 || domainSplit.leisure.length > 0) ? 12 : 0, opacity: 0.75 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span aria-hidden="true" style={{ width: 10 }} />
+            <span aria-hidden="true" style={{ width: 26, height: 26, borderRadius: 7, background: 'var(--color-surface-high)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>—</span>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--color-text-tertiary)' }}>No page recorded</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>{formatDuration(activity.unattributedSeconds)}</div>
+          </div>
+          {activity.coverageNote && (
+            <div style={{ marginLeft: 46, marginTop: 4, fontSize: 11.5, lineHeight: 1.55, color: 'var(--color-text-tertiary)' }}>
+              {activity.coverageNote}
+            </div>
+          )}
         </div>
       )}
     </section>

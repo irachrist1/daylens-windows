@@ -1563,6 +1563,13 @@ export interface AppDetailPayload {
     totalSeconds: number
     attributedSeconds: number
     unattributedSeconds: number
+    /**
+     * One plain sentence explaining why `unattributedSeconds` has no page
+     * attached (which capability is missing and how to grant it), so the
+     * "No page recorded" row is never a dead end. Present only when there
+     * is unattributed time to explain.
+     */
+    coverageNote?: string
     domains: Array<{
       domain: string
       totalSeconds: number
