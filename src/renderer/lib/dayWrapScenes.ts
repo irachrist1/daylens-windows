@@ -11,7 +11,7 @@
 import type { AppCategory, DayTimelinePayload, DayWrapEntity, TimelineGapSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
-import { inferWorkIntent } from '@shared/workIntent'
+import { inferWorkIntent, workSubjectCandidates } from '@shared/workIntent'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { friendlyDomain, humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { categoryForDomain } from '@shared/domainCategories'
@@ -139,9 +139,11 @@ export interface DayWrapGap {
 export interface DayWrapThread {
   /** The human work name, from the same naming ladder the blocks use. */
   name: string
-  /** How many separate blocks the subject appeared in. */
+  /** How many separate blocks the subject appeared in — as the block's own
+   *  name or as clean secondary evidence (a channel artifact, a workflow). */
   blockCount: number
-  /** Total active seconds across those blocks. */
+  /** Active seconds ONLY across the blocks this subject headlined. A
+   *  secondary appearance proves recurrence, never claims the block's time. */
   seconds: number
   firstMs: number
   lastMs: number
@@ -431,38 +433,54 @@ const THREAD_MIN_SPAN_MS = 3 * 3_600_000
 const MAX_THREADS = 3
 
 function buildDayThreads(blocks: WorkContextBlock[]): DayWrapThread[] {
-  interface Accumulator { name: string; blockCount: number; seconds: number; firstMs: number; lastMs: number; category: AppCategory }
+  interface Accumulator { name: string; blockCount: number; seconds: number; firstMs: number; lastMs: number; category: AppCategory; headlined: boolean }
   const byName = new Map<string, Accumulator>()
   for (const block of blocks) {
     if (effectiveBlockKind(block) !== 'work') continue
-    // The same naming ladder the blocks use: corrected subject → inferred
-    // intent subject → humanized label, every candidate through the shared
-    // sanitize-then-guard gate (so a tool surface or raw artifact never
-    // becomes a thread).
-    const name = workActivityName(block)
-    if (!name) continue
-    const key = name.toLowerCase()
+    // The block's own name comes from the same ladder every surface uses:
+    // corrected subject → inferred intent subject → humanized label, through
+    // the shared sanitize-then-guard gate. Membership additionally counts the
+    // block's clean SECONDARY subjects (workSubjectCandidates: channel
+    // artifacts, workflows) — the daylens Slack channel inside an ML-study
+    // block proves daylens ran through the morning, without claiming its time.
+    const primary = workActivityName(block)
+    const names = new Map<string, string>()
+    if (primary) names.set(primary.toLowerCase(), primary)
+    for (const candidate of workSubjectCandidates(block)) {
+      const cleaned = cleanWorkSubject(candidate)
+      if (!cleaned || looksLikeRawArtifactLabel(cleaned)) continue
+      const display = cap(cleaned)
+      if (!names.has(display.toLowerCase())) names.set(display.toLowerCase(), display)
+    }
     const seconds = blockActiveSeconds(block)
-    const existing = byName.get(key)
-    if (existing) {
-      existing.blockCount += 1
-      existing.seconds += seconds
-      existing.firstMs = Math.min(existing.firstMs, block.startTime)
-      existing.lastMs = Math.max(existing.lastMs, block.endTime)
-    } else {
-      byName.set(key, {
-        name,
-        blockCount: 1,
-        seconds,
-        firstMs: block.startTime,
-        lastMs: block.endTime,
-        category: block.dominantCategory,
-      })
+    for (const [key, display] of names) {
+      const isPrimary = primary !== '' && key === primary.toLowerCase()
+      const existing = byName.get(key)
+      if (existing) {
+        existing.blockCount += 1
+        if (isPrimary) {
+          existing.seconds += seconds
+          existing.headlined = true
+          existing.category = block.dominantCategory
+        }
+        existing.firstMs = Math.min(existing.firstMs, block.startTime)
+        existing.lastMs = Math.max(existing.lastMs, block.endTime)
+      } else {
+        byName.set(key, {
+          name: display,
+          blockCount: 1,
+          seconds: isPrimary ? seconds : 0,
+          firstMs: block.startTime,
+          lastMs: block.endTime,
+          category: block.dominantCategory,
+          headlined: isPrimary,
+        })
+      }
     }
   }
   return [...byName.values()]
     .filter((acc) => acc.blockCount >= THREAD_MIN_BLOCKS && acc.lastMs - acc.firstMs >= THREAD_MIN_SPAN_MS)
-    .sort((left, right) => right.seconds - left.seconds)
+    .sort((left, right) => right.blockCount - left.blockCount || right.seconds - left.seconds)
     .slice(0, MAX_THREADS)
     .map((acc) => ({
       name: acc.name,

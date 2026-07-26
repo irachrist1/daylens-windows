@@ -373,17 +373,19 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
   // hours is the day's real shape (day-recap-and-analysis.md "Day threads").
   const thread = facts.threads[0]
   if (thread) {
+    // The stat is the RETURN COUNT, not a duration: a thread's membership
+    // includes blocks where the subject was secondary evidence, and those
+    // blocks' time belongs to their own headline work.
     pushMiddle({
       id: 'daythread', kind: 'stat', kicker: 'The through-line',
       stat: {
-        value: hm(thread.seconds),
-        seconds: thread.seconds,
-        sublabel: `${thread.name} · ${thread.blockCount} separate blocks`,
+        value: String(thread.blockCount),
+        sublabel: `separate blocks of ${thread.name} · ${thread.fromClock} to ${thread.toClock}`,
       },
       fallbackLine: `${thread.name} ran through the day: ${thread.blockCount} separate blocks between ${thread.fromClock} and ${thread.toClock}.`,
       ask: `${lowerName(thread.name)} was not one sitting: it came back in ${thread.blockCount} separate blocks between ${thread.fromClock} and ${thread.toClock}. One line on that shape — the thing the day kept returning to — without judging the interleaving as good or bad.`,
       factsNote: facts.threads.map((t) =>
-        `${t.name}: ${t.blockCount} blocks, ${hm(t.seconds)}, ${t.fromClock} to ${t.toClock}`,
+        `${t.name}: ${t.blockCount} blocks, ${t.fromClock} to ${t.toClock}${t.seconds >= 5 * 60 ? `, ${hm(t.seconds)} where it was the main work` : ''}`,
       ).join('; '),
     })
   }

@@ -223,7 +223,9 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
             thread: t.name,
             returnedToIn: `${t.blockCount} separate blocks`,
             between: `${t.fromClock} and ${t.toClock}`,
-            time: formatHm(t.seconds),
+            // Time only where the thread was the block's own headline work; a
+            // secondary appearance proves recurrence, never claims the time.
+            ...(t.seconds >= 5 * 60 ? { timeAsMainWork: formatHm(t.seconds) } : {}),
           })),
         }
       : {}),

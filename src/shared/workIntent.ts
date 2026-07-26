@@ -665,6 +665,34 @@ function rationaleFor(
   return reasons.slice(0, 3)
 }
 
+/** Every clean subject this block's evidence names: the chosen intent subject
+ *  plus the secondary candidates from the same ladder (document/channel
+ *  artifacts, workflow labels). Day threads use this for MEMBERSHIP — a
+ *  subject that only headlines a few blocks can still run through others as
+ *  secondary evidence ("daylens (Channel)" inside an ML-study block). Every
+ *  candidate passes the same guards as the headline subject, so a tool
+ *  surface or raw artifact can never join a thread. */
+export function workSubjectCandidates(block: BlockLike): string[] {
+  if (effectiveBlockKind(block) !== 'work') return []
+  const out = new Map<string, string>()
+  const add = (label: string | null | undefined) => {
+    const text = usefulText(label)
+    if (!text || looksGenericSubject(text) || isDisqualifiedWorkSubject(text)) return
+    // A breadcrumb or joined tab title ("Daylens v2 › Issues") is raw page
+    // evidence, not a subject a person would name the work by.
+    if (/[›»|]/.test(text)) return
+    const humanized = humanizeTitle(text) ?? text
+    if (!out.has(humanized.toLowerCase())) out.set(humanized.toLowerCase(), humanized)
+  }
+  add(inferWorkIntent(block).subject)
+  for (const artifact of [...block.documentRefs, ...block.topArtifacts]) {
+    const candidate = subjectFromArtifact(artifact)
+    if (candidate) add(candidate.label)
+  }
+  for (const workflow of block.workflowRefs) add(workflow.label)
+  return [...out.values()]
+}
+
 export function inferWorkIntent(block: BlockLike): WorkIntentSummary {
   // Leisure / personal / idle episodes carry no intent role and no subject —
   // watching a documentary is never "execution on Free Movies". They are named
