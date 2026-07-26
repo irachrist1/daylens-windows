@@ -97,9 +97,19 @@ interface TraceErrorEvent {
   phase: string
 }
 
+// The rendered context packet the agent turn answered from — recorded so the
+// eval judge can treat packet statements as authoritative evidence instead of
+// grading packet-derived facts as fabrication.
+interface TraceContextPacketEvent {
+  kind: 'context_packet'
+  rendered: string
+  itemCount: number
+}
+
 export type TraceEvent =
   | TraceTurnEvent
   | TraceToolResultEvent
+  | TraceContextPacketEvent
   | TraceRouterEvent
   | TraceRouterDecisionEvent
   | TraceProsePassEvent
