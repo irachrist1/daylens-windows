@@ -32,7 +32,7 @@ import {
 import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
-import { activityCategoryLabel } from '@shared/activityCategories'
+import { activityCategoryLabel, canonicalAppCategory } from '@shared/activityCategories'
 import { REAL_ABSENCE_MIN_MS } from '../lib/absenceGuard'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
@@ -203,8 +203,13 @@ function resolvedSessionCategory(
 ): AppCategory {
   const override = categoryOverrideFor(row, overrides, identity)
   if (override) return override
-  if (row.category && row.category !== 'uncategorized') return row.category
-  return identity.defaultCategory ?? 'uncategorized'
+  // Canonicalize on read: rows written before the category vocabulary settled
+  // carry display forms ("AI Tools") that every kind rule would misread. The
+  // v67 migration normalizes stored rows; this guards restored old backups
+  // and any other un-migrated source of session rows.
+  const stored = canonicalAppCategory(row.category)
+  if (stored !== 'uncategorized') return stored
+  return identity.defaultCategory ? canonicalAppCategory(identity.defaultCategory) : 'uncategorized'
 }
 
 function appLevelCategoryForIdentity(

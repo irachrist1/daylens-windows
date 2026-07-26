@@ -11,6 +11,7 @@ import {
 } from '../services/suppliedMemory'
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
+import { canonicalAppCategory } from '../../shared/activityCategories'
 
 /**
  * Versioned migration system for Daylens.
@@ -3215,6 +3216,82 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_timeline_clarification_skips_date
           ON timeline_clarification_skips (date);
       `)
+    },
+  },
+  {
+    version: 67,
+    description:
+      'Canonicalize legacy display-form activity categories. Rows written before the category vocabulary settled carry display labels ("AI Tools", "Browsing", "Development", "Uncategorized"); every kind/intent rule compares canonical enum values, so those rows silently resolved to the wrong work-kind — hours of development on a historical day counted as "personal" and never reached the day wrap\'s work activities. Normalizes every stored category column plus the JSON copies embedded in timeline_blocks, and drops the derived day_snapshots cache (its work/leisure/personal splits were frozen from the broken vocabulary; snapshots re-freeze lazily).',
+    up: () => {
+      const db = getDb()
+
+      const normalizeColumn = (table: string, column: string) => {
+        const exists = db.prepare(
+          `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`,
+        ).get(table)
+        if (!exists) return
+        const rows = db.prepare(`SELECT DISTINCT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).all() as Array<{ value: string }>
+        for (const { value } of rows) {
+          const canonical = canonicalAppCategory(value)
+          if (canonical !== value) {
+            db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(canonical, value)
+          }
+        }
+      }
+      normalizeColumn('app_sessions', 'category')
+      normalizeColumn('apps', 'category')
+      normalizeColumn('category_overrides', 'category')
+      normalizeColumn('app_identities', 'default_category')
+      normalizeColumn('workflow_signatures', 'dominant_category')
+      normalizeColumn('timeline_blocks', 'dominant_category')
+      normalizeColumn('live_app_session_snapshot', 'category')
+
+      // The JSON copies on each block: category_distribution_json keys (a
+      // single row can mix vocabularies — {"Development": …, "development": …}
+      // — so colliding keys SUM), and evidence_summary_json apps[].category.
+      const blocks = db.prepare(
+        `SELECT id, category_distribution_json, evidence_summary_json FROM timeline_blocks`,
+      ).all() as Array<{ id: string; category_distribution_json: string; evidence_summary_json: string }>
+      const updateBlock = db.prepare(
+        `UPDATE timeline_blocks SET category_distribution_json = ?, evidence_summary_json = ? WHERE id = ?`,
+      )
+      for (const block of blocks) {
+        let changed = false
+        let distributionJson = block.category_distribution_json
+        try {
+          const distribution = JSON.parse(block.category_distribution_json) as Record<string, number>
+          const normalized: Record<string, number> = {}
+          for (const [key, seconds] of Object.entries(distribution)) {
+            const canonical = canonicalAppCategory(key)
+            if (canonical !== key) changed = true
+            normalized[canonical] = (normalized[canonical] ?? 0) + (typeof seconds === 'number' ? seconds : 0)
+          }
+          if (changed) distributionJson = JSON.stringify(normalized)
+        } catch { /* malformed JSON: leave the row as it was */ }
+
+        let evidenceJson = block.evidence_summary_json
+        try {
+          const evidence = JSON.parse(block.evidence_summary_json) as { apps?: Array<{ category?: string }> }
+          let evidenceChanged = false
+          for (const app of evidence.apps ?? []) {
+            if (typeof app.category === 'string') {
+              const canonical = canonicalAppCategory(app.category)
+              if (canonical !== app.category) {
+                app.category = canonical
+                evidenceChanged = true
+              }
+            }
+          }
+          if (evidenceChanged) {
+            evidenceJson = JSON.stringify(evidence)
+            changed = true
+          }
+        } catch { /* malformed JSON: leave the row as it was */ }
+
+        if (changed) updateBlock.run(distributionJson, evidenceJson, block.id)
+      }
+
+      db.exec(`DELETE FROM day_snapshots`)
     },
   },
 ]

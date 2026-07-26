@@ -33,6 +33,7 @@ const HOST_RULES: Map<string, DomainPolicyCategory> = new Map([
   ['spotify.com', 'entertainment'],
   ['soundcloud.com', 'entertainment'],
   ['vimeo.com', 'entertainment'],
+  ['goojara.to', 'entertainment'],
 ])
 
 function normalizeHost(host: string | null | undefined): string | null {
