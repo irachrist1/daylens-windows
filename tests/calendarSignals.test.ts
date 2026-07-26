@@ -200,3 +200,38 @@ test('parsed events satisfy the CalendarEventSignal shape', () => {
   assert.equal(typeof typed.durationMinutes, 'number')
   assert.ok(typed.attendeeCount === null || typeof typed.attendeeCount === 'number')
 })
+
+// ─── Unavailable vs "ran, empty" (the scan-ledger contract) ──────────────────
+// The scan ledger (externalSignals.ts) may only remember a day as "collected,
+// empty" when a source actually ran. An unreachable source must THROW so a
+// user who installs icalBuddy later can still enrich historical days.
+
+import { collectCalendarEvents } from '../src/main/services/calendarSignals.ts'
+
+const onMac = process.platform === 'darwin'
+
+test('a missing icalBuddy binary throws — never "collected, empty"', { skip: !onMac }, async () => {
+  await assert.rejects(collectCalendarEvents('2026-04-03', { resolveBinary: () => null }))
+})
+
+test('an icalBuddy subprocess failure throws — the day stays collectable', { skip: !onMac }, async () => {
+  await assert.rejects(collectCalendarEvents('2026-04-03', {
+    resolveBinary: () => '/fake/icalBuddy',
+    run: async () => null, // execFileP resolves null on error/timeout
+  }))
+})
+
+test('a successful run with zero events returns null: a real answer, safe to ledger', { skip: !onMac }, async () => {
+  const result = await collectCalendarEvents('2026-04-03', {
+    resolveBinary: () => '/fake/icalBuddy',
+    run: async () => '',
+  })
+  assert.equal(result, null)
+})
+
+test('a malformed date never reaches a subprocess', async () => {
+  const result = await collectCalendarEvents('not-a-date', {
+    resolveBinary: () => { throw new Error('must not be called') },
+  })
+  assert.equal(result, null)
+})

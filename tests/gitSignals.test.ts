@@ -65,3 +65,14 @@ test('strips the shapes the blind review flagged (backslash paths, ticket branch
   assert.equal(stripPathsAndBranches('close jira/PROJ-42 finally'), 'close finally')
   assert.equal(stripPathsAndBranches('see https://github.com/acme/repo/pull/123 for context'), 'see for context')
 })
+
+// ─── Unavailable vs "ran, empty" (the scan-ledger contract) ──────────────────
+// The scan ledger (externalSignals.ts) may only remember a day as "collected,
+// empty" when git actually ran; a missing/unresponsive git must THROW so an
+// unchecked historical day stays collectable.
+
+import { collectGitActivity } from '../src/main/services/gitSignals.ts'
+
+test('collectGitActivity throws when git is unavailable — never "collected, empty"', async () => {
+  await assert.rejects(collectGitActivity('2026-04-03', { probeGit: async () => null }))
+})

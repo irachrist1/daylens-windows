@@ -84,11 +84,12 @@ export function getExternalSignal<T>(
 // ─── Scan ledger ──────────────────────────────────────────────────────────────
 // external_signals only ever stores NON-EMPTY connector results, so on its own
 // it cannot distinguish "collected, nothing found" from "never collected". The
-// scan ledger records that a connector RAN TO COMPLETION for a finished (past)
-// day, even when it found nothing — without it, on-demand backfill would re-run
+// scan ledger records that a connector RAN TO COMPLETION for a settled day,
+// even when it found nothing — without it, on-demand backfill would re-run
 // git/icalBuddy on every wrap regeneration of a commit-less historical day.
-// Live days are never marked: an empty morning says nothing about the finished
-// day, and the today/yesterday refresh cadence already covers them.
+// Only a connector that genuinely ran and came back empty is ledgered: an
+// unavailable or failed connector THROWS (see gitSignals/calendarSignals) and
+// is never marked, so installing icalBuddy later still enriches old days.
 
 export function recordExternalSignalScan(
   db: Database.Database,
@@ -101,7 +102,7 @@ export function recordExternalSignalScan(
       VALUES (?, ?, ?)
       ON CONFLICT(date, source) DO UPDATE SET scanned_at = excluded.scanned_at
     `).run(date, source, Date.now())
-  } catch { /* pre-v67 DB: no ledger — collection stays re-runnable, never an error */ }
+  } catch { /* pre-v68 DB: no ledger — collection stays re-runnable, never an error */ }
 }
 
 export function hasExternalSignalScan(
@@ -199,12 +200,24 @@ export async function collectExternalSignals(
       if (options.force) deleteExternalSignal(db, date, source)
     }
 
-    // A connector that ran to completion for a FINISHED day is remembered in
-    // the scan ledger even when empty, so on-demand backfill never re-runs it.
-    // A connector that THREW is not marked — a transient failure stays
-    // retryable on the next wrap or refresh.
+    // A connector that ran to completion and found nothing is remembered in
+    // the scan ledger, so on-demand backfill never re-runs it. A connector
+    // that THREW (tool missing, subprocess timeout/error) is not marked — it
+    // stays retryable, so a tool installed later still enriches old days.
+    //
+    // Only dates STRICTLY OLDER than yesterday enter the ledger. Today and
+    // yesterday stay on the refresh cadence: yesterday's data can still be
+    // arriving (commits fetched this morning from another machine, a calendar
+    // store that syncs after wake), and ledgering its first empty completion
+    // would freeze that wrap empty forever.
+    //
+    // The focus scan is recorded regardless of which `focus:<app>` toggles are
+    // on — intentionally: enabling a toggle later does not re-open settled
+    // days (the ledger records that the connector ran under the settings of
+    // the day it was scanned; a forced refresh bypasses it).
+    const ledgerCutoff = shiftLocalDateString(localDateString(), -1)
     const markScanned = (source: ExternalSignalSource) => {
-      if (date < localDateString()) recordExternalSignalScan(db, date, source)
+      if (date < ledgerCutoff) recordExternalSignalScan(db, date, source)
     }
 
     if (options.force || !isFresh(db, date, 'git')) {

@@ -6,10 +6,14 @@
 // turns "4 hours in Cursor" into "wrote 9 commits to the billing service and
 // opened a PR."
 //
-// Everything here is best-effort and silent: no git, no repos, no gh, a slow
-// filesystem — every failure path returns null/empty and the wrap proceeds
-// without the signal. Local reads only; the single network touch is gh, which
-// is the user's own authenticated CLI.
+// Local reads only; the single network touch is gh, which is the user's own
+// authenticated CLI. The connector's result contract distinguishes two very
+// different "nothing"s for the scan ledger (externalSignals.ts): git being
+// UNAVAILABLE throws (the day was never actually checked and stays
+// collectable), while a day with no commits and no PRs returns null ("ran,
+// found nothing" — safe to remember as empty). The caller
+// (collectExternalSignals) catches the throw and the wrap proceeds without
+// the signal either way.
 
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
@@ -216,10 +220,17 @@ async function ghPRActivity(date: string): Promise<GitPRActivity[]> {
 }
 
 /** The day's git story: repos touched, commit counts and subjects, PR activity.
- *  Null when git isn't installed or nothing was found. */
-export async function collectGitActivity(date: string): Promise<GitActivitySignal | null> {
-  const gitVersion = await exec('git', ['--version'], 2_000)
-  if (!gitVersion) return null
+ *  Null when the day genuinely has no commits and no PR activity; THROWS when
+ *  git itself is unavailable (not installed, or the probe timed out), so the
+ *  scan ledger never remembers an unchecked day as "collected, empty".
+ *  `probeGit` is injectable so the unavailable path is testable without
+ *  uninstalling git. */
+export async function collectGitActivity(
+  date: string,
+  opts: { probeGit?: () => Promise<string | null> } = {},
+): Promise<GitActivitySignal | null> {
+  const gitVersion = await (opts.probeGit ?? (() => exec('git', ['--version'], 2_000)))()
+  if (!gitVersion) throw new Error('git unavailable: not installed or probe timed out')
 
   const repos = findGitRepos()
   const activities: GitRepoActivity[] = []

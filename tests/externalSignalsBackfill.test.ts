@@ -16,7 +16,8 @@ import {
   runExternalSignalBackfill,
   type CollectExternalSignalsDeps,
 } from '../src/main/services/externalSignals.ts'
-import { localDateString } from '../src/main/lib/localDate.ts'
+import { collectCalendarEvents } from '../src/main/services/calendarSignals.ts'
+import { localDateString, shiftLocalDateString } from '../src/main/lib/localDate.ts'
 import type { FocusAppSignal, GitActivitySignal } from '../src/shared/types.ts'
 
 // A finished day far behind the rolling today/yesterday window.
@@ -119,6 +120,23 @@ test('a live day never records a scan: the finished day can still collect tomorr
   db.close()
 })
 
+test('yesterday is never ledgered: late-arriving data can still enter its wrap', async () => {
+  const db = makeDb()
+  const yesterday = shiftLocalDateString(localDateString(), -1)
+  const empty = countingDeps(db)
+  await ensureExternalSignalsForDate(db, yesterday, { deps: empty })
+  assert.equal(hasExternalSignalScan(db, yesterday, 'git'), false)
+  assert.equal(hasExternalSignalScan(db, yesterday, 'calendar'), false)
+
+  // The next pass re-collects — commits fetched this morning from another
+  // machine, or a calendar store that synced after wake, still land.
+  const arriving = countingDeps(db, { git: async () => GIT_SIGNAL })
+  await ensureExternalSignalsForDate(db, yesterday, { deps: arriving })
+  assert.equal(arriving.calls.git, 1)
+  assert.equal(getExternalSignal<GitActivitySignal>(db, yesterday, 'git')?.payload.totalCommits, 73)
+  db.close()
+})
+
 // ─── Disabled connectors ──────────────────────────────────────────────────────
 
 test('without current consent no connector runs and nothing is marked scanned', async () => {
@@ -178,12 +196,32 @@ test('a hanging collection is bounded: the wrap proceeds, the rows land in the b
   db.close()
 })
 
-test('a pre-v67 DB without the scan ledger still backfills, just without the empty-day memo', async () => {
+test('a pre-v68 DB without the scan ledger still backfills, just without the empty-day memo', async () => {
   const db = makeDb(false)
   const deps = countingDeps(db, { git: async () => GIT_SIGNAL })
   await ensureExternalSignalsForDate(db, PAST_DATE, { deps })
   assert.equal(getExternalSignal<GitActivitySignal>(db, PAST_DATE, 'git')?.payload.totalCommits, 73)
   assert.equal(hasExternalSignalScan(db, PAST_DATE, 'calendar'), false, 'no ledger reads as never-scanned, never an error')
+  db.close()
+})
+
+test('real connector chain: missing icalBuddy does NOT ledger, a genuine empty run does', { skip: process.platform !== 'darwin' }, async () => {
+  const db = makeDb()
+  // icalBuddy missing → collectCalendarEvents throws → the day stays
+  // collectable: installing icalBuddy later can still enrich it.
+  const unavailable = countingDeps(db)
+  unavailable.collectCalendar = (date) => collectCalendarEvents(date, { resolveBinary: () => null })
+  await ensureExternalSignalsForDate(db, PAST_DATE, { deps: unavailable })
+  assert.equal(hasExternalSignalScan(db, PAST_DATE, 'calendar'), false, 'an unchecked day is never remembered as empty')
+
+  // icalBuddy present, ran, printed nothing → a real answer, ledgered.
+  const emptyRun = countingDeps(db)
+  emptyRun.collectCalendar = (date) => collectCalendarEvents(date, {
+    resolveBinary: () => '/fake/icalBuddy',
+    run: async () => '',
+  })
+  await ensureExternalSignalsForDate(db, PAST_DATE, { deps: emptyRun })
+  assert.ok(hasExternalSignalScan(db, PAST_DATE, 'calendar'), 'a run that happened and found nothing is remembered')
   db.close()
 })
 
