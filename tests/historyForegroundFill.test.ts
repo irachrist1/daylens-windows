@@ -211,6 +211,76 @@ test('same-domain re-visits at watching cadence keep the stretch between them', 
   db.close()
 })
 
+test('a Spotify hold in another app cannot corroborate a stale Netflix row', () => {
+  const db = createProductionTestDatabase()
+  // Dia foreground 20:00-21:00 with a stale Netflix row, then the user
+  // switches to Spotify and idles while music plays (21:10-22:50 hold), then
+  // returns to Dia 23:00-24:00. The hold belongs to Spotify's foreground, not
+  // Dia's, so it must not chain the Netflix fill into the later Dia stretch.
+  seedDiaSession(db, localMs(20, 0), localMs(21, 0))
+  db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES ('com.spotify.client', 'Spotify', ?, ?, ?, 'entertainment', 0, 'Spotify', 'Spotify',
+      'spotify', 'com.spotify.client', 'test', 1)
+  `).run(localMs(21, 0), localMs(23, 0), 2 * 3600)
+  seedDiaSession(db, localMs(23, 0), localMs(24, 0))
+  seedHistoryVisit(db, localMs(20, 0), 30, 'https://netflix.com/watch/81234567', 'Netflix', 'netflix.com')
+  db.prepare(`
+    INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
+    VALUES (?, 'idle_start', 'tracking', '{"idleSeconds":120,"heldForMediaPlayback":true}'),
+           (?, 'idle_end', 'tracking', '{}')
+  `).run(localMs(21, 12), localMs(22, 50))
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].domain, 'netflix.com')
+  assert.equal(summaries[0].totalSeconds, 30 + UNCORROBORATED_MEDIA_FILL_SEC)
+  db.close()
+})
+
+test('a hold inside a title-producing browser must name the site (Zoom call cannot vouch for YouTube)', () => {
+  const db = createProductionTestDatabase()
+  // The browser reports titles, and they say the user sat in a Zoom web call
+  // for two hours. A stale YouTube row before the call must not ride the
+  // call's playback hold; a titled browser corroborates only by naming the
+  // site.
+  seedTitledDiaSession(db, localMs(10, 0), localMs(12, 0), 'Zoom Meeting - Weekly sync')
+  seedHistoryVisit(db, localMs(10, 0), 30, 'https://youtube.com/watch?v=1', 'A video', 'youtube.com')
+  db.prepare(`
+    INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
+    VALUES (?, 'idle_start', 'tracking', '{"idleSeconds":120,"heldForMediaPlayback":true}'),
+           (?, 'idle_end', 'tracking', '{}')
+  `).run(localMs(10, 10), localMs(11, 50))
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].domain, 'youtube.com')
+  assert.equal(summaries[0].totalSeconds, 30 + UNCORROBORATED_MEDIA_FILL_SEC)
+  db.close()
+})
+
+test('a short-core domain still earns title corroboration through its brand pattern', () => {
+  const db = createProductionTestDatabase()
+  // x.com's naming core is one letter, so the generic token match can never
+  // fire; the brand table ("Home / X", "twitter") must carry it instead
+  // during a genuinely attended session.
+  seedTitledDiaSession(db, localMs(14, 0), localMs(14, 45), 'Home / X')
+  seedDiaSession(db, localMs(14, 45), localMs(16, 0))
+  seedHistoryVisit(db, localMs(14, 0), 30, 'https://x.com/home', 'Home / X', 'x.com')
+
+  const summaries = getCorrectedWebsiteSummariesForRange(db, DAY_FROM, DAY_TO)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].domain, 'x.com')
+  // Corroborated through 14:45 plus one grace, honest remainder after 15:00.
+  assert.equal(
+    summaries[0].totalSeconds,
+    Math.round((localMs(15, 0) - localMs(14, 0)) / 1000),
+  )
+  db.close()
+})
+
 test('a non-media page keeps the full corroborated fill (the Coursera morning survives)', () => {
   const db = createProductionTestDatabase()
   seedDiaSession(db, localMs(9, 0), localMs(12, 0))

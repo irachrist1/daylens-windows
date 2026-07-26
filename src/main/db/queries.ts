@@ -2820,15 +2820,27 @@ interface ReconciledVisitCredit {
 // a domain or browser id happens to contain a space or other punctuation.
 const KEY_SEP = String.fromCharCode(0)
 
-// The site-naming token a window title would contain ('netflix' from
-// netflix.com, 'youtube' from music.youtube.com). Cores under four characters
-// (x.com) are rejected: they would match unrelated words and fabricate
-// corroboration.
-function domainCoreToken(domain: string | null | undefined): string | null {
-  if (!domain) return null
+// Domains whose naming core is too short for a safe substring match get an
+// explicit brand pattern instead: x.com pages title as "Home / X" (or still
+// say Twitter), and max.com as HBO Max. Consulted before the length guard so
+// short-core sites can still earn title corroboration.
+const SHORT_CORE_TITLE_PATTERNS: Record<string, RegExp> = {
+  'x.com': /\/ x(?![a-z0-9])|twitter/,
+  'max.com': /\bhbo\b|\bmax\b/,
+}
+
+// Whether a lowercased window title names the visit's site: the explicit
+// brand pattern for short-core domains, otherwise the site-naming token the
+// title would contain ('netflix' from netflix.com, 'youtube' from
+// music.youtube.com). Remaining cores under four characters are rejected —
+// they would match unrelated words and fabricate corroboration.
+function titleMatchesDomain(title: string, domain: string): boolean {
   const parts = domain.trim().toLowerCase().replace(/^www\./, '').split('.')
+  const registrable = parts.slice(-2).join('.')
+  const shortCorePattern = SHORT_CORE_TITLE_PATTERNS[registrable]
+  if (shortCorePattern) return shortCorePattern.test(title)
   const core = parts.length >= 2 ? parts[parts.length - 2] : parts[0]
-  return core && core.length >= 4 ? core : null
+  return core.length >= 4 && title.includes(core)
 }
 
 // The shared reconciliation engine behind every website-time total in
@@ -3159,15 +3171,39 @@ function reconcileWebsiteVisits(
     // watching cadence — or it stops at the uncorroborated cap. Without this,
     // a titleless browser's last-visited Netflix row absorbed hours of
     // foreground work done in tabs that never produced a navigation.
+    //
+    // Holds are scoped, not global: heldForMediaPlayback fires for playback
+    // from ANY app, so a Spotify session's hold must not corroborate a stale
+    // Netflix row in another browser. A hold counts only inside this
+    // browser's own foreground time, and only when the browser produces no
+    // window titles at all — a title-producing browser must name the site
+    // (a Zoom-call hold inside Chrome cannot vouch for YouTube). Titleless
+    // browsers keep bare-hold corroboration because they have nothing better.
+    const intersectIntervals = (
+      a: { start: number; end: number }[],
+      b: { start: number; end: number }[],
+    ): { start: number; end: number }[] => {
+      const out: { start: number; end: number }[] = []
+      let i = 0
+      let j = 0
+      while (i < a.length && j < b.length) {
+        const start = Math.max(a[i].start, b[j].start)
+        const end = Math.min(a[i].end, b[j].end)
+        if (end > start) out.push({ start, end })
+        if (a[i].end <= b[j].end) i++
+        else j++
+      }
+      return out
+    }
+    const scopedHolds = titledPieces.length === 0
+      ? intersectIntervals(mediaHolds, foregroundOnly)
+      : []
     const mediaCorroborationByDomain = new Map<string, { start: number; end: number }[]>()
     const mediaCorroborationFor = (domain: string): { start: number; end: number }[] => {
       const cached = mediaCorroborationByDomain.get(domain)
       if (cached) return cached
-      const core = domainCoreToken(domain)
-      const titleMatches = core
-        ? titledPieces.filter((piece) => piece.title.includes(core))
-        : []
-      const merged = mergeIntervals([...mediaHolds, ...titleMatches])
+      const titleMatches = titledPieces.filter((piece) => titleMatchesDomain(piece.title, domain))
+      const merged = mergeIntervals([...scopedHolds, ...titleMatches])
       mediaCorroborationByDomain.set(domain, merged)
       return merged
     }

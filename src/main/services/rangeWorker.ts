@@ -11,6 +11,7 @@ import { app } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { getSettings } from './settings'
+import { currentSafariHistoryAccessStatus } from './browserCapability'
 import { isRealDayHarness } from '../lib/realDayHarness'
 import type { AppSettings, LiveSession } from '@shared/types'
 
@@ -144,7 +145,16 @@ async function runWorkerOp<T>(payload: Record<string, unknown>): Promise<T> {
   const proc = ensureWorker()
   if (!proc) throw new Error('range worker unavailable')
   const id = _nextId++
-  const message = { id, settings: settingsSnapshot(), ...payload }
+  const message = {
+    id,
+    settings: settingsSnapshot(),
+    // The worker subprocess never runs the history poller, so it cannot know
+    // the Safari Full Disk Access state on its own; ship the main process's
+    // current value with each request (same pattern as the settings snapshot)
+    // so a multi-day app detail's coverage note matches the inline 1-day path.
+    safariHistoryAccess: currentSafariHistoryAccessStatus(),
+    ...payload,
+  }
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       _pending.delete(id)

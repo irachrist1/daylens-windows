@@ -12,13 +12,15 @@
 import Database from 'better-sqlite3'
 import { getCorrectedAppSummariesForRange } from '../../../src/main/services/activityFacts'
 import { getAppDetailPayload } from '../../../src/main/services/appDetail'
+import { registerSafariHistoryAccessProvider } from '../../../src/main/services/browserCapability'
 import { primeWorkerSettingsOverride } from '../../../src/main/services/settings'
-import type { AppSettings, LiveSession } from '../../../src/shared/types'
+import type { AppSettings, LiveSession, SafariHistoryAccessStatus } from '../../../src/shared/types'
 
 interface WorkerRequest {
   id: number
   op: 'appSummaries' | 'appDetail'
   settings?: Partial<AppSettings>
+  safariHistoryAccess?: SafariHistoryAccessStatus
   fromMs?: number
   toMs?: number
   canonicalAppId?: string
@@ -41,6 +43,11 @@ function handle(request: WorkerRequest): unknown {
   // Each request carries the caller's current settings snapshot so facts
   // computed here (focusApps → isFocused) match the main process exactly.
   primeWorkerSettingsOverride(request.settings ?? {})
+  // Same for the Safari Full Disk Access state: only the main process runs
+  // the history poller, so the coverage note on a browser's unattributed time
+  // must read the shipped value, never a locally stale 'unknown'.
+  const safariHistoryAccess = request.safariHistoryAccess ?? 'unknown'
+  registerSafariHistoryAccessProvider(() => safariHistoryAccess)
   switch (request.op) {
     case 'appSummaries':
       return getCorrectedAppSummariesForRange(
