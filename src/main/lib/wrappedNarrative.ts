@@ -113,8 +113,8 @@ export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment
     entities: (facts.entities ?? []).map((e) => [e.type, e.name.toLowerCase(), bucket(e.seconds)]),
     // Gap and thread facts are day facts like any other: a gap appearing (or a
     // calendar match resolving) or a thread forming reflows the wrap.
-    gaps: facts.gaps.map((g) => [g.kind, bucket(Math.round((g.toMs - g.fromMs) / 1000)), g.matchesEvent?.toLowerCase() ?? null]),
-    threads: facts.threads.map((t) => [t.name.toLowerCase(), t.blockCount, bucket(t.seconds)]),
+    gaps: (facts.gaps ?? []).map((g) => [g.kind, bucket(Math.round((g.toMs - g.fromMs) / 1000)), g.matchesEvent?.toLowerCase() ?? null]),
+    threads: (facts.threads ?? []).map((t) => [t.name.toLowerCase(), t.blockCount, bucket(t.seconds)]),
     enrichment: enrichmentFingerprint(enrichment),
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 12)
@@ -203,9 +203,9 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
     // day's span, with clock bounds and the calendar event that explains one
     // when the schedule knows it. The prose says these plainly instead of
     // implying a continuous grind; what happened off-screen is never guessed.
-    ...(facts.gaps.length > 0
+    ...((facts.gaps?.length ?? 0) > 0
       ? {
-          awayFromScreen: facts.gaps.map((gap) => ({
+          awayFromScreen: facts.gaps!.map((gap) => ({
             from: gap.fromClock,
             to: gap.toClock,
             for: formatHm(Math.round((gap.toMs - gap.fromMs) / 1000)),
@@ -217,9 +217,9 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
     // Day threads: a subject that recurred across 3+ blocks spanning 3+
     // hours — the day's real through-line, so interleaving is told honestly
     // ("Daylens ran through the whole day") instead of as fragments.
-    ...(facts.threads.length > 0
+    ...((facts.threads?.length ?? 0) > 0
       ? {
-          dayThreads: facts.threads.map((t) => ({
+          dayThreads: facts.threads!.map((t) => ({
             thread: t.name,
             returnedToIn: `${t.blockCount} separate blocks`,
             between: `${t.fromClock} and ${t.toClock}`,
@@ -331,8 +331,8 @@ export function buildWrappedPrompts(facts: DayWrapFacts, enrichment?: DayEnrichm
     'Copy every DURATION exactly as the facts pre-format it (if the facts say 42m, never write "45 minutes" or "about 45m"); never round or invent a duration.',
     'The curious question must contain NO clock time and NO percentage.',
     ...(hasMeetingsEnrichment ? [] : ['Never state how MANY meetings there were; the facts only know the total meeting time.']),
-    ...(facts.gaps.length > 0 ? ['"awayFromScreen" lists the day\'s real holes: stretches Daylens did not observe, with their clock bounds. Say them plainly as part of the day\'s shape ("5:14pm to 9:24pm away from the computer"); never imply the person was working through one, never guess what happened off-screen, and never apologize for the time. When an entry carries "matchesCalendar", you may name that calendar event as what the schedule says was planned there — anchored to the calendar, never as observed fact.'] : []),
-    ...(facts.threads.length > 0 ? ['"dayThreads" names the work the day kept returning to: the same subject across separate blocks. Use it to tell the day\'s real shape ("Daylens ran through the whole day") instead of narrating fragments; the block count is a real count you may cite exactly, and interleaving is a shape, never a fault.'] : []),
+    ...((facts.gaps?.length ?? 0) > 0 ? ['"awayFromScreen" lists the day\'s real holes: stretches Daylens did not observe, with their clock bounds. Say them plainly as part of the day\'s shape ("5:14pm to 9:24pm away from the computer"); never imply the person was working through one, never guess what happened off-screen, and never apologize for the time. When an entry carries "matchesCalendar", you may name that calendar event as what the schedule says was planned there — anchored to the calendar, never as observed fact.'] : []),
+    ...((facts.threads?.length ?? 0) > 0 ? ['"dayThreads" names the work the day kept returning to: the same subject across separate blocks. Use it to tell the day\'s real shape ("Daylens ran through the whole day") instead of narrating fragments; the block count is a real count you may cite exactly, and interleaving is a shape, never a fault.'] : []),
     ...enrichmentDirectives(enrichment),
     'NEVER predict tomorrow, NEVER assign homework, NEVER tell the user to pick something up.',
     'Never use an em dash anywhere. Use a comma, a period, or "and". Use "to" for ranges, never a dash.',

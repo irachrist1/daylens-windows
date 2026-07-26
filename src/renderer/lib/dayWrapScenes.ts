@@ -201,12 +201,14 @@ export interface DayWrapFacts {
   entities?: DayWrapEntity[]
   /** Untracked stretches of 45+ minutes inside the day's span, with clock
    *  bounds and (when known) the calendar event they line up with. Gaps are
-   *  facts: the deck and the model say them plainly instead of going silent. */
-  gaps: DayWrapGap[]
+   *  facts: the deck and the model say them plainly instead of going silent.
+   *  Optional like `entities`: absent only on facts frozen before the field
+   *  existed; the builder always sets it. */
+  gaps?: DayWrapGap[]
   /** Subjects that recurred across 3+ blocks spanning 3+ hours, biggest
    *  first — the day's real through-lines ("Daylens ran through the whole
-   *  day"), so interleaving can be told honestly. */
-  threads: DayWrapThread[]
+   *  day"), so interleaving can be told honestly. Optional like `entities`. */
+  threads?: DayWrapThread[]
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
