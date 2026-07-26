@@ -13,6 +13,7 @@ import type {
   DayEnrichment,
   FocusAppSignal,
   GitActivitySignal,
+  GitRepoActivity,
   MeetingNotesSignal, // notes connector
 } from '@shared/types'
 import { resolveDayMeetingReport, type DayMeetingReport } from './meetingResolution'
@@ -69,9 +70,24 @@ function resolveShipped(git: GitActivitySignal | null): DayEnrichment['shipped']
   const repos = Array.isArray(git.repos) ? git.repos : []
   const prs = Array.isArray(git.prs) ? git.prs : []
 
+  // The spread tells WHEN the commits landed, in part-of-day words only —
+  // never a clock (the per-slide clock guard must stay unbypassed). This is
+  // what lets the wrap tell an agent-era day honestly: a release wave landing
+  // through an evening whose screen showed X is background output, not typing.
+  const spreadFor = (r: GitRepoActivity): string | null => {
+    const b = r.commitHourBuckets
+    if (!b) return null
+    const parts = [
+      b.overnight > 0 ? `${b.overnight} overnight` : null,
+      b.morning > 0 ? `${b.morning} through the morning` : null,
+      b.afternoon > 0 ? `${b.afternoon} in the afternoon` : null,
+      b.evening > 0 ? `${b.evening} through the evening` : null,
+    ].filter((p): p is string => p !== null)
+    return parts.length > 0 ? parts.join(', ') : null
+  }
   const commitsByProject = repos
     .filter((r) => r && typeof r.commitCount === 'number' && r.commitCount > 0 && typeof r.repo === 'string')
-    .map((r) => ({ project: humanizeProject(r.repo), commits: r.commitCount }))
+    .map((r) => ({ project: humanizeProject(r.repo), commits: r.commitCount, spread: spreadFor(r) }))
     .sort((a, b) => b.commits - a.commits)
     .slice(0, MAX_PROJECTS)
 

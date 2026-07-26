@@ -183,12 +183,21 @@ async function repoActivityForDate(repo: string, date: string): Promise<GitRepoA
   }).filter((c) => Number.isFinite(c.ts))
   if (commits.length === 0) return null
   const times = commits.map((c) => c.ts).sort((a, b) => a - b)
+  const buckets = { overnight: 0, morning: 0, afternoon: 0, evening: 0 }
+  for (const ts of times) {
+    const hour = new Date(ts).getHours()
+    if (hour < 5) buckets.overnight += 1
+    else if (hour < 12) buckets.morning += 1
+    else if (hour < 17) buckets.afternoon += 1
+    else buckets.evening += 1
+  }
   return {
     repo: path.basename(repo),
     commitCount: commits.length,
     messages: commits.slice(0, MAX_MESSAGES_PER_REPO).map((c) => c.subject),
     firstCommitClock: clock(times[0]),
     lastCommitClock: clock(times[times.length - 1]),
+    commitHourBuckets: buckets,
   }
 }
 

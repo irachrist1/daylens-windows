@@ -1782,6 +1782,9 @@ export interface GitRepoActivity {
   messages: string[]
   firstCommitClock: string | null
   lastCommitClock: string | null
+  /** How the commits spread across the day, by local part-of-day. Absent on
+   *  rows stored before the field existed. */
+  commitHourBuckets?: { overnight: number; morning: number; afternoon: number; evening: number }
 }
 
 export interface GitPRActivity {
@@ -1951,8 +1954,10 @@ export type HistoryExportRunResult =
 export interface DayEnrichment {
   /** What the day PRODUCED, from git + gh. */
   shipped: {
-    /** Commits per repo, humanized folder name, biggest first. */
-    commitsByProject: Array<{ project: string; commits: number }>
+    /** Commits per repo, humanized folder name, biggest first. `spread` is a
+     *  pre-formatted part-of-day telling ("14 overnight, 21 through the
+     *  morning") — null when the stored row predates commit-hour buckets. */
+    commitsByProject: Array<{ project: string; commits: number; spread?: string | null }>
     /** Sanitized, humanized commit subjects / PR titles worth naming — never a
      *  raw path or branch (already stripped). Deduped, capped. */
     highlights: string[]

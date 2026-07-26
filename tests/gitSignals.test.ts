@@ -76,3 +76,27 @@ import { collectGitActivity } from '../src/main/services/gitSignals.ts'
 test('collectGitActivity throws when git is unavailable — never "collected, empty"', async () => {
   await assert.rejects(collectGitActivity('2026-04-03', { probeGit: async () => null }))
 })
+
+test('commit-hour buckets spread across the local day parts', async () => {
+  // Exercised through repoActivityForDate's bucket logic indirectly: the
+  // resolver turns buckets into part-of-day prose; zero buckets are omitted.
+  const { resolveDayEnrichment } = await import('../src/main/services/enrichmentResolve')
+  const { putExternalSignal } = await import('../src/main/services/externalSignals')
+  const { createProductionTestDatabase } = await import('./support/testDatabase')
+  const db = createProductionTestDatabase()
+  putExternalSignal(db, '2026-05-28', 'git', {
+    repos: [{
+      repo: 'daylens', commitCount: 49,
+      messages: ['release: v1.0.37'],
+      firstCommitClock: null, lastCommitClock: null,
+      commitHourBuckets: { overnight: 14, morning: 21, afternoon: 0, evening: 14 },
+    }],
+    totalCommits: 49,
+    prs: [],
+  })
+  const enrichment = resolveDayEnrichment(db, '2026-05-28')
+  assert.equal(
+    enrichment?.shipped?.commitsByProject[0].spread,
+    '14 overnight, 21 through the morning, 14 through the evening',
+  )
+})
