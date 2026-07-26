@@ -165,6 +165,35 @@ test('day plan: the split percentages come from the real ratio and sum to 100', 
   assert.equal(split!.split!.aPct + split!.split!.bPct, 100)
 })
 
+// The away card must not contradict itself: a 'passive' gap is screen ON,
+// hands off, so it can never be headlined "Off the screen". The card picks the
+// biggest gap that really was time away; a day whose only gaps are passive
+// gets the passive card with an honest kicker.
+test('day plan: the away slide never headlines a passive gap as "Off the screen"', () => {
+  const gap = (fromH: number, toH: number, kind: 'passive' | 'away') => ({
+    fromMs: at(`${String(fromH).padStart(2, '0')}:00`),
+    toMs: at(`${String(toH).padStart(2, '0')}:00`),
+    fromClock: `${((fromH + 11) % 12) + 1}:00${fromH < 12 ? 'am' : 'pm'}`,
+    toClock: `${((toH + 11) % 12) + 1}:00${toH < 12 ? 'am' : 'pm'}`,
+    minutes: (toH - fromH) * 60, kind, matchesEvent: null,
+  })
+
+  // A big passive gap next to a smaller real absence: the real absence leads.
+  const mixed = { ...fullDayFacts(), gaps: [gap(10, 12, 'passive'), gap(13, 14, 'away')] }
+  const awaySlide = planDayWrapSlides(mixed).find((s) => s.id === 'away')
+  assert.ok(awaySlide, 'expected the away slide')
+  assert.equal(awaySlide!.kicker, 'Off the screen')
+  assert.match(awaySlide!.fallbackLine, /1:00pm to 2:00pm/, 'the non-passive gap leads the card')
+  assert.doesNotMatch(awaySlide!.fallbackLine, /screen on/i)
+
+  // Only passive gaps: the card stays, honestly titled.
+  const passiveOnly = { ...fullDayFacts(), gaps: [gap(10, 12, 'passive')] }
+  const passiveSlide = planDayWrapSlides(passiveOnly).find((s) => s.id === 'away')
+  assert.ok(passiveSlide, 'a passive-only day still gets the card')
+  assert.notEqual(passiveSlide!.kicker, 'Off the screen', 'a passive gap is not off the screen')
+  assert.match(passiveSlide!.fallbackLine, /screen on, hands off/i, 'the phrase says what it was')
+})
+
 test('day plan: a late-running day gets the late-night slide with the real clock', () => {
   const facts = fullDayFacts() // last block ends past 11pm
   const slides = planDayWrapSlides(facts)

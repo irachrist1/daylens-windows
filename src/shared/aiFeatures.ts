@@ -9,6 +9,7 @@ export const AI_JOB_FEATURES: Record<AIJobType, string> = {
   block_label_preview: 'Timeline labeling',
   block_label_finalize: 'Timeline labeling',
   block_cleanup_relabel: 'Timeline labeling',
+  interpretation_agent: 'Timeline labeling',
   attribution_assist: 'Timeline labeling',
   day_summary: 'Morning brief',
   wrapped_narrative: 'Evening wrap-up',

@@ -12,6 +12,7 @@ Daylens has several harnesses because deterministic product logic and model beha
 | `npm run moment:bench`              | Read-only copy of the live database | Yes                       | End-to-end AI answers for exact moments, recall, follow-ups, and exports |
 | `npm run test:behaviour`            | Read-only copy of the live database | Yes, including a judge    | Black-box answer-quality evaluation across providers                     |
 | `npm run wrapped:bench`             | Live or representative Daylens data | Yes                       | Generated wrap quality and grounding                                     |
+| `npm run eval:days`                 | Read-only copy of the live database | Only with `--judge`       | Journal-anchored grading of regenerated days on every user-visible surface |
 | `npm run billing:sandbox`           | Ephemeral billing dependencies      | Fake providers by default | Billing, webhook, reservation, and concurrency behavior                  |
 | `npm run bench:queries`             | Seeded temporary database           | No                        | Local query latency for a representative heavy year                      |
 

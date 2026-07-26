@@ -12,12 +12,13 @@
 import Database from 'better-sqlite3'
 import { getCorrectedAppSummariesForRange } from '../../../src/main/services/activityFacts'
 import { getAppDetailPayload } from '../../../src/main/services/appDetail'
+import { listSuggestedEntityMerges } from '../../../src/main/services/entities/entityRepository'
 import { primeWorkerSettingsOverride } from '../../../src/main/services/settings'
 import type { AppSettings, LiveSession } from '../../../src/shared/types'
 
 interface WorkerRequest {
   id: number
-  op: 'appSummaries' | 'appDetail'
+  op: 'appSummaries' | 'appDetail' | 'suggestedMerges'
   settings?: Partial<AppSettings>
   fromMs?: number
   toMs?: number
@@ -57,6 +58,11 @@ function handle(request: WorkerRequest): unknown {
         request.daysOrDate ?? 7,
         request.liveSession ?? null,
       )
+    // Duplicate-entity scan for Settings -> Entities (DEV-257): a pure read
+    // over the entities table that used to run synchronously in the process
+    // drawing the screen and froze it on large stores.
+    case 'suggestedMerges':
+      return listSuggestedEntityMerges(ensureDb())
     default:
       throw new Error(`Unknown op: ${String(request.op)}`)
   }

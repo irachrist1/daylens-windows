@@ -78,8 +78,10 @@ test('both tools carry the same honest note when page detail is thinner than app
 
   assert.equal(appUsage.totalSeconds, Math.round((localMs(12, 42) - localMs(9, 0)) / 1000))
   assert.ok(Array.isArray(appUsage.coverageNotes) && appUsage.coverageNotes.length === 1)
-  assert.match(appUsage.coverageNotes[0], /Dia was foreground 3h 42m/)
-  assert.match(appUsage.coverageNotes[0], /page-level detail covers 0m/)
+  assert.match(appUsage.coverageNotes[0], /Dia was in front for 3h 42m/)
+  assert.match(appUsage.coverageNotes[0], /specific pages are recorded for 0m/)
+  // The note is copied into prose verbatim, so it must obey the voice contract.
+  assert.doesNotMatch(appUsage.coverageNotes[0], /—|foreground|page-level/)
 
   assert.equal(pageVisits.found, false)
   assert.ok(Array.isArray(pageVisits.coverageNotes) && pageVisits.coverageNotes.length === 1)
@@ -103,7 +105,7 @@ test('the context packet discloses the page-coverage shortfall as a conflict', a
     const conflict = packet.conflicts.find((entry) => entry.kind === 'page_detail_below_app_time')
     assert.ok(conflict, 'the shortfall must surface in the packet conflicts')
     assert.equal(conflict.resolvedBy, 'foreground_time')
-    assert.match(conflict.detail, /Dia was foreground 3h 42m/)
+    assert.match(conflict.detail, /Dia was in front for 3h 42m/)
     assert.equal(conflict.identity, `browser:dia:${DATE}`)
   } finally {
     clearTestDb()

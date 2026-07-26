@@ -205,34 +205,36 @@ export function EntityMemorySection() {
     [suggestions, dismissedSuggestions],
   )
 
+  // One IPC call: the main process merges every genuine duplicate to fixpoint
+  // and reports only merges that actually happened (DEV-257). Pairs the user
+  // dismissed as "Not the same" are passed along so they stay unmerged.
   async function mergeAllVisible() {
-    const pairs = visibleSuggestions
-    if (pairs.length === 0 || bulkBusy) return
+    if (visibleSuggestions.length === 0 || bulkBusy) return
     setBulkBusy(true)
     setError(null)
-    let lastResult: { correctionId: string; description: string } | null = null
-    let merged = 0
-    let failed = 0
     try {
-      for (const item of pairs) {
-        try {
-          lastResult = await applyAndToast(
-            { kind: 'entity-merge', targetId: item.leftId, sourceId: item.rightId },
-            { reload: false },
-          )
-          merged += 1
-        } catch {
-          failed += 1
-        }
+      const excludedPairs = [...dismissedSuggestions].map((key) => {
+        const [leftId = '', rightId = ''] = key.split(':')
+        return { leftId, rightId }
+      })
+      const result = await ipc.entities.mergeAllDuplicates({ excludedPairs }) as {
+        merged: number
+        failed: number
+        lastCorrectionId: string | null
+        lastDescription: string | null
       }
-      if (lastResult) {
+      if (result.lastCorrectionId) {
         setUndoToast({
-          ...lastResult,
-          description: failed > 0
-            ? `Merged ${merged} duplicate${merged === 1 ? '' : 's'} (${failed} skipped). Undo reverses the last one.`
-            : `Merged ${merged} duplicate${merged === 1 ? '' : 's'}. Undo reverses the last one.`,
+          correctionId: result.lastCorrectionId,
+          description: result.failed > 0
+            ? `Merged ${result.merged} duplicate${result.merged === 1 ? '' : 's'} (${result.failed} skipped). Undo reverses the last one.`
+            : `Merged ${result.merged} duplicate${result.merged === 1 ? '' : 's'}. Undo reverses the last one.`,
         })
+      } else if (result.failed > 0) {
+        setError(`Couldn’t merge ${result.failed} pair${result.failed === 1 ? '' : 's'}. Try again.`)
       }
+    } catch (mergeError) {
+      setError(mergeError instanceof Error ? mergeError.message : 'Couldn’t merge those. Try again.')
     } finally {
       setBulkBusy(false)
       await reloadSuggestions()

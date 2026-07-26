@@ -24,6 +24,7 @@ function secondsToHm(seconds: number): string {
 
 export interface GroundTruth {
   today: string
+  yesterday: string
   clients: Array<{ id: string; name: string; projectCount: number }>
   todayBlocks: Array<{
     label: string
@@ -121,6 +122,7 @@ export function gatherGroundTruth(): GroundTruth {
 
   return {
     today,
+    yesterday,
     clients,
     todayBlocks: todayPayload.blocks.slice(0, 20).map(blockSummary),
     yesterdayBlocks: yesterdayPayload.blocks.slice(0, 20).map((b) => {
@@ -147,7 +149,7 @@ export function renderGroundTruthForJudge(gt: GroundTruth): string {
     }
   }
   lines.push('')
-  lines.push(`Today's blocks (${gt.todayBlocks.length}):`)
+  lines.push(`Today's (${gt.today}) blocks (${gt.todayBlocks.length}) — they describe ${gt.today} ONLY; never apply them to a question about any other date:`)
   for (const b of gt.todayBlocks) {
     const apps = b.topApps.length ? ` apps=${b.topApps.join(',')}` : ''
     const arts = b.topArtifacts.length ? ` artifacts=${b.topArtifacts.join('|')}` : ''
@@ -155,7 +157,7 @@ export function renderGroundTruthForJudge(gt: GroundTruth): string {
     lines.push(`  - ${b.start}-${b.end} (${b.minutes}m) "${b.label}"${apps}${arts}${pages}`)
   }
   lines.push('')
-  lines.push(`Yesterday's blocks (${gt.yesterdayBlocks.length}):`)
+  lines.push(`Yesterday's (${gt.yesterday}) blocks (${gt.yesterdayBlocks.length}) — ${gt.yesterday} ONLY; never apply them to any other date:`)
   for (const b of gt.yesterdayBlocks) {
     const apps = b.topApps.length ? ` apps=${b.topApps.join(',')}` : ''
     lines.push(`  - ${b.start}-${b.end} (${b.minutes}m) "${b.label}"${apps}`)

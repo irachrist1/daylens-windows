@@ -7,6 +7,10 @@
 import { createMCPClient } from '@ai-sdk/mcp'
 import { Experimental_StdioMCPTransport as StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio'
 import type { ToolSet } from 'ai'
+import { sanitizeToolResult } from '@shared/aiSanitize'
+import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
+import { trackingControlsStateFromSettings } from '@shared/trackingControls'
+import { getSettings } from '../services/settings'
 import { minimalChildEnv } from '../lib/childEnv'
 import { isRealDayHarness } from '../lib/realDayHarness'
 
@@ -28,6 +32,36 @@ const CONNECT_TIMEOUT_MS = 8_000
 // explicitly in its settings entry's `env`.
 export function mcpChildEnv(configured?: Record<string, string>): Record<string, string> {
   return minimalChildEnv(configured)
+}
+
+/** Every MCP tool result crosses the SAME two privacy boundaries as every
+ *  built-in tool result (see contextTools.ts's guarded()): the
+ *  tracking-exclusion filter (drops excluded apps/sites) and the secret
+ *  sanitizer. An external server's output is still content headed for the
+ *  model — it never enters the loop raw. */
+export function guardMcpToolResult(raw: unknown): unknown {
+  const controls = trackingControlsStateFromSettings(getSettings())
+  return sanitizeToolResult(filterTrackingExcludedEvidence(raw, controls))
+}
+
+/** Wraps each MCP tool so its execute() result is guarded before it returns
+ *  toward the model. Tools without an execute (unlikely for MCP) pass
+ *  through untouched. Exported for direct testing. */
+export function wrapMcpToolsWithGuards(tools: ToolSet): ToolSet {
+  const wrapped: ToolSet = {}
+  for (const [name, toolDef] of Object.entries(tools)) {
+    const execute = toolDef.execute
+    if (typeof execute !== 'function') {
+      wrapped[name] = toolDef
+      continue
+    }
+    wrapped[name] = {
+      ...toolDef,
+      execute: async (input: unknown, options: unknown) =>
+        guardMcpToolResult(await (execute as (input: unknown, options: unknown) => Promise<unknown>)(input, options)),
+    } as ToolSet[string]
+  }
+  return wrapped
 }
 
 export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpToolPool> {
@@ -52,7 +86,7 @@ export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpTo
         }),
       ])
       clients.push(client)
-      const serverTools = await client.tools()
+      const serverTools = wrapMcpToolsWithGuards(await client.tools())
       for (const [name, toolDef] of Object.entries(serverTools)) {
         // Namespace to avoid collisions between servers and with built-ins.
         tools[`mcp_${server.name}_${name}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 64)] = toolDef

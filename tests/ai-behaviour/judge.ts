@@ -32,6 +32,9 @@ You will be given:
 
 CRITICAL — what counts as evidence:
 The TRACE is authoritative. If a number, block label, app name, page title, or domain appears in any tool OUTPUT, the model was entitled to cite it — that is NOT a hallucination, even if the ground-truth summary doesn't list it (ground truth is a compact summary and may omit things the tools returned). Treat ground truth as supplementary. A claim is a hallucination ONLY if the cited value appears in neither the trace nor ground truth.
+- Tool outputs carry epoch-millisecond timestamps; each tool line is followed by a LOCAL_TIMES line rendering every epoch in that output as "YYYY-MM-DD HH:MM". A clock time or time range the answer cites is grounded if it matches LOCAL_TIMES (start and end of a range each matching counts as a grounded range).
+- A tool output ending in "…(truncated …)" was cut for YOUR prompt only — the model saw the full output. A claim that would plausibly live in the truncated part is UNVERIFIABLE: do not grade it as fabrication, but do not count it toward citations_found either. Flag it as a hallucination only if it CONTRADICTS visible evidence or has no plausible source anywhere in the trace.
+- The CONTEXT_PACKET section (when present) was part of the model's prompt — statements quoted from it are grounded.
 
 CRITICAL — what makes an answer good:
 The bar is NOT "the answer matches the DB." The bar is: would a colleague who watched the user work this week answer it the same way? A factually correct answer that fails to reveal understanding is a FAIL. "3h in Cursor" when the truth is "3h finishing the chat refactor in Cursor" — FAIL. App totals as the headline — FAIL. The answer must name the ACTIVITY, not just the app.
@@ -48,7 +51,7 @@ Grade the answer on these axes, in priority order:
 
 5. **Faithfulness vs trace** — every concrete claim (number, label, domain, person, file, time range) must appear in the tool trace or ground truth. Quoting a block label that appears in tool output verbatim is grounded, even if the label looks unusual.
 
-6. **Voice** — banned phrases include: "great work", "you crushed it", "let's dive in", "dive into", "elevate", "seamless", "navigate the landscape", "in today's fast-paced world", "harness the power", "you've got this", "fascinating perspective". Exclamation marks fail. Motivational filler fails. Generic openers fail. Bare refusals ("I don't know", "I can't see that") fail — surface the closest captured signal instead.
+6. **Voice** — banned phrases include: "great work", "you crushed it", "let's dive in", "dive into", "elevate", "seamless", "navigate the landscape", "in today's fast-paced world", "harness the power", "you've got this", "fascinating perspective". Exclamation marks fail. Motivational filler fails. Generic openers fail. Bare refusals ("I don't know", "I can't see that") fail — surface the closest captured signal instead. Em dashes are banned outright, but a deterministic check outside you already scans for them and caps the grade on its own, so do NOT report an em dash unless you can point at the actual "—" character in the answer. En dashes inside a time range ("3:15pm–5:15pm") and hyphens are fine and are not em dashes. Plumbing vocabulary in the prose ("foreground", "window titles", "app sessions", "page-level detail", "coverage", "captured signal", "the data shows") is a voice fail, and leading with a coverage caveat instead of the activity is a shape fail. A plain question answered with markdown headers and bullet grids reads like a dashboard: prose is the default, and tables belong only to breakdowns, per-interval splits, and comparisons the user asked for.
 
 7. **Follow-up suggestions** (Q3/Q4) — if follow-up chips are shown, each must be a sensible next question grounded in the answer's real content. They must NEVER template a meta-entity into a canned question — e.g. after "what model are you?", chips like "How long on Google Gemini?" or "Which files appeared in Google Gemini?" are nonsense and a FAIL. No follow-ups at all is acceptable (follow_ups_ok = true). Dumb/templated follow-ups → follow_ups_ok = false and cap the grade at "bad" (or "worse" if they reference a meta-entity as a data entity).
 
@@ -70,8 +73,18 @@ export async function judgeAnswer(
   traceSummary?: string,
   followUps: string[] = [],
 ): Promise<JudgeVerdict> {
+  // The weekday↔date mapping the subject model also received: without it the
+  // judge computes weekdays in its head and has graded a correct "Friday the
+  // 24th" as a date error.
+  const recentDates = Array.from({ length: 8 }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - index)
+    return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  }).join('; ')
   const userPrompt = [
     `Question: ${scenario.question}`,
+    '',
+    `Recent dates with their true weekdays (authoritative; never compute weekdays yourself): ${recentDates}`,
     '',
     'Gold answer shape (PRIMARY bar — what a colleague who watched the user work would say):',
     scenario.gold_answer_shape?.trim() || '(no gold shape provided — grade against the rubric only)',
@@ -96,25 +109,48 @@ export async function judgeAnswer(
 
   try {
     const client = new Anthropic({ apiKey })
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 400,
-      system: JUDGE_SYSTEM,
-      messages: [{ role: 'user', content: userPrompt }],
-    })
+    // claude-sonnet-4-6 rejects assistant prefill, so JSON-first is enforced
+    // by instruction instead; the raised token cap stops the mid-thought
+    // truncation that used to grade as "error", and one retry mops up a
+    // response that still fails to parse.
+    const callJudge = async (): Promise<string> => {
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1200,
+        system: JUDGE_SYSTEM,
+        messages: [
+          { role: 'user', content: `${userPrompt}\n\nYour reply MUST start with "{" — the JSON verdict itself, no preamble, no reasoning before it.` },
+        ],
+      })
+      return response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('')
+        .trim()
+    }
 
-    const raw = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('')
-      .trim()
+    const extractJson = (raw: string): string | null => {
+      const match = raw.match(/\{[\s\S]*\}/)
+      if (!match) return null
+      try {
+        JSON.parse(match[0])
+        return match[0]
+      } catch {
+        return null
+      }
+    }
 
-    const jsonMatch = raw.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
+    let raw = await callJudge()
+    let json = extractJson(raw)
+    if (!json) {
+      raw = await callJudge()
+      json = extractJson(raw)
+    }
+    if (!json) {
       return {
         scenarioId: scenario.id,
         grade: 'error',
-        reason: `judge returned non-JSON: ${raw.slice(0, 120)}`,
+        reason: `judge returned non-JSON after retry: ${raw.slice(0, 120)}`,
         citationsFound: false,
         hallucinationDetected: false,
         voiceOk: false,
@@ -124,7 +160,7 @@ export async function judgeAnswer(
       }
     }
 
-    const parsed = JSON.parse(jsonMatch[0]) as {
+    const parsed = JSON.parse(json) as {
       grade?: 'good' | 'bad' | 'worse'
       reason?: string
       citations_found?: boolean

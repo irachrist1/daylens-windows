@@ -136,14 +136,7 @@ import { stopRangeWorker } from './services/rangeWorker'
 import { installEmbedWorkerTransport, stopEmbedWorker } from './services/embedWorkerHost'
 import { startStallWatchdog, stopStallWatchdog } from './services/stallWatchdog'
 import { setPermissionWatcherWindow, startPermissionWatcher, stopPermissionWatcher } from './services/permissionWatcher'
-import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
-import { startConnectorSyncSchedule, stopConnectorSyncSchedule } from './connectors/service'
-import { registerGoogleCalendarConnector } from './connectors/googleCalendar/adapter'
-import { registerOutlookCalendarConnector } from './connectors/outlookCalendar/adapter'
-import { registerGithubConnector } from './connectors/github/adapter'
-import { registerLinearConnector } from './connectors/linear/adapter'
-import { registerGranolaConnector } from './connectors/granola/adapter'
-import { registerConnectorHandlers } from './ipc/connectors.handlers'
+import { ensureExternalSignalsForDate, registerExternalSignalBackfill, startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { registerExportHandlers } from './ipc/export.handlers'
 import { registerScreenContextHandlers } from './ipc/screenContext.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
@@ -575,9 +568,6 @@ function startCaptureServices(): void {
   if (process.platform === 'win32') startWindowsFocusCapture()
   if (!SMOKE_TEST && (process.platform === 'win32' || process.platform === 'linux')) ensureProcessMonitor()
   if (!SMOKE_TEST) startExternalSignalCollection()
-  // DEV-186: connected sources re-sync on their manifest cadence. The gate
-  // (capture consent + the connected-sources switch) is re-checked every tick.
-  if (!SMOKE_TEST) startConnectorSyncSchedule()
 
   if (!SMOKE_TEST) {
     if (captureAdapterStartupTimer) clearTimeout(captureAdapterStartupTimer)
@@ -603,7 +593,6 @@ function stopCaptureServices(): void {
   stopBrowserTracking()
   stopProcessMonitor()
   stopExternalSignalCollection()
-  stopConnectorSyncSchedule()
 }
 
 function startBackgroundServices(): void {
@@ -1330,6 +1319,15 @@ app.whenReady()
     // needs pruning even when tracking is disabled or paused.
     if (!REAL_DAY_HARNESS && !SMOKE_TEST) startAIUsageRetentionSchedule()
 
+    // On-demand enrichment backfill for wrap / Analyze of a HISTORICAL day
+    // (the background collector only walks today and yesterday). Wired here —
+    // not in startBackgroundServices — because regenerating an old day must
+    // work even when tracking is disabled or paused; capture consent is still
+    // enforced inside collection.
+    if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
+      registerExternalSignalBackfill((date) => ensureExternalSignalsForDate(getDb(), date))
+    }
+
     // The process monitor (Windows + Linux) is started in startBackgroundServices
     // once tracking is enabled; diagnostics requests reuse the same instance.
 
@@ -1346,18 +1344,6 @@ app.whenReady()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()
     registerNotificationHandlers()
-    // DEV-188: the first real provider — registering flips google_calendar
-    // from manifest-only to connectable in Settings → Connections.
-    registerGoogleCalendarConnector()
-    // DEV-190: Outlook Calendar — Microsoft Graph on the same foundation.
-    registerOutlookCalendarConnector()
-    // DEV-191: GitHub — the code provider on the same foundation.
-    registerGithubConnector()
-    // DEV-192: Linear — the issues provider, personal-API-key authorized.
-    registerLinearConnector()
-    // DEV-193: Granola — the meetings provider, a local cache read.
-    registerGranolaConnector()
-    registerConnectorHandlers()
     registerExportHandlers()
     registerScreenContextHandlers()
     logStartupTiming('IPC handlers ready')

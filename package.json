@@ -64,7 +64,9 @@
     "dist:win:store": "npm run build:all && electron-builder --win appx --config electron-builder.config.js --publish never",
     "dist:mac": "npm run build:all && electron-builder --mac zip dmg --config electron-builder.config.js",
     "dist:linux": "npm run build:all && electron-builder --linux AppImage deb rpm tar.gz --config electron-builder.config.js",
-    "postinstall": "node scripts/rebuild-natives.mjs"
+    "postinstall": "node scripts/rebuild-natives.mjs",
+    "cli": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./cli/run.ts",
+    "eval:days": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/journal-eval/run.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.96",
@@ -125,5 +127,19 @@
   "overrides": {
     "lodash": "4.18.1",
     "protobufjs": "7.5.9"
+  },
+  "allowScripts": {
+    "electron@34.5.8": true,
+    "@paymoapp/active-window@2.1.4": true,
+    "keytar@7.9.0": true,
+    "esbuild@0.27.0": true,
+    "sharp@0.34.5": true,
+    "@google/genai@1.52.0": true,
+    "core-js@3.49.0": true,
+    "onnxruntime-node@1.21.0": true,
+    "protobufjs@7.5.9": true,
+    "better-sqlite3@12.8.0": true,
+    "esbuild@0.25.12": true,
+    "lzma-native@8.0.6": true
   }
 }

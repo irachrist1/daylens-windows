@@ -1,0 +1,54 @@
+# Machine-reconstructed: no journal entry. Ground truth model: the day is what
+# the HUMAN did at the keyboard; the 44 daylens web commits went out through
+# cmux/Codex agent sessions while the human spent the biggest visible chunk of
+# the day on launch marketing surfaces. Anchored on raw app/domain facts + git
+# authorship, never on Daylens's own block labels.
+date: "2026-03-31"
+confidence: machine
+sources:
+  - "git: daylens (44 commits, 07:55-23:54 — all web/launch surfaces)"
+  - "git: portfolio (9 commits, 07:56-16:18, incl. Issue 51/52 newsletter essays)"
+  - "git: daylens-swift (2 commits at 18:37, open-source launch prep)"
+  - "foreground: cmux 3.6h + Codex 1.3h (agent runners), Dia 6.5h, Notes 34min 09:37-10:06, Notion ~30min 11:00-11:48"
+  - "domains: linkedin.com 2.3h, christian-tonny.dev 51min, canva.com 40min, chatgpt 42min, reddit r/announcements submit 21:37, claude.ai 'Daylens launch and viral marketing strategy' 22:15, npmjs tokens 23:02"
+summary: >
+  Daylens launch day, split between two kinds of work: cmux and Codex agent
+  sessions grinding out the web/launch surfaces (44 daylens commits from
+  07:55 to 23:54 — subdirectory hosting, docs page, premium landing redesign,
+  roadmap/changelog rebuilds), while the human's own screen time went to the
+  launch's distribution side — LinkedIn all afternoon (2.3 hours), Canva
+  thumbnail design in the morning, Notes and Notion planning late morning,
+  and previewing his own site at christian-tonny.dev. The portfolio repo got
+  nine commits including repeated Issue 51 essay rewrites (08:56-09:35) and
+  the Issue 52 Daylens announcement tour at 12:00. Evening was launch
+  logistics and promotion: daylens-swift open-source prep at 18:37, Reddit
+  (a r/announcements submit at 21:37), Threads and X, a claude.ai session on
+  Daylens launch and viral marketing strategy at 22:15, npm token setup at
+  23:02, and a final agent-driven changelog/roadmap rebuild through 23:54.
+primaryWork:
+  - name: Daylens web / launch surfaces (landing, docs, roadmap, changelog — agent-driven)
+    aliases: [daylens, landing, changelog, roadmap]
+  - name: Launch marketing & distribution (LinkedIn, Canva, Reddit, launch strategy)
+    aliases: [linkedin, launch, marketing, canva]
+secondary:
+  - name: Portfolio + newsletter essays (Issue 51, Daylens announcement tour)
+    aliases: [portfolio, newsletter, issue 51, issue 52, essay]
+  - name: daylens-swift open-source launch prep
+    aliases: [daylens-swift, open-source, open source]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "07:22", until: "09:35", desc: "site preview (christian-tonny.dev writing page), cmux sessions pushing subdirectory-hosting fixes, Canva thumbnail design, Issue 51 essay rewrites" }
+  - { from: "09:37", until: "12:00", desc: "Notes and Notion planning between cmux runs; docs page + Issue 52 announcement tour land at 12:00" }
+  - { from: "12:00", until: "16:30", desc: "LinkedIn-heavy stretch (feed, posts, own activity) with ChatGPT and Canva; agents land the landing-page redesign and screenshots 15:30-16:18" }
+  - { from: "16:30", until: "18:40", desc: "landing/roadmap/changelog fixes via agents; daylens-swift open-source prep at 18:37; brief Andersen Odoo touch 18:24" }
+  - { from: "20:40", desc: "launch promotion and logistics: X, Reddit r/announcements submit, Threads, claude.ai viral-marketing strategy, npm tokens, changelog/roadmap rebuild through 23:54" }
+notes: >
+  Machine-reconstructed; no journal exists for this day. All daylens and
+  portfolio commits are authored by him, but the foreground during commit
+  windows is cmux/Codex — the commits are agent output he was directing. The
+  lennys-newsletter dataset commit at 09:25 (Claire Vo transcript slug) is
+  authored by Lenny Rachitsky, not him — do not count it. Capture shows one
+  405-minute loginwindow session from 00:31 and nothing else before 07:00 —
+  treat pre-07:00 as unverified, not as work or a confirmed gap.

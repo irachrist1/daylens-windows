@@ -76,7 +76,7 @@ The first tool set is deliberately small:
 4. Aggregate canonical time by application, website, project, client, meeting, person, or category.
 5. Search exact and semantic memory.
 6. Retrieve supporting evidence and source links.
-7. Query one connected source through the Daylens connector boundary.
+7. Query one external source through the Daylens boundary — the `externalSignals` local probes (calendar, git) or a user-configured MCP server. (The OAuth connector framework was removed 2026-07-26; see [connectors.md](connectors.md).)
 8. Compare periods or entities using the same calculation.
 9. Explain missing evidence or request one clarification.
 10. Preview and apply a reversible Daylens correction.
@@ -86,7 +86,9 @@ Tools accept typed, validated input and return compact product facts. They do no
 
 ### Local machine tools
 
-The shipped agent also answers “what did I ship?” and “where is that document?” through read-only machine tools: file search, file read, directory listing, repository discovery, and an allowlisted read-only git surface. These remain in V2 under one shared boundary:
+The shipped agent also answers “what did I ship?” and “where is that document?” through read-only machine tools: file search, file read, directory listing, repository discovery, and an allowlisted read-only git surface. These are the Tier 2 of the tiered escalation model in the [agent runtime and context specification](agent-runtime-and-context.md): the database tier is free and always available, machine tools are cheap and permission-carded, and the consent-gated Tier 3 (`capture_screen`) may pass one live, downscaled, never-stored frame to the model with a mandatory reason the person sees in the activity trail. The user-facing contract in one sentence: Daylens reads your local activity database freely; it looks at a file or your live screen only when a question needs it, tells you why, and never stores what it saw.
+
+The machine tools remain in V2 under one shared boundary:
 
 - Every path resolves, symlinks included, to a visible, non-private location inside the user home directory. Hidden folders, system data, credential stores, dependencies, and build output are denied.
 - The git surface accepts read subcommands only and rejects arguments that redirect output, re-point the repository, read files outside it, or invoke external drivers.
@@ -100,6 +102,8 @@ The shipped agent also answers “what did I ship?” and “where is that docum
 - Prefer deterministic tools for totals, counts, comparisons, and membership.
 - Use exact search before semantic search when the question includes distinctive wording.
 - Request connector data only when local memory cannot answer reliably.
+- Exhaust the free database tier before touching machine tools, and machine tools before any screen capture; say why when escalating.
+- Escalate when naming confidence is low, when evidence conflicts (a leisure domain against work titles), when the question is about *now*, or when a block is long but unnamed. These heuristics live in the system prompt, not code.
 - Ask one concise clarification when two interpretations would materially change the answer.
 - Do not ask a clarification merely because some evidence is incomplete; answer the supported part and state the specific gap.
 - Keep tool results inside the minimum time and entity scope needed for the question.

@@ -1,0 +1,67 @@
+# Machine-reconstructed: no journal entry. Ground truth model: the day is what
+# the HUMAN did at the keyboard. Git shows 101 daylens commits spread
+# 00:27-19:41 — 92 authored "Christian Tonny", 9 "Claude" — but the lanes are
+# agent-driven (codex/* and ctonny111/* branches, PR merges #212-#250); the
+# human's visible day is merge/review orchestration from a browser plus a
+# mid-afternoon Lenny's Product Pass tool-shopping spree. Commit stragglers at
+# 02:01-02:19 land after the 01:55 lock, and the Claude-authored DEV-177/184
+# wave at 19:33-19:41 lands after the 19:06 machine sleep — agents finishing,
+# not presence.
+date: "2026-07-19"
+confidence: machine
+sources:
+  - "git: daylens (101 commits 00:27-19:41; 92 by Christian Tonny, 9 by Claude; PR merges #212-#250 incl. consent/capture DEV-163/164/165, shared-facts chain DEV-168-172, spec acceptances #234/#235/#239, sync allowlist DEV-187 17:17; Claude-authored DEV-212 updater 18:45 and DEV-177/DEV-184 wave 19:33-19:41)"
+  - "focus_events: at machine 00:00-01:55 (lock) and 09:34 (unlock)-19:06 (sleep); Dia ~7.1h foreground, Warp 74min, Slack 48min, Safari 31min, Cursor 27min, Claude 15min, ChatGPT 13min; zero window titles captured on this day"
+  - "browser history: ALU Canvas MLOps pages 12:46-12:59 + a Meet room 12:33; Lenny's Product Pass redemption 14:10-15:30 (Lovable plans + Stripe billing, Framer×Lenny signup, Replit, Gumloop + n8n accounts, Gmail/Outlook logins); YouTube ~54min and X/Netflix sprinkled through morning, midday and 16:00-18:00"
+  - "machine events: lock 01:55, unlock 09:34, brief lock 12:06-12:07, sleep/wake blips 18:00-18:05 and 18:51-18:53, final sleep 19:06 with no capture after"
+summary: >
+  A Saturday spent running Daylens's V2 foundation through agent lanes: a
+  late-night session to 01:55 merging the consent/capture/privacy PRs
+  (DEV-163/164/165, #216-#226), then from 09:34 a morning of steady PR merges
+  and spec acceptances (privacy/retention/sync, billing, memory/entities,
+  onboarding rebuild, semantic-search engine choice) driven from the Dia
+  browser and Warp. Early afternoon the commit stream pauses while he touches
+  the ALU MLOps course on Canvas (12:46-12:59) and browses; from 14:04 the
+  merge train resumes (shared corrected facts DEV-169-172, backup/uninstall
+  hardening DEV-220/222, sync allowlist DEV-187) while he simultaneously
+  redeems Lenny's Product Pass perks — Lovable billing, Framer×Lenny, Replit,
+  Gumloop and n8n accounts — 14:10-15:30. Slack takes ~48 minutes across
+  16:00-19:00 with YouTube and X between merges, and the machine sleeps at
+  19:06; the Claude-authored durable-entities and file-grants wave
+  (DEV-177/184) lands at 19:33-19:41 after he's gone. Evening off the
+  computer entirely.
+primaryWork:
+  - name: Daylens V2 foundation via agent lanes (consent/capture PRs, shared corrected facts, spec acceptances, ~101 commits merged)
+    aliases: [daylens]
+secondary:
+  - name: "Lenny's Product Pass tool-stack setup (Lovable, Framer, Replit, Gumloop, n8n)"
+    aliases: [lenny, lovable, framer, replit, gumloop, n8n, product pass]
+  - name: ALU MLOps coursework touch (Canvas pages, brief Meet)
+    aliases: [mlop, alu, canvas, machine learning]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+  - "chatgpt"
+  - "claude"
+shape:
+  - { from: "00:00", until: "01:55", desc: "late-night Daylens merge session in Dia + Warp with Claude/ChatGPT open; consent/capture/privacy PRs #216-#226 land 00:27-01:52" }
+  - { from: "09:34", until: "12:06", desc: "morning merge train from Dia + Warp: spec acceptances (privacy #234, billing #235, memory/entities #239), onboarding rebuild DEV-174, semantic engine DEV-179, consent gates" }
+  - { from: "12:07", until: "14:00", desc: "commit pause: ALU MLOps Canvas pages 12:46-12:59, a Meet room open 12:33, Kimi/QwenCloud AI-tool browsing, YouTube/Netflix sprinkles" }
+  - { from: "14:04", until: "16:00", desc: "merges resume (DEV-169-172, DEV-215) while he redeems Lenny's Product Pass deals: Lovable + Stripe billing, Framer×Lenny, Replit, Gumloop/n8n accounts, Gmail/Outlook logins" }
+  - { from: "16:00", until: "19:06", desc: "Slack (~48min) + YouTube/X between the last merges (DEV-220/222 backup-uninstall, DEV-187 sync allowlist 17:17); Claude-authored CI/updater commits 18:15-18:45; machine sleeps 19:06" }
+gaps:
+  - { from: "02:00", to: "09:30", reason: "overnight: screen locked 01:55, unlock 09:34; no capture between" }
+  - { from: "19:15", to: "23:59", reason: "machine asleep from 19:06 with zero capture after; evening off-computer" }
+notes: >
+  Machine-reconstructed; no journal exists for this day. Treat the 101
+  commits as proof the project advanced through agent lanes, not hands-on
+  coding minutes: branches are codex/* and Cursor ctonny111/* lanes, the
+  foreground is a browser (Dia) most of the day, and two commit clusters land
+  with the human verifiably absent — 02:01-02:19 after the 01:55 lock, and
+  the Claude-authored DEV-177/184/settings wave 19:33-19:41 after the 19:06
+  sleep. Capture recorded zero window titles on this day (title capture
+  shipped later), so per-app content is only knowable from browser history;
+  do not punish vague block content, and do not present Dia, Warp, Slack,
+  Claude, ChatGPT or Kimi as the work itself. The 12:33 Meet room and the
+  Canvas MLOps pages are minutes-long touches, not a study block. Slack's
+  ~48 min (workspace unknown, titles absent) is real but unattributable.

@@ -1,0 +1,55 @@
+# Ground truth from the owner's worklog (00_System/worklog/2026-07-24.md,
+# "Personal AI OS rebuild and vault cleanup") plus raw capture and git. The
+# worklog session itself concluded just after midnight (portfolio commit
+# 744070f at 00:58); the Jul 24 daytime is the Andersen AI training plus
+# vault/AI-OS continuation.
+date: "2026-07-24"
+confidence: journal
+sources:
+  - "worklog 2026-07-24 (Personal AI OS rebuild and vault cleanup; portfolio review; validation)"
+  - "git: portfolio 744070f 'Maintain reviewed writing collection' at 00:58"
+  - "capture: wake 08:40 after 06:39 sleep; Teams 'AI trainings | Andersen Rwanda' window 09:57-12:22 with Granola; tldraw 'Weekly AI session board [week 1]' 08:46-17:26; Obsidian SOUL/USER/vault-writing-rules + Codex/ChatGPT afternoon; off-computer ~17:30-19:44; evening Dia + Daylens app 19:44-23:06"
+summary: >
+  The day started at 08:40 with email and the Personal AI OS architecture
+  note, then the Andersen weekly AI training: a Teams meeting joined just
+  before 10:00 running to about noon, with Granola taking the notes and the
+  tldraw "Weekly AI session board" as the working surface before, during, and
+  after. The afternoon stayed on that session board and the vault: SOUL and
+  USER identity notes and vault-writing-rules in Obsidian, with Codex and
+  ChatGPT alongside, until about 5:30pm. Off the computer from roughly 5:30
+  to 7:45pm, then an evening of browsing in Dia and checking the Daylens app
+  until just after 11pm. The vault rebuild session the worklog documents
+  wrapped up overnight, with the portfolio's reviewed-writing commit landing
+  at 00:58.
+primaryWork:
+  - name: Andersen weekly AI training (Teams session + tldraw session board)
+    aliases: [ai training, andersen, session board, tldraw, teams, weekly ai session]
+  - name: Personal AI OS / vault work (identity notes, writing rules)
+    aliases: [vault, obsidian, personal ai os, soul, second brain, writing rules]
+secondary:
+  - name: Email and admin (Outlook)
+    aliases: [email, outlook, mail]
+  - name: Daylens app checks
+    aliases: [daylens]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+  - "chatgpt"
+  - "codex"
+shape:
+  - { from: "08:40", until: "09:55", desc: "email in Outlook, Personal AI OS architecture note in Obsidian, tldraw board open, Apple Notes" }
+  - { from: "09:57", until: "12:22", desc: "Andersen AI training: Teams meeting with Granola notes, working the tldraw Weekly AI session board" }
+  - { from: "12:22", until: "17:26", desc: "session board follow-through in tldraw plus vault work: SOUL and USER notes, vault-writing-rules in Obsidian, Codex/ChatGPT alongside; choppy presence 13:11-13:54 (repeated lock/unlock, lunch-shaped)" }
+  - { from: "19:44", until: "23:06", desc: "evening browsing in Dia and Daylens app checks, brief break 20:25-20:40" }
+gaps:
+  - { from: "17:30", to: "19:44", reason: "off the computer; capture shows no events between ~17:26 and the 19:44 wake" }
+  - { from: "23:06", to: "23:59", reason: "machine asleep from 23:06" }
+notes: >
+  The worklog's vault-rebuild session (portfolio review, identity files,
+  routing/ownership updates) concluded at 00:58 with the portfolio commit;
+  capture for that after-midnight stretch is missing (first Jul 24 event is
+  the 06:39 sleep marker), so narratives must not claim observed activity
+  before 08:40. The training meeting ran inside the 09:57-12:22 Teams window;
+  treat exact meeting bounds as approximate. Do not punish the evening being
+  plain browsing; do punish presenting ChatGPT/Codex/tldraw tool surfaces as
+  the work instead of the training or the vault work they served.

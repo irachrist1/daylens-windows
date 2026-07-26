@@ -6,10 +6,14 @@
 // turns "4 hours in Cursor" into "wrote 9 commits to the billing service and
 // opened a PR."
 //
-// Everything here is best-effort and silent: no git, no repos, no gh, a slow
-// filesystem — every failure path returns null/empty and the wrap proceeds
-// without the signal. Local reads only; the single network touch is gh, which
-// is the user's own authenticated CLI.
+// Local reads only; the single network touch is gh, which is the user's own
+// authenticated CLI. The connector's result contract distinguishes two very
+// different "nothing"s for the scan ledger (externalSignals.ts): git being
+// UNAVAILABLE throws (the day was never actually checked and stays
+// collectable), while a day with no commits and no PRs returns null ("ran,
+// found nothing" — safe to remember as empty). The caller
+// (collectExternalSignals) catches the throw and the wrap proceeds without
+// the signal either way.
 
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
@@ -161,30 +165,52 @@ export function cleanSubject(subject: string): string {
   return stripped.length > MAX_MESSAGE_LENGTH ? `${stripped.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : stripped
 }
 
+// Agent-runner author identities: commits these land are the USER's output
+// (they drive the agents), distinct from a human teammate's commits, which a
+// shared repo must never credit to this user's day.
+const AGENT_AUTHOR_RE = /\b(?:claude|cursor agent|codex|devin|copilot|windsurf|traycer|jules|aider|openhands)\b|\[bot\]/i
+
 async function repoActivityForDate(repo: string, date: string): Promise<GitRepoActivity | null> {
-  // Filter to the repo's own configured author when present, so a shared repo
-  // never credits teammates' commits to this user's day.
+  // No --author filter: the user's agent-era output lands under agent author
+  // identities too. Author names come back per commit; the user's own email
+  // counts as hands-on, known agent identities count as agent-driven, and
+  // anything else (a human teammate in a shared repo) is dropped.
   const email = (await exec('git', ['-C', repo, 'config', 'user.email'], GIT_TIMEOUT_MS))?.trim()
   const args = [
     '-C', repo, 'log', '--all', '--no-merges',
     `--since=${date} 00:00`, `--until=${date} 23:59:59`,
-    '--pretty=%ct%x09%s',
+    '--pretty=%ct%x09%ae%x09%an%x09%s',
   ]
-  if (email) args.push(`--author=${email}`)
   const output = await exec('git', args, GIT_TIMEOUT_MS)
   if (!output) return null
-  const commits = output.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
-    const tab = line.indexOf('\t')
-    return { ts: Number(line.slice(0, tab)) * 1000, subject: cleanSubject(line.slice(tab + 1)) }
+  let agentCommits = 0
+  const commits = output.split('\n').map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+    const [ts, authorEmail, authorName, ...rest] = line.split('\t')
+    const subject = rest.join('\t')
+    const own = !email || authorEmail?.trim().toLowerCase() === email.toLowerCase()
+    const agent = !own && AGENT_AUTHOR_RE.test(`${authorName ?? ''} ${authorEmail ?? ''}`)
+    if (!own && !agent) return []
+    if (agent) agentCommits += 1
+    return [{ ts: Number(ts) * 1000, subject: cleanSubject(subject) }]
   }).filter((c) => Number.isFinite(c.ts))
   if (commits.length === 0) return null
   const times = commits.map((c) => c.ts).sort((a, b) => a - b)
+  const buckets = { overnight: 0, morning: 0, afternoon: 0, evening: 0 }
+  for (const ts of times) {
+    const hour = new Date(ts).getHours()
+    if (hour < 5) buckets.overnight += 1
+    else if (hour < 12) buckets.morning += 1
+    else if (hour < 17) buckets.afternoon += 1
+    else buckets.evening += 1
+  }
   return {
     repo: path.basename(repo),
     commitCount: commits.length,
     messages: commits.slice(0, MAX_MESSAGES_PER_REPO).map((c) => c.subject),
     firstCommitClock: clock(times[0]),
     lastCommitClock: clock(times[times.length - 1]),
+    commitHourBuckets: buckets,
+    ...(agentCommits > 0 ? { agentCommitCount: agentCommits } : {}),
   }
 }
 
@@ -216,10 +242,17 @@ async function ghPRActivity(date: string): Promise<GitPRActivity[]> {
 }
 
 /** The day's git story: repos touched, commit counts and subjects, PR activity.
- *  Null when git isn't installed or nothing was found. */
-export async function collectGitActivity(date: string): Promise<GitActivitySignal | null> {
-  const gitVersion = await exec('git', ['--version'], 2_000)
-  if (!gitVersion) return null
+ *  Null when the day genuinely has no commits and no PR activity; THROWS when
+ *  git itself is unavailable (not installed, or the probe timed out), so the
+ *  scan ledger never remembers an unchecked day as "collected, empty".
+ *  `probeGit` is injectable so the unavailable path is testable without
+ *  uninstalling git. */
+export async function collectGitActivity(
+  date: string,
+  opts: { probeGit?: () => Promise<string | null> } = {},
+): Promise<GitActivitySignal | null> {
+  const gitVersion = await (opts.probeGit ?? (() => exec('git', ['--version'], 2_000)))()
+  if (!gitVersion) throw new Error('git unavailable: not installed or probe timed out')
 
   const repos = findGitRepos()
   const activities: GitRepoActivity[] = []

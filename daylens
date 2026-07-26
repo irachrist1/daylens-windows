@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Daylens headless CLI shim. Usage: ./daylens <command> …  (see ./daylens help)
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec env ELECTRON_RUN_AS_NODE=1 "$DIR/node_modules/.bin/electron" \
+  --loader "$DIR/tests/support/ts-loader-real.mjs" "$DIR/cli/run.ts" "$@"

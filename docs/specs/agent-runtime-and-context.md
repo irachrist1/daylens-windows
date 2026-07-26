@@ -73,6 +73,8 @@ The interpretation agent receives a bounded group of evidence and proposes under
 
 Its output is stored as versioned inference with source evidence, confidence, interpretation-policy version, model and runtime version, and creation time. It never overwrites the evidence that produced it. Reprocessing the same evidence may replace an automated inference but cannot override a person’s correction.
 
+In the current codebase this is the not-yet-wired `interpretationAgentEnabled` path in `analyzeDay.ts`. When wired, day analysis becomes an agent turn over the same tools as the chat agent: for each low-confidence block it may pull title context, entities, calendar, or (consented) frames before labeling. Deterministic heuristics stay as the always-available fallback and the floor for hermetic tests. This is where "the AI understands activity" and "the agent pulls context" become the same feature.
+
 ### Question-answering agent
 
 The question-answering agent receives a question-specific context packet and narrow read tools. It retrieves, reconciles, calculates, and explains. Deterministic Daylens queries own totals, counts, dates, and entity relationships.
@@ -222,6 +224,8 @@ Daylens may answer that a file was used without reading its contents. It reads o
 
 ## Connector context
 
+The OAuth connector framework was removed from the product on 2026-07-26 (see [connectors.md](connectors.md)); calendar and git enrichment now arrives through the zero-setup local probes in `externalSignals.ts`, which is also the intended home of any reborn integration — as agent-pluggable evidence behind the tier model, not a settings page. The rules below bind any such source, current or future.
+
 A connected source makes permitted records retrievable; it does not preload the source into every conversation.
 
 - Calendar metadata can identify what was scheduled. Attendance language requires corroboration or confirmation.
@@ -234,9 +238,39 @@ The agent may request a specific connection when it identifies a material eviden
 
 ## Screen-derived context
 
-Screen extraction is fallback evidence governed by the [screen-context specification](screen-context.md). A raw frame never enters an agent context packet.
+Screen extraction is fallback evidence governed by the [screen-context specification](screen-context.md). A raw frame never enters an agent context packet or any stored context. The one exception is transient: a consented Tier-3 `capture_screen` call (§Tiered context escalation) passes a single downscaled frame to the model as an image block for the current turn only — it is never stored, and the persisted trace keeps a text summary in its place.
 
 Only successfully extracted, permitted, sensitivity-labelled evidence can be retrieved. The context inspector identifies screen extraction as its source. Deleting the raw frame does not remove the provenance of the permitted derived fact, while deleting the derived evidence removes it from context, memory, and indexes.
+
+## Tiered context escalation
+
+The agent decides what context it needs and goes and gets it — a real tool loop, not a canned pipeline. Tools are organized in three tiers by cost and sensitivity. The agent exhausts a tier before escalating, and says why when it escalates.
+
+**Tier 1 — the database (free, always allowed).** The existing tool set (`daylensTools.ts` + wrapped tools): day summaries, session search, window-title context, entities, calendar, git. Milliseconds, text, no prompt.
+
+**Tier 2 — structured live probes (cheap, allowed by default, permission-carded).** Currently: `read_file`/`list_dir`/`search_files` under deny-by-default grants with a disclosure ledger, read-only `git`, and `discover_repositories`. Planned probes in the same tier: `get_active_context()` (current foreground app, window title, URL), `read_observed_file(path)` (gated to paths Daylens already observed in activity evidence, via the existing `file_access_grants` model), and `get_accessibility_text(window)` (AX-tree text of a window — an order of magnitude cheaper in tokens than pixels and usually more useful).
+
+**Tier 3 — pixels (expensive, consent-gated, never stored).** `capture_screen(reason)` — one still of the active display, downscaled (long edge ≤ 1600px, matching the existing frame-source cap), passed to the model as an image block, discarded after the turn. The `reason` string is mandatory and surfaced in the UI activity trail — the person always sees *why* the agent looked. When the screen-context experiment is enabled and frames exist for the asked-about moment, `get_screen_frame(time)` serves the stored encrypted frame instead of a live capture.
+
+### The policy gate
+
+The gate lives in the main process, outside the model and outside the renderer.
+
+- Per-tier switches in Settings: Tier 1 always on; Tier 2 on by default; Tier 3 off until the person enables it (reusing the screen-context consent language — one consent, one mental model).
+- Every Tier 2/3 call is logged to the existing activity trail with its reason. Tool results pass through `filterTrackingExcludedEvidence` like every other AI-bound payload.
+- Size hygiene: a screenshot enters as one image block; after the turn ends, the stored trace keeps only a text summary ("screenshot showed Cursor with failing tests"), never the pixels.
+
+### Two consumers, one loop
+
+The chat agent (`chatAgent.ts`, already a real tool loop) and the interpretation agent (§Agent roles) share the tool registry, the policy gate, and the trail. New capabilities — a new probe, an integration, a device — are new tools plus a policy entry; the loop does not change. The agent's *capability* is the stable core; integrations are pluggable evidence.
+
+### Escalation heuristics live in the prompt
+
+When-to-escalate is system-prompt guidance, not code: escalate when naming confidence is low, when evidence conflicts (a leisure domain against work titles), when the person asks about *now*, when a block is long but unnamed. Iterating on these costs a prompt edit.
+
+### Privacy contract
+
+The user-facing contract, in one sentence: "Daylens reads your local activity database freely; it looks at a file or your live screen only when a question needs it, tells you why, and never stores what it saw."
 
 ## Tool and skill scoping
 
@@ -405,7 +439,7 @@ Measurements include factual correctness, retrieval completeness, deterministic 
 - Context packets never contain excluded, deleted, unavailable, or unauthorized content.
 - File observation, local indexing, and model disclosure remain separate permissions with tested revocation.
 - Connector content is retrieved only when relevant to the current request.
-- Raw screen frames never enter agent context.
+- Raw screen frames never enter stored agent context; a consented Tier-3 live capture is turn-scoped, reasoned, trailed, and never persisted.
 - A person can inspect the facts, tools, sources, excerpts, gaps, and provider involved in an answer.
 - Skills and unrelated connector catalogues are not globally loaded into conversations.
 - The interpretation agent cannot override corrections or turn generated prose into recorded fact.

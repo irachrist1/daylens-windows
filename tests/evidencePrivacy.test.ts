@@ -59,6 +59,36 @@ test('short app exclusions do not corrupt unrelated words', () => {
   assert.equal(filtered.exactDia, '[excluded]')
 })
 
+test('a common-word app name only redacts its proper-noun form', () => {
+  // Found by driving real captured data: excluding the app "Messages" turned
+  // an ordinary block label containing the word "messages" into "[excluded]"
+  // while the block's actual evidence passed through untouched. App names are
+  // proper nouns; the generic noun must survive.
+  const filtered = filterTrackingExcludedEvidence({
+    generic: 'Catching up on WhatsApp messages and email',
+    properNoun: 'Replying in Messages',
+  }, {
+    ...controls,
+    excludedApps: ['Messages'],
+    excludedSites: [],
+  }) as Record<string, string>
+
+  assert.equal(filtered.generic, 'Catching up on WhatsApp messages and email')
+  assert.equal(filtered.properNoun, '[excluded]')
+})
+
+test('site brand redaction stays case-insensitive despite case-sensitive app tokens', () => {
+  const filtered = filterTrackingExcludedEvidence({
+    label: 'watching youtube clips',
+  }, {
+    ...controls,
+    excludedApps: [],
+    excludedSites: ['youtube.com'],
+  }) as Record<string, string>
+
+  assert.equal(filtered.label, '[excluded]')
+})
+
 test('excluding a site redacts its brand in derived labels and page titles', () => {
   // Found by driving real captured data: excluding "youtube.com" dropped the
   // structured domain row but left "Watching YouTube" block labels and

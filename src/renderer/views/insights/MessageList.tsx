@@ -474,12 +474,15 @@ function MessageListImpl({
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
                       <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>Files opened</span>
                       {message.agent?.fileDisclosures?.map((disclosure) => (
+                        // The chip stays human — just the file name. The
+                        // audit detail (path, version, byte range) lives in
+                        // the tooltip and the Settings access log, not inline.
                         <span
                           key={`${message.id}:${disclosure.path}:${disclosure.excerptStart}`}
                           title={`${disclosure.path}\nversion ${disclosure.versionFingerprint}\nbytes ${disclosure.excerptStart}–${disclosure.excerptEnd}\nLogged in Settings → Agent file access`}
                           style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-secondary)' }}
                         >
-                          {disclosure.name} · v{disclosure.versionFingerprint.split('-').pop()} · {disclosure.excerptStart}–{disclosure.excerptEnd}
+                          {disclosure.name}
                         </span>
                       ))}
                     </div>

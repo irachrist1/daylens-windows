@@ -12,6 +12,8 @@ interface TimeChunkRow {
   startTime: string
   endTime: string
   durationMinutes: number
+  /** The covering timeline block's label: what the time WAS, not just the app. */
+  blockLabel?: string | null
   activity: TimeChunkActivity[]
   pages: TimeChunkPage[]
   gap: { label: string } | null
@@ -24,8 +26,13 @@ export interface TimeChunkResult {
   chunks: TimeChunkRow[]
 }
 
+// Titles arrive as the app wrote them, and plenty of apps put an em dash in
+// their window title ("Gemini — Digital File Organization Strategy"). Echoing
+// one into the table would break the voice contract's punctuation rule on a
+// surface Daylens composes itself, so the separator is normalized here, the
+// same place the title is already shortened for display.
 function concise(value: string, limit = 72): string {
-  const normalized = value.trim().replace(/\s+/g, ' ')
+  const normalized = value.trim().replace(/\s+/g, ' ').replace(/\s*—\s*/g, ': ')
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1).trimEnd()}…`
 }
 
@@ -40,10 +47,18 @@ function rowDescription(chunk: TimeChunkRow): string {
   if (chunk.activity.length === 0) return chunk.gap?.label ?? 'no activity captured'
   const activity: string[] = []
   const known = new Set<string>()
+  // Lead with the covering block's label when it names real work: the row
+  // then says what the time WAS, with the apps as supporting detail.
+  if (chunk.blockLabel?.trim()) {
+    activity.push(chunk.blockLabel.trim())
+    known.add(chunk.blockLabel.trim().toLowerCase())
+  }
   for (const item of chunk.activity) {
     const title = userVisibleWindowTitle(item.windowTitle)
+    // Colon, never an em dash: the voice contract bans em dashes in every
+    // surface, including the tables composed here rather than by the model.
     const label = title && title.toLowerCase() !== item.appName.toLowerCase()
-      ? `${item.appName} — ${concise(title)}`
+      ? `${item.appName}: ${concise(title)}`
       : item.appName
     const key = label.toLowerCase()
     if (known.has(key)) continue
@@ -60,6 +75,25 @@ function rowDescription(chunk: TimeChunkRow): string {
     if (activity.length >= 4) break
   }
   return activity.join('; ')
+}
+
+// Does the question ask for the day broken into fixed increments? Gates the
+// deterministic chunk-table override in chatAgent: the table must take over
+// for every increment-shaped phrasing (including follow-up refinements like
+// "make it 15-minute rows instead"), but never hijack a turn that merely
+// consulted get_time_chunks while researching something else.
+const CHUNK_NOUNS = /\b(?:chunks?|increments?|intervals?|segments?|buckets?)\b/i
+const SPLIT_INTO = /\b(?:break|split|divide|chop)(?:\s+\S+){0,5}\s+(?:into|in|by)\b/i
+const HOURLY = /\bhour(?:ly|[- ]by[- ]hour)\b/i
+const N_MINUTES = /\b\d{1,3}[- ]?min(?:ute)?s?\b/i
+const HALF_HOUR = /\bhalf[- ]hours?\b/i
+
+export function wantsTimeChunkTable(question: string): boolean {
+  return CHUNK_NOUNS.test(question)
+    || SPLIT_INTO.test(question)
+    || HOURLY.test(question)
+    || N_MINUTES.test(question)
+    || HALF_HOUR.test(question)
 }
 
 export function renderTimeChunkAnswer(result: TimeChunkResult): string | null {
