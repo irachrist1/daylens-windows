@@ -6,13 +6,13 @@ import {
   getFocusSessionsForDateRange,
   getReconciledWebsiteVisitsForRange,
   getTopPagesForDomains,
-  getWebsiteVisitsForRange,
   getWorkContextInsightForRange,
   getDistractionByMonth,
   getDistractionByHour,
   getDistractionByDomain,
   getDaysTracked,
   deleteDaySnapshotRow,
+  type ReconciledPageVisit,
   type WebsiteVisitRecord,
 } from '../db/queries'
 import { deleteWrappedNarrativesForDate } from '../db/wrappedNarrativeStore'
@@ -2215,7 +2215,6 @@ function contextRunsFor(sessions: AppSession[]): ContextRun[] {
 }
 
 interface TimelineBuildContext {
-  websiteVisits: WebsiteVisitRecord[]
   // Per-session work/leisure/personal kind, keyed by session identity. Resolved
   // once from category + (for browser sessions) the dominant domain in the
   // session's window. This is what makes a `kind` change a hard segmentation
@@ -2230,40 +2229,85 @@ function browserBundleMatchesSession(visit: WebsiteVisitRecord, session: AppSess
     || (session.canonicalAppId != null && visit.canonicalBrowserId === session.canonicalAppId)
 }
 
+function normalizedTitleToken(value: string | null | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+// True when a visited page's title shows up in the session's foreground window
+// title (or vice versa) — the browser was demonstrably frontmost ON that page,
+// not merely keeping its tab alive behind another one. Both sides must carry
+// real text; a 3-character token would match half the web.
+function pageTitleInForegroundTitle(pageTitle: string | null, windowTitle: string | null): boolean {
+  const page = normalizedTitleToken(pageTitle)
+  const foreground = normalizedTitleToken(windowTitle)
+  if (page.length < 4 || foreground.length < 4) return false
+  return foreground.includes(page) || page.includes(foreground)
+}
+
 // Resolve one session's kind, or null when it is neutral (bare browsing with no
 // domain signal) and should inherit a neighbour's kind. Browser sessions take
 // the kind of the domains they actually sat on (youtube → leisure, github →
 // work); native app sessions trust their category.
-function resolveSessionKindRaw(session: AppSession, visits: WebsiteVisitRecord[]): WorkKind | null {
+//
+// Domains vote with attention-clamped credit, never raw visit seconds: the
+// foreground session is the only attention there is, and a background tab's
+// history duration keeps accruing while another tab is frontmost (the 1249s
+// Netflix "watch" inside an 800s browser window that labeled a CI-migration
+// block "Watching Netflix & YouTube"). reconcileWebsiteVisits already clipped
+// each visit to its browser's foreground time with exclusive claims, so
+// intersecting with this session's window yields per-domain credit whose sum
+// can never exceed the session's own seconds.
+function resolveSessionKindRaw(session: AppSession, credits: ReconciledPageVisit[]): WorkKind | null {
   if (!isBrowserSession(session)) {
     const native = resolveKind({ category: session.category, isBrowser: false })
     return native.neutral ? null : native.kind
   }
   const start = session.startTime
   const end = sessionEndMs(session)
-  const byDomain = new Map<string, number>()
-  for (const visit of visits) {
-    if (visit.visitTime < start || visit.visitTime >= end) continue
+  const byDomain = new Map<string, { seconds: number; titleMatched: boolean }>()
+  for (const { visit, freeIntervals } of credits) {
     if (!browserBundleMatchesSession(visit, session)) continue
-    byDomain.set(visit.domain, (byDomain.get(visit.domain) ?? 0) + Math.max(1, visit.durationSec))
+    let creditedMs = 0
+    for (const interval of freeIntervals) {
+      creditedMs += Math.max(0, Math.min(interval.end, end) - Math.max(interval.start, start))
+    }
+    if (creditedMs <= 0) continue
+    let entry = byDomain.get(visit.domain)
+    if (!entry) {
+      entry = { seconds: 0, titleMatched: false }
+      byDomain.set(visit.domain, entry)
+    }
+    entry.seconds += creditedMs / 1000
+    if (!entry.titleMatched && pageTitleInForegroundTitle(visit.pageTitle, session.windowTitle)) {
+      entry.titleMatched = true
+    }
   }
+  const budgetSeconds = Math.max(1, session.durationSeconds)
   const domains = [...byDomain.entries()]
-    .sort((left, right) => right[1] - left[1])
+    // Media ambience: an entertainment domain is an activity only when the
+    // browser was demonstrably foregrounded on it — its page title reached the
+    // foreground title stream, or it holds the majority of the session's
+    // clamped budget. Anything less is a background tab and casts no vote.
+    .filter(([domain, info]) =>
+      policyForHost(domain) !== 'entertainment'
+      || info.titleMatched
+      || info.seconds > budgetSeconds / 2)
+    .sort((left, right) => right[1].seconds - left[1].seconds)
     .map(([domain]) => domain)
   const resolution = resolveKind({ category: session.category, isBrowser: true, domains })
   return resolution.neutral ? null : resolution.kind
 }
 
 function buildTimelineContext(db: Database.Database, sessions: AppSession[]): TimelineBuildContext {
-  if (sessions.length === 0) return { websiteVisits: [], sessionKind: new Map() }
+  if (sessions.length === 0) return { sessionKind: new Map() }
   const startTime = Math.min(...sessions.map((session) => session.startTime))
   const endTime = Math.max(...sessions.map((session) => sessionEndMs(session)))
-  const websiteVisits = getWebsiteVisitsForRange(db, startTime, endTime)
+  const websiteCredits = getReconciledWebsiteVisitsForRange(db, startTime, endTime)
 
   // Resolve raw kinds, then let neutral (bare-browsing) sessions inherit the
   // nearest concrete neighbour so a contentless tab-flip never forces a kind
   // boundary inside an otherwise-continuous episode.
-  const raw = sessions.map((session) => resolveSessionKindRaw(session, websiteVisits))
+  const raw = sessions.map((session) => resolveSessionKindRaw(session, websiteCredits))
   const sessionKind = new Map<AppSession, WorkKind>()
   sessions.forEach((session, index) => {
     if (raw[index]) {
@@ -2276,7 +2320,7 @@ function buildTimelineContext(db: Database.Database, sessions: AppSession[]): Ti
     sessionKind.set(session, inherited ?? 'personal')
   })
 
-  return { websiteVisits, sessionKind }
+  return { sessionKind }
 }
 
 // The kind of a session as seen by the build context; falls back to a
