@@ -34,7 +34,7 @@ import {
 } from '../lib/followUpSuggestions'
 import { transformInstruction } from '@shared/answerTransforms'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
-import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import { labelCandidateViolation, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
@@ -3048,27 +3048,19 @@ export async function generateWorkBlockInsight(
   ].join(' ')
 
   // The label-voice contract (label-voice.md, DEV-276): the model's label must
-  // clear the invariant rules and must not echo a captured title or a bare app
-  // name — a raw window title, filename, ticket description, or JSON string is
-  // never a label. A rejected label gets exactly one corrective retry with the
-  // violation named; if that also fails, the deterministic evidence name (voice
-  // gated itself) stands and the block stays a re-analysis target.
+  // clear the invariant rules, must not echo a captured title or a bare app
+  // name, and must not present a tool brand/surface, command line, joined tab
+  // title, or site surface as the work — even behind a verb lead ("Working on
+  // Cursor Agents"). One shared gate (labelCandidateViolation) holds this path
+  // and the interpretation agent to the same standard. A rejected label gets
+  // exactly one corrective retry with the violation named; if that also fails,
+  // the deterministic evidence name (voice gated itself) stands and the block
+  // stays a re-analysis target.
   // The block kind matters: without it the leisure-shape rule is inert here
   // and a bare video title would only be caught later by the label chooser.
   const voiceContext = labelVoiceContextForBlock(block, effectiveBlockKind(block))
-  const labelRejection = (candidate: string | null | undefined): string | null => {
-    const label = candidate?.trim()
-    if (!label) return 'the label was empty'
-    for (const finding of evaluateLabelVoice(label, voiceContext)) {
-      if (finding.passed) continue
-      if (finding.tier === 'invariant'
-        || finding.rule === 'no-verbatim-window-title'
-        || finding.rule === 'activity-not-software') {
-        return finding.detail ?? finding.rule
-      }
-    }
-    return null
-  }
+  const labelRejection = (candidate: string | null | undefined): string | null =>
+    labelCandidateViolation(candidate, voiceContext)
 
   try {
     const requestInsight = async (voiceFeedback?: string) => {
