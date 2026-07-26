@@ -4,9 +4,10 @@
 // here can reach the network, and it needs no model and no billing state.
 import { app, dialog, ipcMain } from 'electron'
 import { IPC } from '@shared/types'
-import type { HistoryExportPlan, HistoryExportRunResult, HistoryExportVerification } from '@shared/types'
+import type { HistoryExportPlan, HistoryExportRunResult, HistoryExportVerification, WrapSlidesExportResult } from '@shared/types'
 import { getDb } from '../services/database'
 import { planHistoryExport, runHistoryExport, verifyHistoryExport } from '../services/historyExport'
+import { validateWrapSlideFiles, writeWrapSlides, type WrapSlideFile } from '../services/wrapSlideExport'
 
 export function registerExportHandlers(): void {
   ipcMain.handle(
@@ -40,6 +41,27 @@ export function registerExportHandlers(): void {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.EXPORT.PROGRESS, progress)
         },
       })
+    },
+  )
+
+  // DEV-248: per-slide wrap export. One folder picker, then every slide of the
+  // deck lands as its own PNG in a subfolder named after the wrap. A failed
+  // write cleans up and REJECTS (the renderer shows the failure); it never
+  // resolves as success with files missing.
+  ipcMain.handle(
+    IPC.EXPORT.WRAP_SLIDES,
+    async (_event, payload: { stem: string; files: WrapSlideFile[] }): Promise<WrapSlidesExportResult> => {
+      const invalid = validateWrapSlideFiles(payload?.files)
+      if (invalid) throw new Error(invalid)
+      const result = await dialog.showOpenDialog({
+        title: 'Choose where to save your wrap slides',
+        buttonLabel: 'Save slides here',
+        properties: ['openDirectory', 'createDirectory'],
+      })
+      if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+      const stem = typeof payload.stem === 'string' ? payload.stem : 'daylens-wrap'
+      const written = await writeWrapSlides(result.filePaths[0], stem, payload.files)
+      return { canceled: false, dir: written.dir, files: written.files }
     },
   )
 

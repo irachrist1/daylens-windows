@@ -3,9 +3,9 @@ import type { CSSProperties } from 'react'
 import type { DayAnalysisVersionSummary, WrappedAskResult } from '@shared/types'
 import type { WrapDeckMeta, WrapSlideSpec } from '../../lib/wrapDeck'
 import { resolveSlideLine } from '../../lib/wrapDeck'
-import { buildWrapExportModels, exportButtonLabel, saveSlideButtonLabel, saveWrapExport, type WrapExportState, type WrapSlideSaveState } from './wrapExport'
+import { buildWrapExportModels, exportButtonLabel, exportWrapDeck, saveSlideButtonLabel, saveWrapSlide, type WrapExportState, type WrapSlideSaveState } from './wrapExport'
 import WrapSlideView from './WrapSlideView'
-import { ghostButton, pickPalette, prefersReducedMotion, primaryButton, Scene, THEME, type Theme, type WrapPalette } from './wrapKit'
+import { ghostButton, opaqueSlideSurface, pickPalette, prefersReducedMotion, primaryButton, Scene, THEME, type Theme, type WrapPalette } from './wrapKit'
 
 // ─── WrapDeck — the story shell for the deck-era Wrapped ────────────────────────
 // Owns everything shared by every wrap: full-bleed frame, per-slide gradient,
@@ -153,24 +153,29 @@ export default function WrapDeck({
     [slides, narrative, meta, seed],
   )
   // A failed export is SAID, not swallowed: the old code mapped a false/thrown
-  // save back to the idle label, so a null toBlob (the month-deck canvas-cap
-  // bug's symptom) looked like nothing happened. Failure is now a visible
-  // state with an honest label (voice.md errors: one calm line, no sorry).
+  // save back to the idle label, so a null toBlob looked like nothing happened.
+  // Failure is now a visible state with an honest label (voice.md errors: one
+  // calm line, no sorry). DEV-248: the finale exports one PNG PER SLIDE through
+  // a single folder pick; the glued mega-image path is gone.
   const [saveState, setSaveState] = useState<WrapSlideSaveState>('idle')
-  const [exportState, setExportState] = useState<WrapExportState>('idle')
+  const [exportState, setExportState] = useState<WrapExportState>({ kind: 'idle' })
   useEffect(() => { setSaveState('idle') }, [slideIndex])
   const saveSlide = useCallback(() => {
     const model = exportModels[slideIndex]
     if (!model) return
-    void saveWrapExport([model], `${exportStem}-${model.id}.png`, meta.footer)
+    void saveWrapSlide(model, `${exportStem}-${model.id}.png`, meta.footer)
       .then((ok) => setSaveState(ok ? 'saved' : 'failed'))
       .catch(() => setSaveState('failed'))
   }, [exportModels, slideIndex, exportStem, meta.footer])
   const exportAll = useCallback(() => {
-    setExportState('working')
-    void saveWrapExport(exportModels, `${exportStem}.png`, meta.footer)
-      .then((ok) => setExportState(ok ? 'done' : 'failed'))
-      .catch(() => setExportState('failed'))
+    setExportState({ kind: 'working' })
+    void exportWrapDeck(exportModels, exportStem, meta.footer)
+      .then((outcome) => {
+        if (outcome.kind === 'saved') setExportState({ kind: 'done', count: outcome.count })
+        else if (outcome.kind === 'canceled') setExportState({ kind: 'idle' })
+        else setExportState({ kind: 'failed', rendered: outcome.rendered, total: outcome.total })
+      })
+      .catch(() => setExportState({ kind: 'failed' }))
   }, [exportModels, exportStem, meta.footer])
 
   // The in-context ask.
@@ -221,8 +226,16 @@ export default function WrapDeck({
     : null
 
   return (
+    // The DEV-248 bleed-through fix: the root is opaque black with NO opacity
+    // animation on it. The shipped bug put a `forwards`-fill fade on this root;
+    // when the animation stalled the whole overlay stayed translucent, the
+    // timeline showed through every layer, and "Save slide" landed visually on
+    // the sidebar's Settings button. Entrance motion now runs only on the
+    // slide layer below, which itself paints an opaque backstop under its
+    // gradient (opaqueSlideSurface) — a stalled animation shows black, never
+    // the app.
     <div
-      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', cursor: 'default', animation: 'wrappedOverlayIn 280ms ease forwards' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', cursor: 'default' }}
       onClick={onClick}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => { setHovering(false); endHold() }}
@@ -231,7 +244,7 @@ export default function WrapDeck({
     >
       <div
         key={slideIndex}
-        style={{ position: 'absolute', inset: 0, background: theme.bg, animation: reduced ? 'wrappedOverlayIn 200ms ease forwards' : `${animName} 460ms cubic-bezier(0.34,1.4,0.64,1) forwards`, overflow: 'hidden' }}
+        style={{ position: 'absolute', inset: 0, ...opaqueSlideSurface(theme), animation: reduced ? 'wrappedOverlayIn 200ms ease' : `${animName} 460ms cubic-bezier(0.34,1.4,0.64,1)`, overflow: 'hidden' }}
       >
         <div style={{ position: 'absolute', inset: 0, background: `radial-gradient(ellipse 75% 60% at 50% 40%, ${theme.glow}, transparent 72%)` }} />
         {/* When the ask panel is open, cede the bottom of the frame to it so the
@@ -273,9 +286,11 @@ export default function WrapDeck({
         aria-label="Close"
       >×</button>
 
-      {/* Bottom bar: save · ask · next */}
+      {/* Bottom bar: save · ask · next. flexWrap so the long save-failed label
+          wraps to a second row at narrow widths instead of pushing buttons
+          into each other or off-screen. */}
       {active && active.kind !== 'finale' && (
-        <div style={{ position: 'absolute', bottom: 26, left: 22, right: 22, zIndex: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ position: 'absolute', bottom: 26, left: 22, right: 22, zIndex: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <button onClick={(e) => { e.stopPropagation(); saveSlide() }} style={pillButton} aria-label="Save this slide as an image">
             {saveSlideButtonLabel(saveState)}
           </button>
@@ -480,7 +495,7 @@ function FinaleSlide({ meta, theme, slides, narrative, exportState, onExport, ge
       )}
 
       <div style={finaleActions}>
-        <button onClick={(e) => { e.stopPropagation(); onExport() }} style={primaryButton(theme.accent)} aria-label="Export every slide as one image">
+        <button onClick={(e) => { e.stopPropagation(); onExport() }} style={primaryButton(theme.accent)} aria-label="Save every slide as its own image">
           {exportButtonLabel(exportState)}
         </button>
         {finaleExtra && (

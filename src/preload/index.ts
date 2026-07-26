@@ -43,6 +43,7 @@ import type {
   HistoryExportProgress,
   HistoryExportRunResult,
   HistoryExportVerification,
+  WrapSlidesExportResult,
   BillingUsageReport,
   SpendGuardrailsReport,
   IntercomIdentity,
@@ -630,6 +631,10 @@ const api = {
       ipcRenderer.on(IPC.EXPORT.PROGRESS, handler)
       return () => { ipcRenderer.removeListener(IPC.EXPORT.PROGRESS, handler) }
     },
+    // DEV-248: the wrap deck's per-slide export — one folder pick, one PNG per
+    // slide. Rejects (never resolves) when a write fails, so the deck can say so.
+    wrapSlides: (payload: { stem: string; files: Array<{ filename: string; bytes: Uint8Array }> }): Promise<WrapSlidesExportResult> =>
+      ipcRenderer.invoke(IPC.EXPORT.WRAP_SLIDES, payload),
   },
   contextPackets: {
     // DEV-181: the recorded, deterministic bundle behind an AI exchange.
