@@ -25,6 +25,7 @@ import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 import { evaluateInterpretationRun, interpretationAgentEnabled } from '../lib/interpretationEval'
 import { findRawArtifactLeak } from '../lib/wrapNarrativeShared'
 import { runInterpretationAgentRelabel, type InterpretationAgentInsight } from './interpretationAgent'
+import { runExternalSignalBackfill } from './externalSignals'
 import { getSettings } from './settings'
 
 export type BlockInsightTrigger = 'user' | 'background' | 'system'
@@ -199,6 +200,13 @@ export async function analyzeTimelineDay(
   const userHint = deps.userHint?.trim() || undefined
   const resolveLiveSession = deps.resolveLiveSession ?? (() => null)
   const triggerSource = deps.triggerSource ?? 'user'
+
+  // An analyzed day is about to be wrapped: make sure its external signals
+  // (git commits, calendar) exist first — a historical day was never touched
+  // by the today/yesterday background collector. Bounded and best-effort
+  // inside; a no-op until production wiring registers the backfill, so the
+  // hermetic suite never reaches real connectors.
+  await runExternalSignalBackfill(dateStr)
 
   // The interpretation-agent live switch (DEV-206): OFF by default. When on,
   // the per-block relabel of LOW-CONFIDENCE blocks becomes an agent turn (a

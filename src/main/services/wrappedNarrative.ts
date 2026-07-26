@@ -33,6 +33,7 @@ import { buildDayFactTable } from '../lib/wrapFactTable'
 import { getDb } from './database'
 import { localDateString } from '../lib/localDate'
 import { resolveDayEnrichment } from './enrichmentResolve'
+import { runExternalSignalBackfill } from './externalSignals'
 import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
 import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 
@@ -87,6 +88,13 @@ export async function getWrappedNarrative(
 ): Promise<AIWrappedNarrative> {
   const facts = buildDayWrapFacts(payload)
   const db = getDb()
+  // A historical day opened for the first time has no external_signals rows —
+  // the background collector only walks today and yesterday. Backfill once
+  // through the production connectors, bounded; a scanned-empty day is
+  // remembered and never re-collected, and any failure or timeout degrades to
+  // no enrichment, never a blocked wrap. (No-op until index.ts registers it,
+  // so hermetic tests never touch real git/calendar.)
+  await runExternalSignalBackfill(facts.date)
   // Resolve the day's external signals (git / calendar / focus) deterministically
   // from stored rows — no tool loop, never blocks. Absent → null, never invented.
   const enrichment = resolveDayEnrichment(db, facts.date)
