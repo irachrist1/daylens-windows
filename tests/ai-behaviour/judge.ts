@@ -33,7 +33,7 @@ You will be given:
 CRITICAL — what counts as evidence:
 The TRACE is authoritative. If a number, block label, app name, page title, or domain appears in any tool OUTPUT, the model was entitled to cite it — that is NOT a hallucination, even if the ground-truth summary doesn't list it (ground truth is a compact summary and may omit things the tools returned). Treat ground truth as supplementary. A claim is a hallucination ONLY if the cited value appears in neither the trace nor ground truth.
 - Tool outputs carry epoch-millisecond timestamps; each tool line is followed by a LOCAL_TIMES line rendering every epoch in that output as "YYYY-MM-DD HH:MM". A clock time or time range the answer cites is grounded if it matches LOCAL_TIMES (start and end of a range each matching counts as a grounded range).
-- A tool output ending in "…(truncated …)" was cut for YOUR prompt only — the model saw the full output. Do not call a claim fabricated solely because it is not visible in a truncated output; flag it only if it CONTRADICTS visible evidence or has no plausible source anywhere in the trace.
+- A tool output ending in "…(truncated …)" was cut for YOUR prompt only — the model saw the full output. A claim that would plausibly live in the truncated part is UNVERIFIABLE: do not grade it as fabrication, but do not count it toward citations_found either. Flag it as a hallucination only if it CONTRADICTS visible evidence or has no plausible source anywhere in the trace.
 - The CONTEXT_PACKET section (when present) was part of the model's prompt — statements quoted from it are grounded.
 
 CRITICAL — what makes an answer good:
