@@ -60,7 +60,9 @@ export function registerWrappedNarrativeProvider(runner: ProviderRunner): void {
 // Belt over the per-job timeout (JOB_DEFINITIONS.wrapped_narrative = 40s); sits
 // just above it so the job timeout governs. A full Sonnet deck runs ~15-25s.
 // Overridable for the offline benchmark on slower days.
-const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 45_000
+// 90s: a full day with git enrichment measured 54s on the quality model —
+// 45s silently served the fallback deck on exactly the days most worth telling.
+const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 90_000
 
 /** A stored narrative from before the deck rewrite has no `lines` object; it
  *  cannot drive the new deck, so treat it as absent and generate once. */
