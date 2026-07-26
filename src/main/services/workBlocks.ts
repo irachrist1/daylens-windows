@@ -2278,7 +2278,7 @@ function resolveSessionKindRaw(session: AppSession, credits: ReconciledPageVisit
       byDomain.set(visit.domain, entry)
     }
     entry.seconds += creditedMs / 1000
-    if (!entry.titleMatched && pageTitleInForegroundTitle(visit.pageTitle, session.windowTitle)) {
+    if (!entry.titleMatched && pageTitleInForegroundTitle(visit.pageTitle, session.windowTitle ?? null)) {
       entry.titleMatched = true
     }
   }

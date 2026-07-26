@@ -1,5 +1,5 @@
-// Tier-3 context escalation (docs/specs/agent-runtime-and-context.md): the agent may
-// look at the user's live screen — one still, on demand, never stored.
+// Tier-3 context escalation: the agent may look at the user's live screen —
+// one still, on demand, never stored.
 //
 // The contract, in order:
 //   1. Consent gate OUTSIDE the model: the screen-context experiment toggle in

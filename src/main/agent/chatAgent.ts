@@ -257,8 +257,8 @@ export async function runChatAgentTurn(
         },
       }),
       ...buildInteractionTools(interactionDeps),
-      // Tier-3 live-screen escalation; consent-gated in Settings, refuses
-      // honestly when off (docs/specs/agent-runtime-and-context.md).
+      // Tier-3 live-screen escalation: consent-gated in Settings, refuses
+      // honestly when the toggle is off.
       ...buildScreenTools(),
       // Consent-gated read-only terminal access: allowlist-first, no shell,
       // off by default, first use per session confirmed on the same card.

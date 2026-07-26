@@ -1,0 +1,888 @@
+{
+  "summary": {
+    "primaryWorkRate": 0.8846153846153846,
+    "toolSurfaceCleanRate": 0.953125,
+    "gapHonestyRate": 1,
+    "shapeJudgeMean": null
+  },
+  "thresholds": {
+    "primaryWorkRate": 0.6,
+    "toolSurfaceCleanRate": 0.9,
+    "gapHonestyRate": 0.8,
+    "shapeJudgeMean": 6
+  },
+  "results": [
+    {
+      "date": "2026-03-23",
+      "confidence": "machine",
+      "primaryWork": {
+        "score": 2,
+        "max": 2,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 17,
+        "max": 17,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Watching YouTube",
+          "Watching YouTube",
+          "On X",
+          "On Daylens-web & Claude",
+          "On X & YouTube",
+          "Watching YouTube & X",
+          "Browsing",
+          "Researching Kinyarwanda and Japanese linguistic similarities",
+          "On X & YouTube",
+          "On Obsproject & Google",
+          "Watching YouTube",
+          "Configuring Odoo approver workflow",
+          "Locating Liwa's Odoo email contact",
+          "On X & YouTube",
+          "Checking email and browsing social content",
+          "On Ww1 & Liveadexchanger",
+          "Watching Billions Season 1"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 5:28am to 10:18pm.",
+          "Built from 7h 31m of tracked activity, 5:28am to 10:18pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Afternoon went to building Kinyarwanda vs Japanese Similarities.",
+          "Evening went to looking into X (Twitter) explore and working through Inbox (9).",
+          "30m straight on x (Twitter) explore, 9:36pm to 10:18pm. Nothing broke it.",
+          "30m, on x (Twitter) explore, more than anything else.",
+          "Cursor led the day.",
+          "78% work, 22% leisure. That is the real ratio.",
+          "The last activity landed at 10:18pm.",
+          "Simulator quietly took 36m today.",
+          "Cursor held 1h 24m, more than anything else.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 7h 31m today, most of it looking into X (Twitter) explore. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 17,
+        "trackedSeconds": 27054
+      }
+    },
+    {
+      "date": "2026-03-31",
+      "confidence": "machine",
+      "primaryWork": {
+        "score": 2,
+        "max": 2,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 22,
+        "max": 22,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Watching YouTube",
+          "Creating a YouTube thumbnail design",
+          "Watching YouTube",
+          "On Claude & LinkedIn",
+          "Watching YouTube",
+          "On LinkedIn & Christian-tonny",
+          "Reviewing Sesame authentication and LinkedIn posts",
+          "Researching YouTube thumbnail design on ChatGPT and Canva",
+          "Designing a YouTube thumbnail on Canva",
+          "Researching LinkedIn post formatting and thumbnail design",
+          "On Cloud",
+          "On Media & LinkedIn",
+          "On LinkedIn & Local dev server",
+          "On Rw-andersen & Christian-tonny",
+          "On Rw-andersen & LinkedIn",
+          "On Diabrowser",
+          "On X & Reddit",
+          "Browsing",
+          "On Reddit & X",
+          "On Claude & Zoom",
+          "On Npmjs & Christian-tonny",
+          "On Raycast & Npmjs"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 7:16am to 12am.",
+          "Built from 10h 54m of tracked activity, 7:16am to 12am on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to untitled design.",
+          "Afternoon went to building SPCS Technology Solutions Explained and looking into LinkedIn Post Formatting.",
+          "The last activity landed at 12am.",
+          "64% work, 36% leisure. That is the real ratio.",
+          "LinkedIn held 1h 52m, more than anything else.",
+          "1h 7m, on untitled design, more than anything else.",
+          "1h 7m straight on untitled design, 7:16am to 8:50am. Nothing broke it.",
+          "ChatGPT quietly took 41m today.",
+          "LinkedIn led the day.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 10h 54m today, most of it untitled design. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 22,
+        "trackedSeconds": 39254
+      }
+    },
+    {
+      "date": "2026-04-26",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 8,
+        "max": 8,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Financial sheet setup with auth",
+          "On X & YouTube",
+          "Extracting transaction history with incidental browsing",
+          "On X & YouTube",
+          "Spreadsheet data entry",
+          "Writing Silicon Mania Weekly notes",
+          "Researching data protection and business implementation",
+          "Watching YouTube & X"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 8:05am to 11:49pm.",
+          "Built from 6h 2m of tracked activity, 8:05am to 11:49pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to sorting out Transaction History Extraction and sorting out Tonny money center.",
+          "Afternoon went to writing Silicon Mania Weekly and sorting out Spreadsheet data entry.",
+          "Evening went to building Five Costly Mistakes Business Leaders Make When Implementing New Technology and writing Silicon Mania Weekly.",
+          "Microsoft Excel quietly took 44m today.",
+          "50% work, 50% leisure. That is the real ratio.",
+          "1h 22m, your longest unbroken stretch, on silicon Mania Weekly.",
+          "Obsidian held 1h 19m, more than anything else.",
+          "Obsidian led the day.",
+          "1h 22m straight on silicon Mania Weekly, 3:59pm to 5:21pm. Nothing broke it.",
+          "The last activity landed at 11:49pm.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 6h 2m today, most of it writing Silicon Mania Weekly. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 8,
+        "trackedSeconds": 21712
+      }
+    },
+    {
+      "date": "2026-05-25",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 2,
+        "max": 2,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 12,
+        "max": 12,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Claude codebase patterns research",
+          "Browsing",
+          "Reviewing Claude Platform usage and calendar",
+          "Email triage",
+          "Browsing Predictable Surprise Fact Check",
+          "Researching deep learning and personal errands",
+          "Watching YouTube",
+          "Browsing",
+          "Browsing",
+          "Studying neural networks and backpropagation",
+          "Watching YouTube & X",
+          "Machine Learning coursework"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 8:29am to 12am.",
+          "Built from 7h 50m of tracked activity, 8:29am to 12am on this computer. Time Daylens didn't observe isn't in the story.",
+          "Before bed, a last 40m of claude codebase patterns research.",
+          "Morning went to digging into Rw-andersen and sorting out Second Brain.",
+          "Afternoon went to digging into Rw-andersen.",
+          "Evening went to building Computation Graph and building Course Modules: Introduction to Machine Learning.",
+          "2h 28m straight on rw-andersen, 10:19am to 1:06pm. Nothing broke it.",
+          "Rw-andersen quietly took 34m today.",
+          "Ghostty led the day.",
+          "2h 28m, on rw-andersen, more than anything else.",
+          "81% work, 19% leisure. That is the real ratio.",
+          "Ghostty held 1h 56m, more than anything else.",
+          "The last activity landed at 12am.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 7h 50m today, most of it digging into Rw-andersen. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 12,
+        "trackedSeconds": 28177
+      }
+    },
+    {
+      "date": "2026-05-26",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 2,
+        "max": 3,
+        "violations": [
+          "primary work never named anywhere visible: CBC hackathon scoping and ideation (aliases: hackathon, cbc, ideation)"
+        ]
+      },
+      "toolSurfaces": {
+        "score": 11,
+        "max": 11,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Terminal work",
+          "Video playback and file management",
+          "Completing logistic regression coursework",
+          "OpenAI competition setup & training",
+          "Tennis venue research",
+          "Content design & research",
+          "Photo review and bookmarking",
+          "Terminal work with LinkedIn admin",
+          "X and LinkedIn browsing with Ghostty",
+          "Design and recruitment research",
+          "Browsing"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 8:26am to 11:39pm.",
+          "Built from 12h 11m of tracked activity, 8:26am to 11:39pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Before bed, a last 34m of terminal work.",
+          "Morning went to digging into Logistic Regression with a Neural Network Mindset and building User Settings.",
+          "Afternoon went to building User Settings and looking into Predictable Surprise Fact Check.",
+          "Evening went to terminal work with LinkedIn admin and building Canva.",
+          "Ghostty led the day.",
+          "The last activity landed at 11:39pm.",
+          "2h 25m straight on user Settings, 11:09am to 1:38pm. Nothing broke it.",
+          "2h 25m, your longest unbroken stretch, on user Settings.",
+          "ChatGPT quietly took 28m today.",
+          "Ghostty held 6h 4m, more than anything else.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 12h 11m today, most of it building User Settings. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 11,
+        "trackedSeconds": 44433
+      }
+    },
+    {
+      "date": "2026-05-27",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 8,
+        "max": 8,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Terminal work with notes",
+          "Learning neural network foundations via Coursera",
+          "On Lennysnewsletter",
+          "On X",
+          "Learning deep neural network concepts",
+          "Watching recycling and animation videos",
+          "Reviewing skill documentation and billionaire education content",
+          "Watching YouTube & X"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 8:42am to 11:59pm.",
+          "Built from 9h 36m of tracked activity, 8:42am to 11:59pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to looking into Planar Data Classification with One Hidden Layer and building Terminal work with notes.",
+          "Afternoon went to looking into Deep Neural Network and reviewing skill documentation and billionaire education content.",
+          "4h 18m, the afternoon held the most of your work.",
+          "Ghostty held 3h 20m, more than anything else.",
+          "80% work, 20% leisure. That is the real ratio.",
+          "Ghostty led the day.",
+          "Codex quietly took 54m today.",
+          "The last activity landed at 11:59pm.",
+          "2h 36m straight on planar Data Classification with One Hidden Layer, 9:01am to 11:37am. Nothing broke it.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 9h 36m today, most of it looking into Planar Data Classification with One Hidden Layer. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 8,
+        "trackedSeconds": 34546
+      }
+    },
+    {
+      "date": "2026-05-28",
+      "confidence": "machine",
+      "primaryWork": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 24,
+        "max": 24,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Working on ✳ Break down and fix 5 bugs in daylens",
+          "Watching YouTube",
+          "Watching YouTube",
+          "Code editing in Electron",
+          "Working on Bugs-2026-05-27 in Border Beam Component",
+          "Reviewing UI component patterns",
+          "ChatGPT pricing research",
+          "Daylens repo review",
+          "Oauth development",
+          "Watching YouTube",
+          "LinkedIn + Google Meet",
+          "Watching YouTube",
+          "Daylens development",
+          "Newsletter account & payment review",
+          "Development",
+          "Evaluating AI tool integrations for Microsoft 365",
+          "Claude Code review & iteration",
+          "On X & YouTube",
+          "irachrist1/daylens-v1: Daylens",
+          "Watching YouTube",
+          "On X & YouTube",
+          "Watching YouTube & X",
+          "irachrist1/daylens-v1: Daylens",
+          "Watching YouTube"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 12am to 11:59pm.",
+          "Built from 8h 21m of tracked activity, 12am to 11:59pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Late night went to working on Daylens and building Break down and fix 5 bugs.",
+          "Morning went to building Daylens and building Perplexityai/pplx-garden: Perplexity open source garden for inference technology.",
+          "Afternoon went to looking into Perplexityai/pplx-garden: Perplexity open source garden for inference technology and building Irachrist1/daylens-v1: Daylens.",
+          "Evening went to looking into Claude Code review & iteration and digging into Irachrist1/daylens-v1: Daylens.",
+          "2h 45m, the evening did the heavy lifting.",
+          "GitHub quietly took 40m today.",
+          "Claude led the day.",
+          "The last activity landed at 11:59pm.",
+          "Claude held 2h 4m, more than anything else.",
+          "79% work, 21% leisure. That is the real ratio.",
+          "1h 58m straight on claude Code review & iteration, 6:46pm to 8:54pm. Nothing broke it.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 8h 21m today, most of it working on Daylens. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 24,
+        "trackedSeconds": 30058
+      }
+    },
+    {
+      "date": "2026-05-31",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 2,
+        "max": 2,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 17,
+        "max": 17,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Streaming break with repo check",
+          "YouTube video review",
+          "Developing Settings - Claude",
+          "Code editing",
+          "Reviewing Daylens development and ML learning",
+          "Reading W4 course material on Perusall",
+          "Reviewing machine learning coursework",
+          "Reading article on gradient descent optimization",
+          "Reading article on Medium",
+          "Researching ML training approaches and optimization",
+          "Reviewing course announcements and project optimization",
+          "Checking student grades and coordinating on project optimization",
+          "On X & YouTube",
+          "Authenticating cloud and AI service accounts",
+          "Researching AI benchmarks and models",
+          "Browsing AI Strategy for BSS",
+          "Watching YouTube"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A solid working day.",
+          "Your day ran from 12:45pm to 9:07pm.",
+          "Built from 5h 40m of tracked activity, 12:45pm to 9:07pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Before bed, a last 38m of youTube video review.",
+          "Afternoon went to researching AI benchmarks and models and looking into Project: Autoencoders.",
+          "Evening went to researching AI benchmarks and models and building Vault.",
+          "1h 55m, on researching AI benchmarks and models, more than anything else.",
+          "Cursor held 1h 34m, more than anything else.",
+          "77% work, 23% leisure. That is the real ratio.",
+          "Cursor led the day.",
+          "1h 55m straight on researching AI benchmarks and models, 3:54pm to 6:51pm. Nothing broke it.",
+          "X quietly took 54m today.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 5h 40m today, most of it researching AI benchmarks and models. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 17,
+        "trackedSeconds": 20393
+      }
+    },
+    {
+      "date": "2026-06-10",
+      "confidence": "machine",
+      "primaryWork": {
+        "score": 0,
+        "max": 1,
+        "violations": [
+          "primary work never named anywhere visible: TARS (chief-of-staff skill, npm publish, landing page) (aliases: tars, chief-of-staff, chief of staff)"
+        ]
+      },
+      "toolSurfaces": {
+        "score": 17,
+        "max": 17,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Watching YouTube",
+          "Completing malaria diagnosis group report",
+          "Managing cloud infrastructure and development environment",
+          "Rw-andersen",
+          "LENOVO T14S 2-IN-1 LAPTOP ,INTEL CORE ULTRA7-255U, PROCESSOR ,32GB RAM , 512GB SSD ,14.0\" WUXGA AG 400NITS TOUCH SCREEN , UK-ENGLISH KEYBOARD , YOGA PEN , WINDOWS 11 GENUINE PROFFESSIONAL 64 BIT",
+          "Watching YouTube",
+          "Developing with intermittent video breaks",
+          "Watching YouTube",
+          "Claude development",
+          "Watching YouTube",
+          "Watching YouTube",
+          "GitHub",
+          "Watching YouTube",
+          "Watching YouTube",
+          "Your Repositories",
+          "Watching YouTube",
+          "Watching YouTube & Netflix"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "Mostly off the clock today.",
+          "Your day ran from 8:12am to 11:25pm.",
+          "Built from 6h 29m of tracked activity, 8:12am to 11:25pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to writing Meet.",
+          "Afternoon went to claude development and writing LENOVO T14S 2-IN-1 LAPTOP ,INTEL CORE ULTRA7-255U, PROCESSOR ,32GB RAM , 512GB SSD ,14.0\" WUXGA AG 400NITS TOUCH SCREEN , UK-ENGLISH KEYBOARD , YOGA PEN , WINDOWS 11 GENUINE PROFFESSIONAL 64 BIT.",
+          "Evening went to digging into Your Repositories.",
+          "The last activity landed at 11:25pm.",
+          "YouTube held 3h 9m, more than anything else.",
+          "31m straight on meet, 9:29am to 10:26am. Nothing broke it.",
+          "31m, your longest unbroken stretch, on meet.",
+          "YouTube led the day.",
+          "23% work, 77% leisure. That is the real ratio.",
+          "Pioneer quietly took 17m today.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "A day mostly off the clock. Rest counts too. That is the whole story, and it is enough.",
+          "That's the day."
+        ],
+        "blockCount": 17,
+        "trackedSeconds": 23323
+      }
+    },
+    {
+      "date": "2026-06-17",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 2,
+        "max": 2,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 17,
+        "max": 18,
+        "violations": [
+          "block label is a tool surface, not work: \"Cursor\""
+        ]
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Browsing",
+          "On X",
+          "On Unifi & Fast",
+          "On Unifi & Fast",
+          "Internet Speed Test",
+          "On X",
+          "Watching Netflix",
+          "Working on FortiGate - Andersen",
+          "Analytics",
+          "Watching YouTube & Netflix",
+          "Watching YouTube & X",
+          "Building & Testing",
+          "Cursor",
+          "Research and development with Claude",
+          "Setting up Linear integration with Claude and Codex",
+          "Watching YouTube",
+          "Watching YouTube",
+          "Reviewing Tesla Solar Roof performance"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "Mostly off the clock today.",
+          "Your day ran from 8:11am to 11:28pm.",
+          "Built from 4h 8m of tracked activity, 8:11am to 11:28pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to working on Internet Speed Test.",
+          "Afternoon went to building Analytics and looking into Claude Platform.",
+          "Evening went to introducing Model Council and sorting out Gumloop.",
+          "35% work, 65% leisure. That is the real ratio.",
+          "46m, the evening held the most of your work.",
+          "Ghostty led the day.",
+          "The last activity landed at 11:28pm.",
+          "YouTube quietly took 50m today.",
+          "Ghostty held 3h 13m, more than anything else.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "A day mostly off the clock. Rest counts too. That is the whole story, and it is enough.",
+          "That's the day."
+        ],
+        "blockCount": 18,
+        "trackedSeconds": 14871
+      }
+    },
+    {
+      "date": "2026-06-24",
+      "confidence": "machine",
+      "primaryWork": {
+        "score": 3,
+        "max": 3,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 7,
+        "max": 7,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Content & client site review",
+          "Writing BofA internship essay with research breaks",
+          "Building daylens onboarding redesign with Claude",
+          "Working on daylens in YouTube",
+          "Watching Netflix",
+          "Watching Netflix",
+          "Watching Netflix"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 7:43am to 10:56pm.",
+          "Built from 7h 34m of tracked activity, 7:43am to 10:56pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to looking into BofA_Internship_Essay + Guide and building Virtual-assets.",
+          "Afternoon went to looking into BofA_Internship_Essay + Guide and building Daylens.",
+          "Evening went to building Daylens.",
+          "3h 15m straight on bofA_Internship_Essay + Guide, 9:23am to 4:34pm. Nothing broke it.",
+          "88% work, 12% leisure. That is the real ratio.",
+          "Terminal held 1h 17m, more than anything else.",
+          "Terminal led the day.",
+          "2h 20m, the afternoon held the most of your work.",
+          "The last activity landed at 10:56pm.",
+          "Microsoft Word quietly took 42m today.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 7h 34m today, most of it looking into BofA_Internship_Essay + Guide. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 7,
+        "trackedSeconds": 27251
+      }
+    },
+    {
+      "date": "2026-07-12",
+      "confidence": "machine",
+      "primaryWork": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 8,
+        "max": 8,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Watching Netflix & YouTube",
+          "Browsing GitHub, YouTube, and X",
+          "Reviewing Daylens AI chat brief in Cursor and Devin",
+          "Watching Netflix & YouTube",
+          "Reviewing email and AI chat on Andersen Rwanda",
+          "Watching YouTube & X",
+          "Researching AI and reviewing resume rebuild",
+          "Watching Netflix & X"
+        ],
+        "wrappedLead": "Sunday turned out to be a rest day with a small pocket of work threaded through the middle and evening.",
+        "wrappedLines": [
+          "Sunday turned out to be a rest day with a small pocket of work threaded through the middle and evening.",
+          "Netflix and YouTube filled most of the day, with just 1h 49m of work scattered across the afternoon and evening.",
+          "Built from 8h 34m of tracked activity, 7:55am to 11:02pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "You built on the Daylens chat brief from early afternoon through five, breaking it up with some YouTube and X.",
+          "The evening stretched to after eleven, anchored by 41 minutes reviewing Andersen Rwanda email and chat, plus some time looking into Daylens on the side while Netflix played.",
+          "Your longest unbroken stretch was that 41 minutes reviewing Andersen Rwanda from 7:25pm to 8:07pm, the deepest run of the whole day.",
+          "The day lived on two screens: YouTube and Netflix together took up most of it, with a smaller tail on X, and everything else was thin.",
+          "GitHub got 12 minutes somewhere in the evening, one of those small moments that disappears into the rest.",
+          "You didn't close the laptop until 11:02pm, a late finish on a day that was mostly downtime.",
+          "YouTube took 3h 24m and reads honestly like what it was: a break and a breather across a rest day, not a leak.",
+          "The day was 20% work and 80% leisure, which tells you exactly what kind of Sunday this was.",
+          "The single deepest thing you did all day was 41 minutes of Andersen Rwanda email and chat in the evening, more than any other single stretch of work.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "A day mostly off the clock. Rest counts too. That is the whole story, and it is enough.",
+          "That's the day.",
+          "This was a day built for rest, and you took it. The work that landed, Daylens chat brief in the afternoon and Andersen Rwanda review at night, felt like checking in rather than pushing through. Netflix and YouTube held the day, which on a Sunday is exactly the point. You built a lot of Daylens earlier in the week. Today you let that settle and just sat with it."
+        ],
+        "blockCount": 8,
+        "trackedSeconds": 30863
+      }
+    },
+    {
+      "date": "2026-07-20",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 2,
+        "max": 2,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 5,
+        "max": 12,
+        "violations": [
+          "block label matches banned-as-work \"cursor agents\": \"Learning ML fundamentals and building with Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Reviewing Cursor Agents and Daylens issues\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\"",
+          "block label matches banned-as-work \"watching netflix\": \"Watching Netflix & YouTube\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"You spent the morning digging into Cursor Agents.\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"You spent the morning digging into Cursor Agents.\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"The entire morning from 9:13am to 10:38am went to looking into Cursor Agents.\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"You came in at 9:13am and went straight into looking into Cursor Agents, staying with it f\"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"The whole morning was one unbroken 1h 4m run on Cursor Agents from 9:13am onward, nothing \"",
+          "wrapped line presents banned-as-work \"cursor agents\": \"Short day on the screen, but the one hour you had was clean and whole. You went in with Cu\""
+        ]
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Setting up GitHub Actions secrets",
+          "Exploring ML tools and reviewing agent documentation",
+          "Reviewing ML fundamentals and course settings",
+          "Learning ML fundamentals and building with Cursor Agents",
+          "Reviewing Cursor Agents and Daylens issues",
+          "Working on Cursor Agents",
+          "Working on Cursor Agents",
+          "Working on Cursor Agents",
+          "Working on Cursor Agents",
+          "Checking messages and the forum invite",
+          "Watching Netflix & YouTube",
+          "Journal entry and Daylens Slack discussion"
+        ],
+        "wrappedLead": "You spent the morning digging into Cursor Agents.",
+        "wrappedLines": [
+          "You spent the morning digging into Cursor Agents.",
+          "The entire morning from 9:13am to 10:38am went to looking into Cursor Agents.",
+          "Built from 8h 15m of tracked activity, 9:13am to 11:07pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "You came in at 9:13am and went straight into looking into Cursor Agents, staying with it for the full hour until 10:38am. Datacamp, GitHub, and a few other stops along the way, but the run was unbroken.",
+          "Afternoon went to building Overview of ML and looking into Daylens.",
+          "Evening went to building 2026-07-20 and talking through ALU Mail.",
+          "Cursor held 1h 56m, more than anything else.",
+          "94% work, 6% leisure. That is the real ratio.",
+          "2h 25m, your longest unbroken stretch, on overview of ML.",
+          "The morning split across a few surfaces: Datacamp took the biggest piece at 17 minutes, then GitHub at 12, with the rest scattered. Linear, Code, Cursor itself, and a security check all got their moment.",
+          "The last activity landed at 11:07pm.",
+          "The whole morning was one unbroken 1h 4m run on Cursor Agents from 9:13am onward, nothing breaking the thread.",
+          "Coursera quietly took 40m today.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 8h 15m today, most of it digging into Overview of ML. That is the day, plainly told.",
+          "That's the day.",
+          "Short day on the screen, but the one hour you had was clean and whole. You went in with Cursor Agents on your mind and stayed there without interruption, sampling reference materials as you needed them. The calendar held a lot of blocks for the rest of today, so this morning win reads like you got your exploration in before the day scattered."
+        ],
+        "blockCount": 12,
+        "trackedSeconds": 29687
+      }
+    },
+    {
+      "date": "2026-07-21",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "toolSurfaces": {
+        "score": 6,
+        "max": 7,
+        "violations": [
+          "block label matches banned-as-work \"cursor agents\": \"Working on Cursor Agents\""
+        ]
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Setting up agent authentication",
+          "Setting up cloud authentication",
+          "Setting up Daylens server",
+          "Working on Cursor Agents",
+          "Developing Traycer",
+          "Fixing Factory issues and debugging Daylens",
+          "Digitizing daily journal entries"
+        ],
+        "wrappedLead": "Not much tracked yet. Come back once the day has more in it.",
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 11:48am to 11:26pm.",
+          "Built from 6h 19m of tracked activity, 11:48am to 11:26pm on this computer. Time Daylens didn't observe isn't in the story.",
+          "Mostly Invitation: Maj Andersen (RW) Limited<>Odoo-Fiduciary training @ Weekly from 10:15am to 12pm on Tuesday, Thursday from …, with Grocery in the mix.",
+          "Afternoon went to building Traycer and building Hub.",
+          "Evening went to building Traycer and building Digitize daily journal entries.",
+          "The last activity landed at 11:26pm.",
+          "Claude led the day.",
+          "3h 56m, on traycer, more than anything else.",
+          "Platform quietly took 29m today.",
+          "Claude held 2h 7m, more than anything else.",
+          "3h 56m straight on traycer, 2:49pm to 7:22pm. Nothing broke it.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 6h 19m today, most of it building Traycer. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 7,
+        "trackedSeconds": 31295
+      }
+    },
+    {
+      "date": "2026-07-22",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 1,
+        "max": 2,
+        "violations": [
+          "primary work never named anywhere visible: ML study (Coursera) (aliases: coursera, machine learning, cost function, linear regression, ml study, ai/ml)"
+        ]
+      },
+      "toolSurfaces": {
+        "score": 4,
+        "max": 4,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Morning",
+          "Afternoon",
+          "Night",
+          "Late night"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 11:19am to 1:36am.",
+          "Built from 10h 40m of tracked activity, 11:19am to 1:36am on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to oauth development.",
+          "Afternoon went to debugging Daylens freezing and sleep tracking issues and building Handoff.",
+          "Evening went to building & Testing and building Timeline page AI analysis and data correctness.",
+          "Windsurf quietly took 1h 5m today.",
+          "3h 19m straight on building & Testing, 6:18pm to 10:01pm. Nothing broke it.",
+          "7, separate times you came back to Warp.",
+          "The last activity landed at 1:36am.",
+          "Warp led the day.",
+          "Warp held 2h 42m, more than anything else.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 10h 40m today, most of it building & Testing. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 4,
+        "trackedSeconds": 38409
+      }
+    }
+  ]
+}
