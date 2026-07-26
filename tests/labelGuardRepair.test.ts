@@ -378,9 +378,9 @@ function categoryRow(db: Database.Database, id: string): {
   }
 }
 
-// The reference shape (2026-07-20 21:24): Slack + Warp foreground work, an
-// untitled browser whose last recorded navigation was a 20s Netflix flip —
-// history fill inflated the stored entertainment seconds past everything else.
+// Reference shape: Slack + Warp foreground work, an untitled browser whose
+// last recorded navigation was a short Netflix flip — history fill inflated
+// the stored entertainment seconds past everything else.
 function seedCiReviewEvening(db: Database.Database): void {
   insertSession(db, {
     bundleId: 'com.tinyspeck.slackmacgap', appName: 'Slack', category: 'communication',
