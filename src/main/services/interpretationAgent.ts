@@ -20,7 +20,10 @@ import { generateText, stepCountIs, tool, type LanguageModel } from 'ai'
 import { z } from 'zod'
 import type Database from 'better-sqlite3'
 import type { AIInvocationSource, WorkContextBlock, WorkContextInsight } from '@shared/types'
+import { evaluateLabelVoice, labelVoiceContextForBlock } from '@shared/labelVoice'
+import { effectiveBlockKind } from '@shared/workKind'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
+import { upsertWorkContextInsight } from '../db/queries'
 import { stripCodeFence } from '../lib/wrapNarrativeShared'
 import { languageModelFor } from '../agent/providerModel'
 import {
@@ -47,8 +50,14 @@ const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').describe('Loc
 /** The agent's output contract: the direct relabel's {label, narrative} plus
  *  the agent's own confidence and reasoning (logged and versioned, never
  *  written into product labels). */
+// A parse-time ceiling on the label, BEFORE any validation: a runaway model
+// can emit thousands of characters, and nothing that long is ever a label.
+// The voice contract's 90-char bound is enforced later with block context;
+// this is the hard cap that keeps garbage out of the validation path.
+const PARSED_LABEL_HARD_MAX_CHARS = 200
+
 const agentInsightSchema = z.object({
-  label: z.string().trim().min(1),
+  label: z.string().trim().min(1).max(PARSED_LABEL_HARD_MAX_CHARS),
   narrative: z.string().trim().min(1),
   confidence: z.number().min(0).max(1).nullish(),
   reasoning: z.string().nullish(),
@@ -81,6 +90,27 @@ export function parseInterpretationAgentInsight(raw: string): InterpretationAgen
   } catch {
     return null
   }
+}
+
+/** The SAME label-voice standard the direct relabel path enforces
+ *  (generateWorkBlockInsight's labelRejection in jobs/aiService.ts): every
+ *  invariant rule — which bounds the label to 90 chars / 12 words — plus the
+ *  two target rules that catch echoed window titles and bare app names
+ *  ("Slack" is software, not an activity). Returns the violation detail, or
+ *  null when the label passes. Exported for direct testing. */
+export function agentLabelViolation(label: string | null | undefined, block: WorkContextBlock): string | null {
+  const candidate = label?.trim()
+  if (!candidate) return 'the label was empty'
+  const voiceContext = labelVoiceContextForBlock(block, effectiveBlockKind(block))
+  for (const finding of evaluateLabelVoice(candidate, voiceContext)) {
+    if (finding.passed) continue
+    if (finding.tier === 'invariant'
+      || finding.rule === 'no-verbatim-window-title'
+      || finding.rule === 'activity-not-software') {
+      return finding.detail ?? finding.rule
+    }
+  }
+  return null
 }
 
 export interface InterpretationAgentOptions {
@@ -140,6 +170,14 @@ function buildInterpretationTools(db: Database.Database, options: { allowCollect
   }
 }
 
+type UsageRecordedError = Error & { usageRecorded?: boolean }
+
+/** Marks an error whose failure event is already metered, so the outer catch
+ *  never records the same turn twice. */
+function markUsageRecorded(error: Error): UsageRecordedError {
+  return Object.assign(error, { usageRecorded: true })
+}
+
 function usageFromTotal(total: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | undefined): AIProviderUsage {
   return {
     inputTokens: total?.inputTokens ?? 0,
@@ -160,6 +198,12 @@ export async function runInterpretationAgentRelabel(
 ): Promise<InterpretationAgentInsight> {
   const settings = await getSettingsAsync()
   const configs = await resolveProviderConfigsForJob('interpretation_agent', settings)
+  // Defensive: resolveProviderConfigsForJob throws when nothing resolves, but
+  // an empty array from a stub or future refactor must fail with the same
+  // clean message, never an undefined-config crash mid-turn.
+  if (configs.length === 0) {
+    throw new Error('AI access is paused. Subscribe or add your own key in Settings.')
+  }
   const config: ResolvedProviderConfig = configs[0]
   const startedAt = Date.now()
   const triggerSource = options.triggerSource ?? 'background'
@@ -212,14 +256,38 @@ export async function runInterpretationAgentRelabel(
         config, usage, startedAt, success: false, triggerSource,
         failureReason: 'interpretation agent returned no usable {label, narrative} JSON',
       })
-      throw new Error(`Interpretation agent returned no usable label for block ${block.id}.`)
+      throw markUsageRecorded(new Error(`Interpretation agent returned no usable label for block ${block.id}.`))
+    }
+    // The label-voice contract, held to the SAME standard as the direct
+    // relabel: a bare app name or an over-long label is an agent FAILURE the
+    // caller falls back from, never a label that persists and gets floored.
+    const violation = agentLabelViolation(parsed.label, block)
+    if (violation) {
+      recordInterpretationAgentUsage({
+        config, usage, startedAt, success: false, triggerSource,
+        failureReason: `interpretation agent label rejected: ${violation}`,
+      })
+      throw markUsageRecorded(new Error(`Interpretation agent label for block ${block.id} was rejected: ${violation}`))
     }
     recordInterpretationAgentUsage({ config, usage, startedAt, success: true, triggerSource })
     options.onModel?.(config.model)
+    // The same observation write the direct path performs (aiService's
+    // generateWorkBlockInsight): an agent-labelled block records its insight
+    // into work_context_observations, so downstream observation readers see
+    // one store regardless of which path named the block. A later direct
+    // relabel of the same range overwrites it (upsert by time range).
+    if (!block.isLive) {
+      upsertWorkContextInsight(db, {
+        startMs: block.startTime,
+        endMs: block.endTime,
+        insight: { label: parsed.label, narrative: parsed.narrative },
+        sourceBlockIds: [block.id],
+      })
+    }
     return { ...parsed, toolsUsed }
   } catch (error) {
-    // The no-usable-JSON path above already recorded its event.
-    if (!(error instanceof Error && error.message.startsWith('Interpretation agent returned no usable label'))) {
+    // Paths above record their own usage event before throwing.
+    if (!(error instanceof Error && (error as UsageRecordedError).usageRecorded)) {
       recordInterpretationAgentUsage({
         config, usage: null, startedAt, success: false, triggerSource,
         failureReason: error instanceof Error ? error.message : String(error),

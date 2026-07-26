@@ -12,7 +12,10 @@ import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import { __resetSettings, __setSettings, setApiKey } from './support/settings-stub.mjs'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
-import { runInterpretationAgentRelabel } from '../src/main/services/interpretationAgent.ts'
+import {
+  parseInterpretationAgentInsight,
+  runInterpretationAgentRelabel,
+} from '../src/main/services/interpretationAgent.ts'
 import type { InterpretationAgentInsight } from '../src/main/services/interpretationAgent.ts'
 
 const TEST_DATE = '2026-04-22'
@@ -25,9 +28,9 @@ function localMs(hour: number, minute = 0): number {
 // share and no run is sustained, so the engine forms ONE 'mixed' block with
 // confidence 'low' (label confidence 0.45) — exactly the block the agent
 // pass is scoped to. Verified against confidenceForCandidate's rules.
-function seedLowConfidenceDay(db: Database.Database): void {
+function seedLowConfidenceCluster(db: Database.Database, hour: number): void {
   const insert = (app: string, bundle: string, startMinute: number, category: string) => {
-    const startTime = localMs(9, startMinute)
+    const startTime = localMs(hour, startMinute)
     db.prepare(`
       INSERT INTO app_sessions (
         bundle_id, app_name, start_time, end_time, duration_sec,
@@ -41,6 +44,10 @@ function seedLowConfidenceDay(db: Database.Database): void {
   insert('Notes', 'com.apple.Notes', 12, 'productivity')
   insert('Slack', 'com.tinyspeck.slackmacgap', 16, 'communication')
   insert('Terminal', 'com.apple.Terminal', 20, 'development')
+}
+
+function seedLowConfidenceDay(db: Database.Database): void {
+  seedLowConfidenceCluster(db, 9)
 }
 
 function persistedLabels(db: Database.Database): string[] {
@@ -179,8 +186,9 @@ test('flag on: an invariant-violating agent pass is discarded and the determinis
         directCalls += 1
         return { label: 'Reviewing team updates', narrative: 'Direct path.' }
       },
-      // A raw-artifact label ("handoff.md") violates the label-unusable
-      // invariant — the eval gate must throw the whole agent pass away.
+      // A raw-artifact label ("handoff.md") is discarded per block by the
+      // findRawArtifactLeak gate before the eval runs — the block falls back
+      // to the direct relabel and the leaking label never persists.
       agentBlockInsight: async (): Promise<InterpretationAgentInsight> => ({
         label: 'Editing handoff.md notes',
         narrative: 'Raw artifact leak.',
@@ -195,6 +203,132 @@ test('flag on: an invariant-violating agent pass is discarded and the determinis
     const labels = persistedLabels(db)
     assert.ok(labels.includes('Reviewing team updates'), 'the deterministic label stands')
     assert.ok(!labels.some((label) => label.includes('handoff.md')), 'the violating agent label never persisted')
+  } finally {
+    __resetSettings()
+    db.close()
+  }
+})
+
+// One-shot mock model that answers with the given insight JSON directly.
+function answerModel(insight: Record<string, unknown>): MockLanguageModelV3 {
+  return new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{ type: 'text' as const, text: JSON.stringify(insight) }],
+      finishReason: { unified: 'stop' as const, raw: undefined },
+      usage: mockUsage,
+      warnings: [],
+    }),
+  })
+}
+
+async function runVoiceGateCase(insight: Record<string, unknown>): Promise<{
+  directCalls: number
+  labels: string[]
+  failureReasons: string[]
+  db: Database.Database
+}> {
+  const db = createProductionTestDatabase()
+  seedLowConfidenceDay(db)
+  setTestDb(db)
+  __setSettings({ interpretationAgentEnabled: true, aiProvider: 'anthropic', aiChatProvider: 'anthropic' })
+  await setApiKey('anthropic', 'test-key')
+  let directCalls = 0
+  await analyzeTimelineDay(db, TEST_DATE, {
+    triggerSource: 'background',
+    regroupPlan: async () => null,
+    blockInsight: async () => {
+      directCalls += 1
+      return { label: 'Reviewing team updates', narrative: 'Direct path.' }
+    },
+    agentBlockInsight: (block, opts) =>
+      runInterpretationAgentRelabel(db, block, { ...opts, model: answerModel(insight), allowCollect: false }),
+  })
+  const failureReasons = (db.prepare(
+    `SELECT failure_reason FROM ai_usage_events WHERE job_type = 'interpretation_agent' AND success = 0`,
+  ).all() as Array<{ failure_reason: string | null }>).map((row) => row.failure_reason ?? '')
+  return { directCalls, labels: persistedLabels(db), failureReasons, db }
+}
+
+test('a bare app name is held to the label-voice contract: the agent fails and the block falls back', async () => {
+  try {
+    // "Slack" is one of the block's own app names — software, not an activity.
+    const { directCalls, labels, failureReasons, db } = await runVoiceGateCase({
+      label: 'Slack',
+      narrative: 'Messaging in Slack.',
+      confidence: 0.9,
+    })
+    assert.ok(directCalls >= 1, 'the rejected block fell back to the direct relabel')
+    assert.ok(!labels.includes('Slack'), 'the bare app name never persisted')
+    assert.ok(labels.includes('Reviewing team updates'))
+    assert.ok(
+      failureReasons.some((reason) => /label rejected/.test(reason)),
+      'the rejection is metered as an agent failure',
+    )
+    db.close()
+  } finally {
+    __resetSettings()
+    clearTestDb()
+  }
+})
+
+test('an over-long label fails the same bound the direct path enforces and the block falls back', async () => {
+  try {
+    const longLabel = `Reviewing ${'very '.repeat(25)}long coordination work` // > 90 chars, > 12 words
+    const { directCalls, labels, db } = await runVoiceGateCase({
+      label: longLabel,
+      narrative: 'Too long.',
+      confidence: 0.9,
+    })
+    assert.ok(directCalls >= 1, 'the rejected block fell back to the direct relabel')
+    assert.ok(!labels.includes(longLabel), 'the over-long label never persisted')
+    assert.ok(labels.includes('Reviewing team updates'))
+    db.close()
+  } finally {
+    __resetSettings()
+    clearTestDb()
+  }
+})
+
+test('parseInterpretationAgentInsight hard-caps runaway labels before any validation', () => {
+  const runaway = JSON.stringify({ label: 'x'.repeat(2600), narrative: 'n' })
+  assert.equal(parseInterpretationAgentInsight(runaway), null, 'a 2600-char label is never accepted')
+  const boundary = JSON.stringify({ label: 'y'.repeat(201), narrative: 'n' })
+  assert.equal(parseInterpretationAgentInsight(boundary), null, 'anything past 200 chars is refused at parse time')
+  const fine = parseInterpretationAgentInsight(JSON.stringify({ label: 'Reviewing team updates', narrative: 'n' }))
+  assert.equal(fine?.label, 'Reviewing team updates')
+})
+
+test('the gate is per block: one leaking label is discarded alone while a clean sibling label persists', async () => {
+  const db = createProductionTestDatabase()
+  // Two low-confidence blocks, hours apart, so ONE agent pass carries two
+  // proposals: a leaking one (morning) and a clean one (afternoon).
+  seedLowConfidenceCluster(db, 9)
+  seedLowConfidenceCluster(db, 14)
+  __setSettings({ interpretationAgentEnabled: true })
+  const noon = localMs(12)
+
+  let directCalls = 0
+  try {
+    const result = await analyzeTimelineDay(db, TEST_DATE, {
+      triggerSource: 'background',
+      regroupPlan: async () => null,
+      blockInsight: async () => {
+        directCalls += 1
+        return { label: 'Reviewing team updates', narrative: 'Direct path.' }
+      },
+      agentBlockInsight: async (block): Promise<InterpretationAgentInsight> => (
+        block.startTime < noon
+          ? { label: 'Editing handoff.md notes', narrative: 'Leak.', confidence: 0.9, reasoning: null, toolsUsed: [] }
+          : { label: 'Coordinating a release across tools', narrative: 'Clean.', confidence: 0.8, reasoning: null, toolsUsed: [] }
+      ),
+    })
+
+    const labels = persistedLabels(db)
+    assert.ok(labels.includes('Coordinating a release across tools'), 'the clean agent label persisted')
+    assert.ok(!labels.some((label) => label.includes('handoff.md')), 'the leaking label never persisted')
+    assert.ok(labels.includes('Reviewing team updates'), 'the leaking block fell back to the direct relabel')
+    assert.ok(directCalls >= 1, 'exactly the discarded block reached the direct path')
+    assert.ok(result.relabeled >= 2, 'both blocks ended the run named')
   } finally {
     __resetSettings()
     db.close()
