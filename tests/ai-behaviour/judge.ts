@@ -96,25 +96,49 @@ export async function judgeAnswer(
 
   try {
     const client = new Anthropic({ apiKey })
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 400,
-      system: JUDGE_SYSTEM,
-      messages: [{ role: 'user', content: userPrompt }],
-    })
+    // Prefill "{" forces JSON-first output (no reasoning preamble that used to
+    // blow the token cap mid-thought and grade as "error"). One retry on a
+    // response that still fails to parse.
+    const callJudge = async (): Promise<string> => {
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1200,
+        system: JUDGE_SYSTEM,
+        messages: [
+          { role: 'user', content: userPrompt },
+          { role: 'assistant', content: '{' },
+        ],
+      })
+      const text = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('')
+        .trim()
+      return `{${text}`
+    }
 
-    const raw = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('')
-      .trim()
+    const extractJson = (raw: string): string | null => {
+      const match = raw.match(/\{[\s\S]*\}/)
+      if (!match) return null
+      try {
+        JSON.parse(match[0])
+        return match[0]
+      } catch {
+        return null
+      }
+    }
 
-    const jsonMatch = raw.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
+    let raw = await callJudge()
+    let json = extractJson(raw)
+    if (!json) {
+      raw = await callJudge()
+      json = extractJson(raw)
+    }
+    if (!json) {
       return {
         scenarioId: scenario.id,
         grade: 'error',
-        reason: `judge returned non-JSON: ${raw.slice(0, 120)}`,
+        reason: `judge returned non-JSON after retry: ${raw.slice(0, 120)}`,
         citationsFound: false,
         hallucinationDetected: false,
         voiceOk: false,
@@ -124,7 +148,7 @@ export async function judgeAnswer(
       }
     }
 
-    const parsed = JSON.parse(jsonMatch[0]) as {
+    const parsed = JSON.parse(json) as {
       grade?: 'good' | 'bad' | 'worse'
       reason?: string
       citations_found?: boolean

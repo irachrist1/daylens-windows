@@ -42,6 +42,30 @@ function color(c: keyof typeof ANSI, s: string): string {
   return process.stdout.isTTY ? `${ANSI[c]}${s}${ANSI.reset}` : s
 }
 
+// Real artifacts the turn emitted, so the judge can grade "must_produce_artifact"
+// scenarios against what was actually written to disk instead of guessing from
+// the chat text (three scenarios were failed for "no artifact" while 1-2 files
+// existed). Markdown gets a content excerpt; tabular formats get metadata.
+function summarizeArtifactsForJudge(
+  artifacts: Array<{ title: string; format: string; path: string; kind: string }>,
+): string | undefined {
+  if (artifacts.length === 0) return undefined
+  const lines = ['ARTIFACTS EMITTED (real files this turn wrote — an artifact listed here WAS produced):']
+  for (const artifact of artifacts) {
+    lines.push(`- "${artifact.title}" (${artifact.kind}, ${artifact.format})`)
+    if (artifact.format === 'markdown') {
+      try {
+        const content = fs.readFileSync(artifact.path, 'utf8')
+        const excerpt = content.length > 1500 ? `${content.slice(0, 1500)}…(truncated)` : content
+        lines.push(`  content excerpt:\n${excerpt.split('\n').map((l) => `  | ${l}`).join('\n')}`)
+      } catch {
+        lines.push('  (content unreadable)')
+      }
+    }
+  }
+  return lines.join('\n')
+}
+
 // Read the per-scenario trace JSON the trace recorder writes during
 // sendMessage, and produce a compact text summary the judge can use as
 // authoritative evidence. The judge needs to see every tool input/output
@@ -64,7 +88,13 @@ function summarizeTraceForJudge(tracePath: string): string | undefined {
   const lines: string[] = []
   for (const event of events) {
     const kind = event.kind as string | undefined
-    if (kind === 'tool_result') {
+    if (kind === 'context_packet') {
+      // The rendered packet was IN the model's prompt: any fact quoted from it
+      // is grounded evidence, same as a tool output.
+      const rendered = ((event.rendered as string) ?? '').trim()
+      const preview = rendered.length > 3500 ? `${rendered.slice(0, 3500)}…(truncated)` : rendered
+      lines.push(`CONTEXT_PACKET (authoritative evidence — this was in the model's prompt; facts quoted from it are grounded):\n${preview}`)
+    } else if (kind === 'tool_result') {
       const name = event.name as string
       const input = JSON.stringify(event.input ?? {})
       // Truncate output JSON to keep the judge prompt under control, but
@@ -99,10 +129,12 @@ function summarizeTraceForJudge(tracePath: string): string | undefined {
     }
   }
   if (lines.length === 0) return undefined
-  // Cap the whole summary so the judge call stays within token budget.
+  // Cap the whole summary so the judge call stays within token budget. The
+  // per-tool outputs are already truncated above; this cap now also has to fit
+  // the context-packet section, hence slightly larger than the old 12000.
   const joined = lines.join('\n')
-  if (joined.length > 12000) {
-    return `${joined.slice(0, 12000)}\n(trace truncated for judge)`
+  if (joined.length > 15000) {
+    return `${joined.slice(0, 15000)}\n(trace truncated for judge)`
   }
   return joined
 }
@@ -235,8 +267,10 @@ async function main(): Promise<void> {
       console.log(color('yellow', `  A: ${text.replace(/\n/g, '\n     ')}`))
 
       const traceSummary = summarizeTraceForJudge(path.join(traceDir, `${scenario.id}.json`))
+      const artifactSummary = summarizeArtifactsForJudge(assistant.artifacts ?? [])
+      const evidence = [traceSummary, artifactSummary].filter(Boolean).join('\n\n') || undefined
       const followUps = (assistant.suggestedFollowUps ?? []).map((s) => s.text)
-      const verdict = await judgeAnswer(scenario, text, groundTruthBlob, judgeApiKey, traceSummary, followUps)
+      const verdict = await judgeAnswer(scenario, text, groundTruthBlob, judgeApiKey, evidence, followUps)
       const gradeColor: keyof typeof ANSI =
         verdict.grade === 'good' ? 'green'
         : verdict.grade === 'bad' ? 'yellow'
