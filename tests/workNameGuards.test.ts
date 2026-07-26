@@ -267,3 +267,22 @@ test('a tool brand plus its own surface words is a panel title, never work', () 
   // Generic agent words inside a real subject survive.
   assert.equal(isDisqualifiedWorkSubject('Designing the interpretation agent'), false)
 })
+
+// v5: the tool as a co-equal activity (leading conjunct) and the trailing
+// assistant credit — both from real graded-day labels.
+test('v5: a leading "Working in <tool> and …" conjunct is a violation', () => {
+  assert.ok(workNameGuardLabelViolation('Working in Codex and planning the weekly AI session board'))
+  assert.ok(workNameGuardLabelViolation('Chatting with Claude and reviewing the budget'))
+  // The verb with a real object stays legitimate.
+  assert.equal(workNameGuardLabelViolation('Planning the weekly AI session board'), null)
+  assert.equal(workNameGuardLabelViolation('Sprint planning in Slack'), null)
+  assert.equal(workNameGuardLabelViolation('Working on the billing retry queue'), null)
+})
+
+test('v5: a trailing AI-assistant credit is a violation', () => {
+  assert.ok(workNameGuardLabelViolation('Architecting the Personal AI OS with Codex and Gemini'))
+  assert.ok(workNameGuardLabelViolation('Refactoring the sync engine with Claude Code'))
+  // Non-assistant instruments and human collaborators stay legitimate.
+  assert.equal(workNameGuardLabelViolation('Reviewing the financial report with Norman'), null)
+  assert.equal(workNameGuardLabelViolation('Editing the launch video with Final Cut'), null)
+})

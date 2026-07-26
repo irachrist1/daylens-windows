@@ -35,8 +35,13 @@
  * gate (workNameGuardLabelViolation with storedLabel: a tool surface hiding
  * behind a verb lead or mixed into a list, a brand with no other work
  * object); stamped databases re-scan under the widened rules.
+ *
+ * v5: the tool as a co-equal activity — a leading "Working in Codex and …"
+ * conjunct (the verb's direct object IS the tool) and a trailing AI-assistant
+ * credit ("… with Codex and Gemini") both narrate the instrument instead of
+ * the work; real labels from a graded day carried both shapes.
  */
-export const WORK_NAME_GUARD_VERSION = 4
+export const WORK_NAME_GUARD_VERSION = 5
 
 /** Tool brands that are the INSTRUMENT of the work, never its subject. */
 export const TOOL_BRAND_NAMES = new Set([
@@ -265,6 +270,38 @@ export function isDisqualifiedWorkSubject(label: string): boolean {
     || looksLikeMachineHostname(trimmed) || looksLikeInhumanTitle(trimmed)
 }
 
+// AI assistants specifically: naming one as a trailing collaborator ("… with
+// Codex and Gemini") credits the instrument instead of the work. A subset of
+// TOOL_BRAND_NAMES because "Sprint planning in Slack" keeps its precedent.
+const AI_ASSISTANT_BRANDS = new Set([
+  'claude code', 'claude', 'chatgpt', 'codex', 'gemini', 'copilot',
+  'github copilot', 'cursor', 'windsurf', 'opencode', 'ai chat',
+])
+
+// Verbs whose direct tool object narrates the instrument as the activity:
+// "Working in Codex and planning X" — the first conjunct IS the tool.
+const TOOL_AS_ACTIVITY_LEAD = /^(work(?:ing|ed)?|coding|building|chatting|talking|vibing|pairing)\s+(in|on|with|inside)\s+(.{2,40})$/i
+
+/** The leading-conjunct check: "Working in Codex and planning X" starts by
+ *  presenting the tool as the work. Split on the first "and"/"," and test the
+ *  first conjunct alone. */
+function leadingToolAsActivity(label: string): string | null {
+  const firstConjunct = label.split(/\s+(?:and|&|,)\s+/i)[0]?.trim() ?? ''
+  const match = TOOL_AS_ACTIVITY_LEAD.exec(firstConjunct)
+  if (!match) return null
+  return isToolBrandName(match[3]) ? firstConjunct : null
+}
+
+/** The trailing-credit check: a label ending "with/using/via <AI assistant>"
+ *  (optionally "and <another>") credits the tool; the work stands alone. */
+function trailingAssistantCredit(label: string): string | null {
+  const match = /\b(with|using|via|through)\s+([\p{L}\p{N} .&-]{2,60})$/iu.exec(label.trim())
+  if (!match) return null
+  const brands = match[2].split(/\s+(?:and|&)\s+/i).map((b) => b.trim().toLowerCase())
+  if (brands.length === 0) return null
+  return brands.every((b) => AI_ASSISTANT_BRANDS.has(b)) ? match[0] : null
+}
+
 // Words that cannot be the work's object on their own — connective tissue,
 // time filler, and generic activity nouns. Consulted only when the label
 // mentions a tool brand: "Sprint planning in Slack" has a real object
@@ -313,6 +350,14 @@ export function workNameGuardLabelViolation(
   }
   if (!options.storedLabel && looksLikeShoutingTitle(trimmed)) {
     return `the label "${trimmed}" reads as a shouting capture title, not a human work name`
+  }
+  const toolLead = leadingToolAsActivity(trimmed)
+  if (toolLead) {
+    return `the label opens with "${toolLead}", presenting the tool as the activity; name the work done in it`
+  }
+  const toolCredit = trailingAssistantCredit(trimmed)
+  if (toolCredit) {
+    return `the label ends with "${toolCredit}", crediting the assistant; name the work alone`
   }
   const words = trimmed.split(' ')
     .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
