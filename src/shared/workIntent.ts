@@ -247,9 +247,13 @@ function workflowLabelLooksLikeToolMix(label: string, block: BlockLike, pages: P
 
 function subjectFromArtifact(artifact: ArtifactRef | undefined): SubjectCandidate | null {
   // A Slack/Teams channel artifact names the project it hosts, not a chat
-  // surface: "daylens (Channel)" is evidence the work was about daylens.
+  // surface: "daylens (Channel)" is evidence the work was about daylens. A DM
+  // or thread is different: "Sarah Chen (DM)" names the PERSON talked to, and
+  // a person is never the work's subject — drop the artifact entirely rather
+  // than falling through to the raw title.
   const channelMatch = artifact?.displayTitle?.match(/^\s*#?([\w][\w .-]*?)\s*\((Channel|DM|Thread)\)\s*$/i)
   if (channelMatch?.[1]) {
+    if (channelMatch[2].toLowerCase() !== 'channel') return null
     const channel = usefulText(channelMatch[1])
     if (channel && !looksGenericSubject(channel) && !isDisqualifiedWorkSubject(channel)) {
       return { label: channel, source: 'artifact' }
