@@ -3728,6 +3728,30 @@ export function getActivityStateEventsForRange(
   `).all(fromMs, toMs) as ActivityStateEventRecord[]
 }
 
+/** The most recent activity-state event strictly before a boundary, within a
+ *  bounded look-back. Lets a scan reconstruct the machine state already in
+ *  force when its window opens (an idle_start from before the first session
+ *  still covers the window when no end event ever arrived). */
+export function getLastActivityStateEventBefore(
+  db: Database.Database,
+  beforeMs: number,
+  lookBackMs: number,
+): ActivityStateEventRecord | null {
+  const row = db.prepare(`
+    SELECT
+      id,
+      event_ts AS eventTs,
+      event_type AS eventType,
+      source,
+      metadata_json AS metadataJson
+    FROM activity_state_events
+    WHERE event_ts < ? AND event_ts >= ?
+    ORDER BY event_ts DESC
+    LIMIT 1
+  `).get(beforeMs, beforeMs - lookBackMs) as ActivityStateEventRecord | undefined
+  return row ?? null
+}
+
 export function setBlockLabelOverride(
   db: Database.Database,
   blockId: string,
