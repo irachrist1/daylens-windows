@@ -3,9 +3,9 @@
 // A REAL chat turn through the exact sendMessage() the AI tab's IPC handler
 // calls: context packet, tool loop, grounding verification, persistence,
 // citations. Streams text to stdout and prints every tool call as it happens
-// (name + input summary), then a footer with usage. Agent questions are
-// auto-answered with the defensible-reading default unless --ask-cards is
-// passed, which prints the card and picks the first option.
+// (name + input summary), then a footer with usage. Agent questions resolve
+// immediately with the defensible-reading default (the app shows a card and
+// waits up to 5 minutes — clarification turns can genuinely differ here).
 
 import type { HarnessContext } from './context'
 import { c } from './render'

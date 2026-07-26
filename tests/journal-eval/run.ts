@@ -49,18 +49,21 @@ function loadDays(filter: string[]): EvalDay[] {
 
 async function observeDay(db: import('better-sqlite3').Database, date: string): Promise<{ observed: ObservedDay; rendering: string }> {
   const { getTimelineDayProjection } = await import('../../src/main/core/query/projections')
-  const { userVisibleLabelForBlock } = await import('../../src/main/services/workBlocks')
+  // The renderer's label function — Timeline.tsx titles blocks with
+  // userVisibleBlockLabel, and the eval must score exactly what the user sees.
+  const { userVisibleBlockLabel } = await import('../../src/shared/blockLabel')
   const { buildDayWrapFacts } = await import('../../src/renderer/lib/dayWrapScenes')
   const { planDayWrapSlides } = await import('../../src/renderer/lib/wrapDeck')
   const { getTimelineDayPayload } = await import('../../src/main/services/workBlocks')
 
   const projection = getTimelineDayProjection(db, date, null, { materialize: false, analysis: false })
-  const blockLabels = projection.blocks.map((b) => userVisibleLabelForBlock(b))
+  const blockLabels = projection.blocks.map((b) => userVisibleBlockLabel(b))
   const blockNarratives = projection.blocks.map((b) => b.label?.narrative ?? '')
 
   // Wrapped: what the user saw if a narrative is stored; the deterministic
-  // fallback line per slide otherwise. Never generates.
-  const payload = getTimelineDayPayload(db, date, null, { materialize: false })
+  // fallback line per slide otherwise. Never generates. analysis:false to
+  // match the GET_TIMELINE_DAY payload the DayWrapped overlay builds from.
+  const payload = getTimelineDayPayload(db, date, null, { materialize: false, analysis: false })
   const facts = buildDayWrapFacts(payload)
   const slides = planDayWrapSlides(facts)
   const storedRow = db.prepare(

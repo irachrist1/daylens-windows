@@ -9,7 +9,10 @@ import { c, emit, fmtDuration, fmtTime } from './render'
 
 export async function timelineDay(ctx: HarnessContext, date: string, opts: { json: boolean; evidence: boolean }): Promise<void> {
   const { getTimelineDayProjection } = await import('../src/main/core/query/projections')
-  const { userVisibleLabelForBlock } = await import('../src/main/services/workBlocks')
+  // The RENDERER's label function (Timeline.tsx uses userVisibleBlockLabel),
+  // not the main-process userVisibleLabelForBlock — they disagree on ~44% of
+  // real blocks, and this surface must show exactly what the user sees.
+  const { userVisibleBlockLabel } = await import('../src/shared/blockLabel')
   const payload = getTimelineDayProjection(ctx.db, date, null, { materialize: false, analysis: false })
   emit(payload, opts.json, () => {
     console.log(c('bold', `Timeline · ${date}`))
@@ -25,7 +28,7 @@ export async function timelineDay(ctx: HarnessContext, date: string, opts: { jso
         console.log(c('yellow', `  · · · ${fmtDuration((block.startTime - previousEnd) / 1000)} away from the computer · · ·`))
       }
       previousEnd = block.endTime
-      const label = userVisibleLabelForBlock(block)
+      const label = userVisibleBlockLabel(block)
       console.log(`${c('cyan', `${fmtTime(block.startTime)}–${fmtTime(block.endTime)}`)} ${c('dim', `(${fmtDuration((block.endTime - block.startTime) / 1000)})`)}  ${c('bold', label)}`)
       if (block.label?.narrative) console.log(c('dim', `    ${block.label.narrative}`))
       if (opts.evidence) {

@@ -7,7 +7,9 @@
 //   daylens timeline <YYYY-MM> --month      month grid
 //   daylens apps <date> [appId]             apps view / app detail
 //   daylens apps <date> --ids               list canonical app ids
-//   daylens wrapped <date> [--regen|--facts]  wrapped narrative (AI on --regen)
+//   daylens wrapped <date> [--regen|--facts]  wrapped narrative (spends a
+//                                           model call when none is stored,
+//                                           exactly like the app; --regen forces)
 //   daylens chat "question" [--thread N]    real agent turn, streamed
 //   daylens analyze <date> [--hint "…"]     the Analyze-day pipeline (AI)
 //
@@ -65,12 +67,18 @@ async function main(): Promise<void> {
   if (outFile) {
     // Tee stdout into the export file so any command output can be inspected
     // or attached later, without a separate export subcommand per surface.
-    const stream = fs.createWriteStream(path.resolve(outFile))
+    // Buffered in memory and flushed synchronously at exit — a write stream
+    // would race process.exit and truncate the tail.
+    const chunks: Array<string | Uint8Array> = []
+    const target = path.resolve(outFile)
     const write = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
-      stream.write(chunk)
+      chunks.push(chunk)
       return write(chunk, ...(args as []))
     }) as typeof process.stdout.write
+    process.on('exit', () => {
+      fs.writeFileSync(target, chunks.map((c) => (typeof c === 'string' ? c : Buffer.from(c).toString())).join(''))
+    })
   }
 
   if (command === 'help' || command === '--help' || flags.get('help') === true) {

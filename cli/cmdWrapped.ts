@@ -16,7 +16,8 @@ export async function wrapped(
   opts: { json: boolean; regen: boolean; facts: boolean },
 ): Promise<void> {
   const { getTimelineDayPayload } = await import('../src/main/services/workBlocks')
-  const payload = getTimelineDayPayload(ctx.db, date, null, { materialize: false })
+  // Default options — exactly what GET_WRAPPED_NARRATIVE's handler passes.
+  const payload = getTimelineDayPayload(ctx.db, date, null)
   const { buildDayWrapFacts } = await import('../src/renderer/lib/dayWrapScenes')
   const facts = buildDayWrapFacts(payload)
 

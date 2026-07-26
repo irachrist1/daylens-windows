@@ -28,12 +28,22 @@ function visibleCorpus(observed: ObservedDay): string {
   ].join('\n').toLowerCase()
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Alias hits require word boundaries — bare substring matching lets 'ml'
+ *  match 'html' and 'alu' match 'evaluate'. */
+function aliasHits(corpus: string, alias: string): boolean {
+  return new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(alias.toLowerCase())}(?:[^a-z0-9]|$)`).test(corpus)
+}
+
 export function scorePrimaryWork(day: EvalDay, observed: ObservedDay): DimensionScore {
   const corpus = visibleCorpus(observed)
   const violations: string[] = []
   let named = 0
   for (const work of day.primaryWork) {
-    const hit = work.aliases.some((alias) => corpus.includes(alias.toLowerCase()))
+    const hit = work.aliases.some((alias) => aliasHits(corpus, alias))
     if (hit) named += 1
     else violations.push(`primary work never named anywhere visible: ${work.name} (aliases: ${work.aliases.join(', ')})`)
   }
@@ -55,18 +65,29 @@ export function scoreToolSurfaces(day: EvalDay, observed: ObservedDay): Dimensio
   // Wrapped prose gets the substring check only — full sentences legitimately
   // mention tools ("driving Claude in Slack"), so isDisqualifiedWorkSubject
   // (built for labels) would misfire there.
-  for (const line of [observed.wrappedLead ?? '', ...observed.wrappedLines]) {
+  const wrappedLines = [observed.wrappedLead ?? '', ...observed.wrappedLines].filter((l) => l.trim())
+  let dirtyWrappedLines = 0
+  for (const line of wrappedLines) {
     const lower = line.toLowerCase()
     const bannedHit = banned.find((b) => lower.includes(b))
-    if (bannedHit) violations.push(`wrapped line presents banned-as-work "${bannedHit}": "${line.slice(0, 90)}"`)
+    if (bannedHit) {
+      dirtyWrappedLines += 1
+      violations.push(`wrapped line presents banned-as-work "${bannedHit}": "${line.slice(0, 90)}"`)
+    }
   }
-  // score = blocks with clean labels
-  const clean = observed.blockLabels.length - violations.filter((v) => v.startsWith('block label')).length
-  return { score: Math.max(0, clean), max: Math.max(1, observed.blockLabels.length), violations }
+  // Every user-visible unit counts: block labels AND wrapped lines. A day the
+  // user never opened (zero blocks, zero lines) is vacuously clean, not dirty.
+  const units = observed.blockLabels.length + wrappedLines.length
+  if (units === 0) return { score: 1, max: 1, violations }
+  const clean = units - violations.filter((v) => v.startsWith('block label')).length - dirtyWrappedLines
+  return { score: Math.max(0, clean), max: units, violations }
 }
 
 function parseClock(date: string, hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number)
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h > 23 || m > 59) {
+    throw new Error(`Bad gap clock "${hhmm}" — HH:MM, 00:00–23:59`)
+  }
   const base = new Date(`${date}T00:00:00`)
   base.setHours(h, m, 0, 0)
   return base.getTime()
