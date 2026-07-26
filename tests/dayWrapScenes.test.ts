@@ -553,3 +553,65 @@ test('a disqualified tool surface never becomes a day thread', () => {
   ]))
   assert.equal(facts.threads.length, 0)
 })
+
+// ─── Honest standout (session-chained runs) ──────────────────────────────────
+// The standout must never claim a block's wall span as one stretch: regrouping
+// deliberately merges an activity across peeks and lunch-sized holes.
+
+function sessionFor(start: number, durationSeconds: number, category: AppCategory = 'development'): WorkContextBlock['sessions'][number] {
+  return {
+    id: Math.floor(start / 1000),
+    bundleId: 'com.test.app',
+    appName: 'Test App',
+    startTime: start,
+    endTime: start + durationSeconds * 1000,
+    durationSeconds,
+    category,
+    isFocused: true,
+  }
+}
+
+test('the standout clips at a lunch-sized hole inside one block', () => {
+  const block = makeBlock({ label: 'Deep build', start: NINE_AM, durationSeconds: 150 * 60, category: 'development' })
+  // 90m of sessions, a 95m hole, then 60m more — one stored block.
+  block.endTime = NINE_AM + (90 + 95 + 60) * 60_000
+  block.sessions = [
+    sessionFor(NINE_AM, 90 * 60),
+    sessionFor(NINE_AM + (90 + 95) * 60_000, 60 * 60),
+  ]
+  const facts = buildDayWrapFacts(makeDayPayload([block]))
+  assert.ok(facts.standout, 'expected a standout')
+  assert.equal(facts.standout!.seconds, 90 * 60, 'the run is the longest chained side of the hole, never the whole span')
+})
+
+test('a real leisure detour breaks the run; a short peek does not', () => {
+  const block = makeBlock({ label: 'Deep build', start: NINE_AM, durationSeconds: 120 * 60, category: 'development' })
+  block.endTime = NINE_AM + 128 * 60_000
+  block.sessions = [
+    sessionFor(NINE_AM, 50 * 60),
+    // 3m YouTube peek: neither breaks the run nor counts toward it.
+    sessionFor(NINE_AM + 50 * 60_000, 3 * 60, 'entertainment'),
+    sessionFor(NINE_AM + 53 * 60_000, 30 * 60),
+    // 15m of YouTube is a real detour: the run ends here.
+    sessionFor(NINE_AM + 83 * 60_000, 15 * 60, 'entertainment'),
+    sessionFor(NINE_AM + 98 * 60_000, 30 * 60),
+  ]
+  const facts = buildDayWrapFacts(makeDayPayload([block]))
+  assert.ok(facts.standout, 'expected a standout')
+  assert.equal(facts.standout!.seconds, 80 * 60, 'peek-tolerant chain: 50m + 30m, detour excluded')
+})
+
+test('a sparse block with session evidence never claims its wall span', () => {
+  // 6.4h wall span, 1.1h of actual sessions in three separated islands — the
+  // 2026-05-27 shape ("Watching documentaries" spans 6.4h with 1.1h active).
+  const sparse = makeBlock({ label: 'Sparse build', start: NINE_AM, durationSeconds: 66 * 60, category: 'development' })
+  sparse.endTime = NINE_AM + 384 * 60_000
+  sparse.sessions = [
+    sessionFor(NINE_AM, 26 * 60),
+    sessionFor(NINE_AM + 120 * 60_000, 25 * 60),
+    sessionFor(NINE_AM + 300 * 60_000, 15 * 60),
+  ]
+  const facts = buildDayWrapFacts(makeDayPayload([sparse]))
+  assert.ok(!facts.standout || facts.standout.seconds <= 26 * 60,
+    `the standout may claim at most the biggest island, got ${facts.standout?.seconds}`)
+})

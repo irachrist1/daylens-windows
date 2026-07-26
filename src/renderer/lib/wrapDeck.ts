@@ -250,13 +250,16 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
   const middle: WrapSlideSpec[] = []
   const pushMiddle = (spec: WrapSlideSpec) => middle.push(spec)
 
-  // 6 · The longest unbroken stretch — the focus reveal.
+  // 6 · The longest stretch — the focus reveal. "Unbroken" and "nothing broke
+  // it" are banned vocabulary (OVERCLAIM_PATTERNS): the run is measured with
+  // small tolerances, so continuity absolutes routinely contradict the
+  // timeline's own record of peeks.
   if (facts.standout) {
     pushMiddle({
-      id: 'focus', kind: 'stat', kicker: 'Your longest unbroken stretch',
+      id: 'focus', kind: 'stat', kicker: 'Your longest stretch',
       stat: { value: hm(facts.standout.seconds), seconds: facts.standout.seconds, sublabel: `${facts.standout.name} · ${facts.standout.startClock} to ${facts.standout.endClock}` },
-      fallbackLine: `${hm(facts.standout.seconds)} straight on ${lowerName(facts.standout.name)}, ${facts.standout.startClock} to ${facts.standout.endClock}. Nothing broke it.`,
-      ask: 'The longest unbroken stretch of the day. Do not just state the duration (it is on the card); lead with what that run MEANT: the deepest unbroken run of the day, the one thing nothing interrupted, or when in the day that kind of depth landed. Name the real work being done. Never write "focus" or "focused"; the unbroken time is the fact, attention is not observable.',
+      fallbackLine: `${hm(facts.standout.seconds)} on ${lowerName(facts.standout.name)}, ${facts.standout.startClock} to ${facts.standout.endClock}, the longest single run of the day.`,
+      ask: 'The day\'s longest single run on one thing. Do not just state the duration (it is on the card); lead with what that run MEANT: the day\'s deepest stretch, the real work being done in it, or when in the day that kind of depth landed. Brief detours may sit inside the run, so never claim it was unbroken, uninterrupted, or that nothing broke it. Never write "focus" or "focused"; the stretch is the fact, attention is not observable.',
       factsNote: `${hm(facts.standout.seconds)} on ${facts.standout.name}, ${facts.standout.startClock} to ${facts.standout.endClock}`,
     })
   }
@@ -552,10 +555,10 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
     const when = [facts.longestStretch.dayLabel, facts.longestStretch.startClock ? `from ${facts.longestStretch.startClock}` : null].filter(Boolean).join(', ')
     const label = looksLikeRawArtifactLabel(facts.longestStretch.label) ? null : facts.longestStretch.label
     out.push({
-      id: 'focus', kind: 'stat', kicker: 'Your longest unbroken stretch',
+      id: 'focus', kind: 'stat', kicker: 'Your longest stretch',
       stat: { value: hm(facts.longestStretch.seconds), seconds: facts.longestStretch.seconds, sublabel: [label, when].filter(Boolean).join(' · ') },
-      fallbackLine: `${hm(facts.longestStretch.seconds)} without breaking, ${when}.`,
-      ask: `The single longest unbroken stretch of the ${noun}: ${when}${label ? `, on ${label}` : ''}. Do not just state the duration (it is on the card); lead with what that run meant and the real work in it. This is the one to be a little proud of.`,
+      fallbackLine: `${hm(facts.longestStretch.seconds)} in one run, ${when}.`,
+      ask: `The single longest stretch of the ${noun}: ${when}${label ? `, on ${label}` : ''}. Do not just state the duration (it is on the card); lead with what that run meant and the real work in it. Brief detours may sit inside it, so never claim it was unbroken or uninterrupted. This is the one to be a little proud of.`,
       factsNote: `${hm(facts.longestStretch.seconds)}${label ? ` on ${label}` : ''}, ${when}`,
     })
   }

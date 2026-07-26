@@ -55,9 +55,21 @@ test('overclaim guard kills the product speaking as the narrator', () => {
 })
 
 test('Daylens as the thing worked on stays legal', () => {
-  assert.equal(findOverclaimViolation('The evening went entirely to Daylens, one long unbroken run.'), null)
+  assert.equal(findOverclaimViolation('The evening went entirely to Daylens, one long run.'), null)
   assert.equal(findOverclaimViolation('Nine commits to Daylens by the end of the night.'), null)
   assert.equal(findOverclaimViolation('The Daylens work carried the whole afternoon.'), null)
+})
+
+test('overclaim guard kills continuity absolutes; the run itself stays legal', () => {
+  // The longest-stretch fact is measured with tolerances; swearing nothing
+  // else happened inside it is the shape-judge failure that capped real days.
+  assert.ok(findOverclaimViolation('One long unbroken run on the timeline engine.'))
+  assert.ok(findOverclaimViolation('Nothing broke it, 4:01pm to 10:01pm.'))
+  assert.ok(findOverclaimViolation('Two hours straight through, uninterrupted.'))
+  assert.ok(findOverclaimViolation('You worked without a break from lunch to dinner.'))
+  assert.ok(findOverclaimViolation('Nothing interrupted the afternoon build.'))
+  assert.equal(findOverclaimViolation('The longest run of the day, 1h 42m on the timeline engine.'), null)
+  assert.equal(findOverclaimViolation('One stretch carried the afternoon.'), null)
 })
 
 // ─── Raw-artifact leak guard ──────────────────────────────────────────────────

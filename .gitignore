@@ -35,3 +35,4 @@ artifacts/
 
 # ShipStudio metadata
 .shipstudio/
+.journal-eval/

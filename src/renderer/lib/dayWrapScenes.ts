@@ -39,7 +39,8 @@ export interface RibbonSegment {
 }
 
 export interface WrapStandout {
-  /** Active seconds in the single longest unbroken work stretch. */
+  /** Active seconds in the day's longest honest work run: sessions chained
+   *  while the quiet between them stays small, broken by real detours. */
   seconds: number
   startClock: string
   endClock: string
@@ -558,7 +559,7 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
   const ribbonStartClock = ribbon.length > 0 ? formatClock(ribbon[0].startMs) : null
   const ribbonEndClock = ribbon.length > 0 ? formatClock(ribbon[ribbon.length - 1].endMs) : null
 
-  // The standout — the single longest unbroken WORK stretch.
+  // The standout — the day's longest honest WORK run.
   const standout = selectStandout(blocks)
 
   const topLeisure = [...leisureByName.entries()]
@@ -825,7 +826,7 @@ function buildCandidateHooks(
     hooks.push({
       kind: 'longestStretch',
       value: formatHm(standout.seconds),
-      caption: `your longest unbroken stretch, on ${lowerName(standout.name)}`,
+      caption: `your longest stretch, on ${lowerName(standout.name)}`,
       seconds: standout.seconds,
     })
   }
@@ -939,20 +940,75 @@ function smallestSegmentIndex(segments: RibbonSegment[]): number {
   return idx
 }
 
+// A run tolerates this much quiet between sessions (a stretch, a refill) and
+// this much of a leisure detour before it honestly stops being one stretch.
+const STANDOUT_MAX_IDLE_MS = 12 * 60_000
+const STANDOUT_DETOUR_BREAK_SECONDS = 5 * 60
+
+/** The longest honest run of sessions inside one block: chained while the
+ *  quiet between sessions stays under STANDOUT_MAX_IDLE_MS, broken by any
+ *  leisure session long enough to be a real detour. Regrouping deliberately
+ *  merges one activity across peeks and even lunch-sized holes, so the BLOCK's
+ *  own span routinely overstates continuity — a 6h block with 1h of active
+ *  time must never be narrated as a 6h stretch. Leisure peeks shorter than the
+ *  detour threshold neither break the run nor count toward its seconds. */
+function longestSessionRun(block: WorkContextBlock): { seconds: number; startMs: number; endMs: number } | null {
+  const sessions = [...block.sessions]
+    .filter((s) => s.durationSeconds > 0)
+    .sort((a, b) => a.startTime - b.startTime)
+  if (sessions.length === 0) {
+    // No session evidence: the block's own bounds may claim the run ONLY when
+    // its active time actually fills that span. A 6.4h-span block with 1.1h of
+    // active time is not a stretch, and with no sessions to chain the honest
+    // move is silence.
+    const spanSeconds = Math.max(1, Math.round((block.endTime - block.startTime) / 1000))
+    const activeSeconds = blockActiveSeconds(block)
+    if (activeSeconds < spanSeconds * 0.8) return null
+    return { seconds: activeSeconds, startMs: block.startTime, endMs: block.endTime }
+  }
+  let best: { seconds: number; startMs: number; endMs: number } | null = null
+  let run: { seconds: number; startMs: number; endMs: number } | null = null
+  const close = () => {
+    if (run && (!best || run.seconds > best.seconds)) best = run
+    run = null
+  }
+  for (const session of sessions) {
+    const sessionEnd = session.endTime ?? session.startTime + session.durationSeconds * 1000
+    const leisure = session.category === 'entertainment' || session.category === 'social'
+    if (leisure && session.durationSeconds >= STANDOUT_DETOUR_BREAK_SECONDS) {
+      close()
+      continue
+    }
+    if (run && session.startTime - run.endMs > STANDOUT_MAX_IDLE_MS) close()
+    if (!run) {
+      if (leisure) continue
+      run = { seconds: session.durationSeconds, startMs: session.startTime, endMs: sessionEnd }
+      continue
+    }
+    run.endMs = Math.max(run.endMs, sessionEnd)
+    if (!leisure) run.seconds += session.durationSeconds
+  }
+  close()
+  return best
+}
+
 function selectStandout(blocks: WorkContextBlock[]): WrapStandout | null {
-  let best: { block: WorkContextBlock; seconds: number; name: string } | null = null
+  let best: { seconds: number; startMs: number; endMs: number; name: string } | null = null
   for (const block of blocks) {
     if (effectiveBlockKind(block) !== 'work') continue
-    const seconds = blockActiveSeconds(block)
-    if (seconds < STANDOUT_MIN_SECONDS) continue
+    // Stored blocks that carry no sessions get no standout claim at all: with
+    // no session evidence the run's true shape is unknowable, and the honest
+    // move is silence, not the block's wall-clock span.
+    const run = longestSessionRun(block)
+    if (!run || run.seconds < STANDOUT_MIN_SECONDS) continue
     const name = workActivityName(block) || categoryWord(block.dominantCategory)
-    if (!best || seconds > best.seconds) best = { block, seconds, name }
+    if (!best || run.seconds > best.seconds) best = { ...run, name }
   }
   if (!best) return null
   return {
     seconds: best.seconds,
-    startClock: formatClock(best.block.startTime),
-    endClock: formatClock(best.block.endTime),
+    startClock: formatClock(best.startMs),
+    endClock: formatClock(best.endMs),
     name: best.name,
   }
 }
