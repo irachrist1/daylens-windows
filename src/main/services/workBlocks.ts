@@ -4322,7 +4322,15 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
   // is a span the person explicitly fused (DEV-233): their merge outranks the
   // seam.
   const seamed = splitCandidatesAtEvidenceSeams(floored, db, corrections.mergedSpans)
-  return seamed.map((candidate) => buildBlockFromCandidate(candidate, db, context))
+  // The seam split can strand a sub-floor sliver (an envelope-stretched
+  // candidate cut back to a 3-minute sitting on the far side of the hole), so
+  // the floor re-runs over the split result. It cannot re-join what the seam
+  // cut: a fold needs a gap under TIMELINE_SLIVER_FOLD_MAX_GAP_MS (15m) and a
+  // seam is ≥30m of unobserved time — a stranded sliver folds into a
+  // neighbour within its own evidence region or, isolated, is dropped. User
+  // cuts are re-enforced last so no fold erases one (invariant 8).
+  const refloored = enforceUserCuts(enforceMinimumBlockFloor(seamed, db, context), corrections.cuts)
+  return refloored.map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
 // Build the timeline blocks for a set of sessions through the one canonical

@@ -119,6 +119,34 @@ test('passive presence (media playback hold) is coverage, not a gap', () => {
   db.close()
 })
 
+// The seam runs after the block floor, so a split must not ship a sub-floor
+// sliver: an envelope-stretched candidate cut back at the hole leaves a
+// 3-minute sitting stranded on the far side, and the floor re-runs to fold or
+// drop it. The probe shape: real 11:00–11:30 evidence, an envelope stretched
+// across the hole with 3 minutes of captured activity, and a 3-minute sitting
+// at 12:58.
+test('a seam split never ships a sub-floor sliver', () => {
+  const db = createProductionTestDatabase()
+  const sessions = [
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(11, 0), endTime: at(11, 30), windowTitle: 'workBlocks.ts — daylens' }),
+    // Envelope stretched to 13:01, activity stopped at 11:33.
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(11, 30), endTime: at(13, 1), durationSeconds: 180, windowTitle: 'workBlocks.ts — daylens' }),
+    // The 3-minute sitting after the hole.
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(12, 58), endTime: at(13, 1), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  for (const block of blocks) {
+    const spanMinutes = (block.endTime - block.startTime) / 60_000
+    assert.ok(spanMinutes >= 15,
+      `a sub-floor sliver shipped: ${spans([block]).join('')} (${spanMinutes.toFixed(1)}m)`)
+    assert.ok(
+      !(block.startTime < at(12, 0) && block.endTime > at(12, 30)),
+      `block ${spans([block]).join('')} spans the unobserved hole`,
+    )
+  }
+  db.close()
+})
+
 // A plain (un-held) idle stretch is exactly what the seam exists to cut: the
 // same events WITHOUT the media hold change nothing about the split.
 test('a plain idle stretch does not rescue the bridge', () => {
