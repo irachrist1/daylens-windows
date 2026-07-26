@@ -125,6 +125,11 @@ interface CategoryUpdate {
 interface AffectedBlock {
   blockId: string
   dominantCategory: AppCategory
+  /** The same full evidence context the scan judged the labels with — the
+   *  re-derived label must be rechecked against it, not a bare category, or a
+   *  heal can write a label the next scan would flag again. */
+  pageRefs: PageRef[]
+  topApps: WorkContextAppSummary[]
   /** Disqualified non-user label-row ids to delete. */
   disqualifiedLabelRowIds: string[]
   /** True when label_current itself (or a label row) failed the guards and
@@ -243,7 +248,11 @@ function healDate(
     let healedBlocks = 0
     for (const block of labelBlocks) {
       const healed = rederived.get(block.blockId)
-      const context = { dominantCategory: block.dominantCategory }
+      const context = {
+        dominantCategory: block.dominantCategory,
+        pageRefs: block.pageRefs,
+        topApps: block.topApps,
+      }
       const healedLabel = healed && healed.source !== 'user'
         && !storedLabelViolatesWorkNameGuards(healed.label, context)
         ? healed
@@ -346,6 +355,8 @@ export async function runLabelGuardRepair(
       const affected: AffectedBlock = {
         blockId: row.id,
         dominantCategory: guardContext.dominantCategory,
+        pageRefs: context.pageRefs,
+        topApps: context.topApps,
         disqualifiedLabelRowIds,
         healLabel: currentViolates || disqualifiedLabelRowIds.length > 0,
         categoryUpdate,

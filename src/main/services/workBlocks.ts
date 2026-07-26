@@ -5469,6 +5469,11 @@ export function recomputeStoredBlockCategoryFacts(
   const totalSeconds = Object.values(distribution).reduce((sum, seconds) => sum + (seconds ?? 0), 0)
   if (totalSeconds <= 0) return null
   const dominantCategory = dominantCategoryForBlock(distribution, topArtifacts)
+  // Legacy pre-normalization sessions carry display-cased category strings
+  // ("AI Tools", "Uncategorized"); a distribution keyed by them is not the
+  // current vocabulary and can't be compared to — or written over — stored
+  // facts. Keep the stored row rather than "heal" it with off-vocabulary data.
+  if (!isAppCategory(dominantCategory)) return null
   return { distribution, dominantCategory, blockKind: blockKindForCategory(dominantCategory) }
 }
 
