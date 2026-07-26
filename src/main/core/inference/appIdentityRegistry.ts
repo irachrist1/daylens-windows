@@ -146,6 +146,42 @@ export function upsertAppIdentityObservation(
   )
 }
 
+/**
+ * The stored canonical links of the identity registry: every app_identities
+ * row that carries a canonical_app_id, keyed by BOTH its app_instance_id and
+ * its bundle_id. This is the durable "same install" mapping the twin-dedupe
+ * machinery writes (a path-keyed identity linked to its bundle-keyed
+ * counterpart), and it is what lets read-time aggregation merge sessions that
+ * were captured under either key — for ANY twinned app, not a named list.
+ * Sessions themselves may predate the link or have been written by a capture
+ * pass whose bundle resolution failed, so the summary key derivation must
+ * consult this map rather than trust the per-row canonical_app_id alone.
+ */
+export function getStoredCanonicalAppLinks(db: Database.Database): Map<string, string> {
+  const links = new Map<string, string>()
+  let rows: Array<{ app_instance_id: string; bundle_id: string; canonical_app_id: string }> = []
+  try {
+    rows = db.prepare(`
+      SELECT app_instance_id, bundle_id, canonical_app_id
+      FROM app_identities
+      WHERE canonical_app_id IS NOT NULL
+    `).all() as Array<{ app_instance_id: string; bundle_id: string; canonical_app_id: string }>
+  } catch {
+    // A database without the registry table (legacy fixture) simply has no
+    // stored links; aggregation falls back to per-row identity.
+    return links
+  }
+  for (const row of rows) {
+    if (row.app_instance_id && row.app_instance_id !== row.canonical_app_id) {
+      links.set(row.app_instance_id, row.canonical_app_id)
+    }
+    if (row.bundle_id && row.bundle_id !== row.canonical_app_id) {
+      links.set(row.bundle_id, row.canonical_app_id)
+    }
+  }
+  return links
+}
+
 export function getLatestAppIdentity(
   db: Database.Database,
   query: {

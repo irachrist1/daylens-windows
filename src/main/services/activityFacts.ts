@@ -34,6 +34,7 @@ import {
   queryCorrectedActivityFactsForRange,
   type CorrectedActivityRangeFacts,
 } from '../core/query/activityFactsQuery'
+import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
 
 export type { CorrectionSpan }
 
@@ -285,8 +286,17 @@ export function applyTimelineCorrectionsToSessions(
 
 /** Aggregate corrected sessions into per-app usage summaries. Also feeds the
  *  Timeline-day aggregation, which rolls block-partitioned sessions through
- *  the same rollup. */
-export function aggregateAppSummaries(sessions: readonly AppSession[]): AppUsageSummary[] {
+ *  the same rollup.
+ *
+ *  `canonicalLinks` is the identity registry's stored bundle/path → canonical
+ *  mapping (see getStoredCanonicalAppLinks): a session captured under a
+ *  path-style key whose bundle resolution failed at write time still groups
+ *  with its bundle-keyed twin, so one installed app can never appear as two
+ *  rows. */
+export function aggregateAppSummaries(
+  sessions: readonly AppSession[],
+  canonicalLinks?: ReadonlyMap<string, string>,
+): AppUsageSummary[] {
   const totals = new Map<string, {
     bundleId: string
     appName: string
@@ -301,11 +311,15 @@ export function aggregateAppSummaries(sessions: readonly AppSession[]): AppUsage
   const ordered = [...sessions].sort((a, b) => a.startTime - b.startTime)
   for (const session of ordered) {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
-    const key = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
+    // The stored registry link remaps a twin's derived key onto its canonical
+    // counterpart — applied AFTER the per-session derivation because the
+    // canonical projection stamps a catalog miss with the raw bundle/path id.
+    const derivedKey = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
+    const key = canonicalLinks?.get(derivedKey) ?? derivedKey
     const entry = totals.get(key) ?? {
       bundleId: session.bundleId,
       appName: identity.displayName || session.appName,
-      canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId ?? null,
+      canonicalAppId: key,
       seconds: 0,
       categorySeconds: new Map<AppCategory, number>(),
       sessionCount: 0,
@@ -346,7 +360,7 @@ export function getCorrectedAppSummariesForRange(
   const sessions = facts.evidenceSource === 'legacy' && liveSession
     ? withClippedLiveSession(facts.sessions, liveSession, fromMs, toMs)
     : facts.sessions
-  return aggregateAppSummaries(sessions)
+  return aggregateAppSummaries(sessions, getStoredCanonicalAppLinks(db))
 }
 
 function withClippedLiveSession(

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
-import { resetIconResolverCache, resolveIcon } from '../src/main/services/iconResolver.ts'
+import { resetIconResolverCache, resolveIcon, responseStaysOnSite } from '../src/main/services/iconResolver.ts'
 
 function tempCacheDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-icons-'))
@@ -314,6 +314,115 @@ test('site icon resolution reads Chromium favicons from Dia/Comet-style local pr
   assert.equal(path.basename(faviconsPath), 'Favicons')
   assert.equal(result.source, 'browser_cache')
   assert.match(result.dataUrl ?? '', /^data:image\/png;base64,/)
+})
+
+// DEV-240: the LIKE fallback used to pick whichever page on the domain had
+// the WIDEST stored icon, so a special section's logo became the icon for the
+// whole site and for every page whose exact URL missed the cache. The
+// domain's homepage icon must outrank a wider icon from a deep page.
+test('chromium favicon lookup prefers the domain root icon over a wider deep-page icon', async () => {
+  resetIconResolverCache()
+  const cacheDir = tempCacheDir()
+  const profileDir = path.join(cacheDir, 'Dia', 'User Data', 'Default')
+  const rootIcon = samplePngBytes()
+  const deepPageIcon = Buffer.concat([samplePngBytes(), Buffer.from([0x01])])
+  createChromiumFaviconsDb(profileDir, [
+    { pageUrl: 'https://www.searchhub.example/special-section', iconId: 1, imageData: deepPageIcon, width: 64 },
+    { pageUrl: 'https://www.searchhub.example/', iconId: 2, imageData: rootIcon, width: 16 },
+  ])
+  fs.writeFileSync(path.join(profileDir, 'History'), '')
+
+  const domainResult = await resolveIcon({
+    kind: 'site',
+    domain: 'searchhub.example',
+  }, {
+    cacheDir,
+    getBrowserEntries: () => [{
+      name: 'Dia',
+      bundleId: 'company.thebrowser.dia',
+      historyPath: path.join(profileDir, 'History'),
+      type: 'chromium',
+    }],
+    fetchSiteIconFromOrigin: async () => null,
+    fetchSiteFallbackIcon: async () => null,
+  })
+  assert.equal(domainResult.source, 'browser_cache')
+  assert.equal(
+    domainResult.dataUrl,
+    `data:image/png;base64,${rootIcon.toString('base64')}`,
+    'the homepage icon must win over the wider deep-page icon',
+  )
+
+  // An exact page URL in the cache still outranks the root.
+  resetIconResolverCache()
+  const pageResult = await resolveIcon({
+    kind: 'site',
+    domain: 'searchhub.example',
+    pageUrl: 'https://www.searchhub.example/special-section',
+  }, {
+    cacheDir,
+    getBrowserEntries: () => [{
+      name: 'Dia',
+      bundleId: 'company.thebrowser.dia',
+      historyPath: path.join(profileDir, 'History'),
+      type: 'chromium',
+    }],
+    fetchSiteIconFromOrigin: async () => null,
+    fetchSiteFallbackIcon: async () => null,
+  })
+  assert.equal(pageResult.dataUrl, `data:image/png;base64,${deepPageIcon.toString('base64')}`)
+})
+
+// DEV-240: fetch follows redirects, and a login-gated or parked site can land
+// on another product's page (most commonly Google SSO) whose favicon then
+// masquerades as this site's icon.
+test('cross-site redirects never donate their favicon to the requested site', async () => {
+  assert.equal(responseStaysOnSite('mail.superhuman.com', 'https://accounts.google.com/signin'), false)
+  assert.equal(responseStaysOnSite('coursera.org', 'https://www.coursera.org/browse'), true)
+  assert.equal(responseStaysOnSite('www.example.com', 'https://example.com/'), true)
+  assert.equal(responseStaysOnSite('example.com', 'https://app.example.com/login'), true)
+  // No final-URL information (test doubles, older runtimes): trusted.
+  assert.equal(responseStaysOnSite('example.com', ''), true)
+  assert.equal(responseStaysOnSite('example.com', null), true)
+
+  resetIconResolverCache()
+  const originalFetch = global.fetch
+  const pngBytes = samplePngBytes()
+  const withFinalUrl = (response: Response, finalUrl: string): Response => {
+    Object.defineProperty(response, 'url', { value: finalUrl })
+    return response
+  }
+
+  global.fetch = (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    if (url === 'https://gated.example/favicon.ico') {
+      // The favicon request itself redirected off-site and served an image.
+      return withFinalUrl(new Response(pngBytes, { status: 200 }), 'https://accounts.google.com/favicon.ico')
+    }
+    if (url === 'https://gated.example') {
+      // The homepage redirected to an SSO page that declares its own icons.
+      return withFinalUrl(new Response(
+        '<html><head><link rel="icon" href="https://accounts.google.com/real-google-icon.png"></head></html>',
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      ), 'https://accounts.google.com/signin')
+    }
+    return new Response('not found', { status: 404 })
+  }) as typeof fetch
+
+  try {
+    const result = await resolveIcon({
+      kind: 'site',
+      domain: 'gated.example',
+    }, {
+      cacheDir: tempCacheDir(),
+      getBrowserEntries: () => [],
+      settings: { allowThirdPartyWebsiteIconFallback: false },
+    })
+    assert.equal(result.source, 'miss', 'a cross-site redirect must not donate an icon')
+    assert.equal(result.dataUrl, null)
+  } finally {
+    global.fetch = originalFetch
+  }
 })
 
 test('site icon resolution falls back to manifest icons and sniffs bytes when MIME is missing', async () => {

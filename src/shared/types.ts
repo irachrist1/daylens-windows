@@ -1539,6 +1539,13 @@ export interface WorkflowPattern {
   lastSeenAt: number
 }
 
+// Product decision (DEV-239): a domain needs at least this much credited
+// foreground time in the selected range to earn its own row in the browser
+// breakdown. Anything under it is a drive-by (a redirect hop, a 1-2 second
+// glance) and folds into one "Everything else" line, keeping its seconds in
+// the reconciled total without cluttering the list. Default: 10 seconds.
+export const MIN_DOMAIN_ROW_SECONDS = 10
+
 export interface AppDetailPayload {
   canonicalAppId: string
   displayName: string
@@ -1569,6 +1576,17 @@ export interface AppDetailPayload {
       visitCount: number
       pages: PageRef[]
     }>
+    /**
+     * Domains whose credited time fell under the minimum-row threshold,
+     * folded into one line so drive-by 1-2 second visits never earn their
+     * own rows. Included in attributedSeconds; the reconciliation is now
+     * Σ domain.totalSeconds + everythingElse.totalSeconds = attributedSeconds.
+     */
+    everythingElse?: {
+      totalSeconds: number
+      domainCount: number
+      visitCount: number
+    }
   }
   blockAppearances: Array<{
     blockId: string
