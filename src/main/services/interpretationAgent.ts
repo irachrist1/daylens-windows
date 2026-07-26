@@ -20,7 +20,7 @@ import { generateText, stepCountIs, tool, type LanguageModel } from 'ai'
 import { z } from 'zod'
 import type Database from 'better-sqlite3'
 import type { AIInvocationSource, WorkContextBlock, WorkContextInsight } from '@shared/types'
-import { evaluateLabelVoice, labelVoiceContextForBlock } from '@shared/labelVoice'
+import { labelCandidateViolation, labelVoiceContextForBlock } from '@shared/labelVoice'
 import { effectiveBlockKind } from '@shared/workKind'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import { upsertWorkContextInsight } from '../db/queries'
@@ -92,25 +92,17 @@ export function parseInterpretationAgentInsight(raw: string): InterpretationAgen
   }
 }
 
-/** The SAME label-voice standard the direct relabel path enforces
- *  (generateWorkBlockInsight's labelRejection in jobs/aiService.ts): every
- *  invariant rule — which bounds the label to 90 chars / 12 words — plus the
- *  two target rules that catch echoed window titles and bare app names
- *  ("Slack" is software, not an activity). Returns the violation detail, or
- *  null when the label passes. Exported for direct testing. */
+/** The SAME standard the direct relabel path enforces
+ *  (generateWorkBlockInsight's labelRejection in jobs/aiService.ts), through
+ *  the one shared gate (labelCandidateViolation): every invariant rule —
+ *  which bounds the label to 90 chars / 12 words — the two target rules that
+ *  catch echoed window titles and bare app names ("Slack" is software, not
+ *  an activity), and the work-name-guard vocabulary, so a tool surface can't
+ *  hide behind a verb lead ("Working on Cursor Agents"). Returns the
+ *  violation detail, or null when the label passes. Exported for direct
+ *  testing. */
 export function agentLabelViolation(label: string | null | undefined, block: WorkContextBlock): string | null {
-  const candidate = label?.trim()
-  if (!candidate) return 'the label was empty'
-  const voiceContext = labelVoiceContextForBlock(block, effectiveBlockKind(block))
-  for (const finding of evaluateLabelVoice(candidate, voiceContext)) {
-    if (finding.passed) continue
-    if (finding.tier === 'invariant'
-      || finding.rule === 'no-verbatim-window-title'
-      || finding.rule === 'activity-not-software') {
-      return finding.detail ?? finding.rule
-    }
-  }
-  return null
+  return labelCandidateViolation(label, labelVoiceContextForBlock(block, effectiveBlockKind(block)))
 }
 
 export interface InterpretationAgentOptions {

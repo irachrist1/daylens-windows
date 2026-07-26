@@ -11,7 +11,7 @@ import type {
 
 import { effectiveBlockKind } from './workKind'
 import { humanizeTitle } from './humanize'
-import { isDisqualifiedWorkSubject } from './workNameGuards'
+import { isDisqualifiedWorkSubject, looksLikeShoutingTitle } from './workNameGuards'
 
 type BlockLike = Pick<
   WorkContextBlock,
@@ -245,6 +245,29 @@ function workflowLabelLooksLikeToolMix(label: string, block: BlockLike, pages: P
   return segments.length >= 2 && segments.every((segment) => appNames.has(segment) || domainLabels.has(segment))
 }
 
+// Communication apps whose window titles name the conversation PARTNER — a
+// Microsoft Teams chat window is titled with the person being talked to, so
+// a window artifact these apps produce can never name the work. This is a
+// per-app structural fact, not person-name detection: Slack and Discord are
+// deliberately absent because their titles lead with the channel/workspace,
+// a project container that legitimately names the work (the timeline eval
+// pins that behavior for Slack channel titles).
+const PERSON_TITLED_COMM_APP_NAMES = new Set([
+  'microsoft teams', 'teams', 'microsoft teams (work or school)', 'messages',
+  'whatsapp', 'telegram', 'signal', 'google chat', 'facetime',
+])
+const PERSON_TITLED_COMM_BUNDLE_RE = /^(com\.microsoft\.teams|com\.apple\.mobilesms|com\.apple\.ichat|com\.apple\.facetime|net\.whatsapp|org\.telegram|ru\.keepcoder\.telegram|org\.whispersystems)/i
+
+function artifactTitlesConversationPartner(artifact: ArtifactRef | undefined): boolean {
+  if (!artifact) return false
+  for (const key of [artifact.ownerAppName, artifact.canonicalAppId]) {
+    const cleaned = key?.trim().toLowerCase()
+    if (cleaned && PERSON_TITLED_COMM_APP_NAMES.has(cleaned)) return true
+  }
+  const bundle = artifact.ownerBundleId?.trim().toLowerCase()
+  return Boolean(bundle && PERSON_TITLED_COMM_BUNDLE_RE.test(bundle))
+}
+
 function subjectFromArtifact(artifact: ArtifactRef | undefined): SubjectCandidate | null {
   // A Slack/Teams channel artifact names the project it hosts, not a chat
   // surface: "daylens (Channel)" is evidence the work was about daylens. A DM
@@ -259,6 +282,12 @@ function subjectFromArtifact(artifact: ArtifactRef | undefined): SubjectCandidat
       return { label: channel, source: 'artifact' }
     }
   }
+  // Structural rule, not name detection: a person-titled chat app names its
+  // windows with WHO is being talked to (a Teams chat window is the chat
+  // partner's name), so a window artifact it produced never names the work.
+  // "Jamie Duffy" once became a 75-minute work activity this way. Channels
+  // are already handled above — a channel names the project it hosts.
+  if (artifactTitlesConversationPartner(artifact)) return null
   const label = normalizeSubjectLabel(artifact?.displayTitle)
   if (!label || looksGenericSubject(label)) return null
   // A tool's own surface ("Cursor Agents", "New chat - Claude") is the
@@ -682,6 +711,9 @@ export function workSubjectCandidates(block: BlockLike): string[] {
   const add = (label: string | null | undefined) => {
     const text = usefulText(label)
     if (!text || looksGenericSubject(text) || isDisqualifiedWorkSubject(text)) return
+    // Shouting gates subject inference only (never stored-label deletion) —
+    // a long all-caps capture title can't join a day thread.
+    if (looksLikeShoutingTitle(text)) return
     // A breadcrumb or joined tab title ("Daylens v2 › Issues") is raw page
     // evidence, not a subject a person would name the work by.
     if (/[›»|]/.test(text)) return
