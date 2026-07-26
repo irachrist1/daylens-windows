@@ -14,6 +14,7 @@ import { getSettings } from '../../services/settings'
 import { applyTimelineCorrectionsToSessions } from '../../services/activityFacts'
 import {
   countFocusEventsInRange,
+  firstFocusEventTsMs,
   listFocusEventsInRange,
   type StoredFocusEvent,
 } from '../../db/focusEventRepository'
@@ -33,7 +34,7 @@ import {
   storeCachedRangeFacts,
 } from './rangeFactsCache'
 
-export const ACTIVITY_FACTS_QUERY_VERSION = 2
+export const ACTIVITY_FACTS_QUERY_VERSION = 3
 
 // Synthetic ids for canonically projected sessions. They must stay negative
 // (no app_sessions row backs them) but clear of the live-session sentinel
@@ -232,6 +233,35 @@ function projectGapsFromFocusEvents(
   return gaps
 }
 
+/** Legacy sessions clipped to the stretch before the canonical capture era
+ *  began (the first focus event ever recorded). A session that straddles the
+ *  cutover keeps only its pre-cutover part — from the cutover on, canonical
+ *  evidence owns the time and the legacy row is a dual-write duplicate. */
+function legacySessionsBeforeCanonicalEra(
+  db: Database.Database,
+  legacySessions: readonly AppSession[],
+): AppSession[] {
+  const eraStartMs = firstFocusEventTsMs(db)
+  if (eraStartMs == null) return []
+  return legacySessions.flatMap((session) => {
+    if (session.startTime >= eraStartMs) return []
+    const capturedEndMs = session.startTime + Math.max(0, session.durationSeconds) * 1000
+    const storedEndMs = session.endTime != null && session.endTime > session.startTime
+      ? session.endTime
+      : capturedEndMs
+    if (storedEndMs <= eraStartMs && capturedEndMs <= eraStartMs) return [session]
+    const clippedEndMs = Math.min(storedEndMs, eraStartMs)
+    return [{
+      ...session,
+      endTime: clippedEndMs,
+      durationSeconds: Math.min(
+        Math.max(0, session.durationSeconds),
+        Math.round((eraStartMs - session.startTime) / 1000),
+      ),
+    }]
+  })
+}
+
 function totalsFromSessions(sessions: readonly AppSession[]): {
   totalSeconds: number
   focusSeconds: number
@@ -307,8 +337,18 @@ export function queryCorrectedActivityFactsForRange(
   let evidenceSource: CorrectedActivityRangeFacts['evidenceSource']
   let rawSessions: AppSession[]
   if (canonicalSessions.length > 0 && legacySessionCount > 0) {
+    // Mixed evidence: the window straddles the canonical capture cutover (or
+    // the dual-write era). Canonical focus_events own everything from the
+    // cutover moment on; legacy rows in that region are dual-write duplicates
+    // and are dropped. But legacy sessions from BEFORE the cutover are the
+    // ONLY record of that time — discarding them erased whole working days on
+    // the cutover boundary (a full 08:42–21:16 day of app_sessions vanished
+    // because canonical capture began at 21:16 that evening).
     evidenceSource = 'mixed'
-    rawSessions = canonicalSessions
+    rawSessions = [
+      ...legacySessionsBeforeCanonicalEra(db, legacySessions),
+      ...canonicalSessions,
+    ]
   } else if (canonicalSessions.length > 0) {
     evidenceSource = 'canonical'
     rawSessions = canonicalSessions

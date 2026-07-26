@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import crypto from 'node:crypto'
 import {
   getActivityStateEventsForRange,
+  getLastActivityStateEventBefore,
   getBlockLabelOverride,
   getFocusSessionsForDateRange,
   getReconciledWebsiteVisitsForRange,
@@ -209,6 +210,19 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // (a video playing, a meeting on screen — idle_start heldForMediaPlayback)
 // is evidence of presence, NOT a gap, and counts as coverage.
 const TIMELINE_EVIDENCE_SEAM_MS = 30 * 60_000
+// The evidence mint floor (v13): a floor-sized candidate (span at or above the
+// 15-minute calendar floor) must hold at least this much observed session
+// evidence once the machine-state ledger's real absences (idle / locked /
+// asleep — never passive media presence) are subtracted, or it is not a block.
+// A single spurious activation event during a 00:34→02:59 idle dead zone used
+// to mint a 72-minute "Building the Daylens app" block over ~1 minute of real
+// evidence. Sub-floor candidates are the 15-minute floor's job, not this one's.
+const TIMELINE_MIN_MINT_EVIDENCE_MS = 5 * 60_000
+// How far back the mint floor looks for the machine-state event in force when
+// its scan window opens (a still-open idle/lock/sleep cause from before the
+// first session). Bounded for cost; a cause older than this that never closed
+// would have been closed by any wake/unlock/idle_end the boot produced.
+const ABSENCE_SEED_LOOKBACK_MS = 24 * 60 * 60_000
 // v12: the hard evidence seam — no block may span a 30-minute unobserved hole
 // (TIMELINE_EVIDENCE_SEAM_MS above: measured against captured evidence, the
 // block floor re-applied after the split, meeting formations exempt). Days
@@ -277,7 +291,17 @@ const TIMELINE_EVIDENCE_SEAM_MS = 30 * 60_000
 // browsing) — the bump makes refreshStaleBlockCategoryFacts recompute the
 // persisted category facts of every already-processed day in place, so old
 // blocks pick up their real colors immediately (labels/boundaries untouched).
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v12'
+// v13: the evidence mint floor — no non-meeting block is minted whose span
+// holds under TIMELINE_MIN_MINT_EVIDENCE_MS (5 min) of observed session
+// evidence once stretches the machine-state ledger marks as a real absence
+// (idle / locked / asleep — never passive media presence) are subtracted. A
+// single spurious activation event during an idle dead zone used to mint a
+// 72-minute "work" block out of one minute of real evidence. Also: mixed-era
+// evidence reads keep pre-cutover legacy sessions (a whole working day used
+// to vanish on the canonical-capture cutover day), and the canonical session
+// fold no longer lets the previous app's trailing deactivation kill the newly
+// activated session (titleless native apps lost nearly all their time).
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v13'
 
 // A block spanning this many hours is only worth a second look when most of the
 // span is untracked time (see flagSuspiciousUnbrokenBlocks) — the signature of
@@ -4325,6 +4349,93 @@ export function splitCandidatesAtEvidenceSeams(
   })
 }
 
+/** Hard machine-state absence intervals (idle / locked / asleep) across the
+ *  sessions' span — the stretches the activity ledger says nobody was there.
+ *  Passive media presence is deliberately NOT an absence (a playing video is
+ *  presence evidence), and neither is a tracking pause (nothing is known). */
+function hardAbsenceIntervals(db: Database.Database, sessions: AppSession[]): EvidenceInterval[] {
+  if (sessions.length === 0) return []
+  const fromMs = sessions[0].startTime
+  const toMs = sessions.reduce((max, session) => Math.max(max, sessionEndMs(session)), fromMs)
+  const events = getActivityStateEventsForRange(db, fromMs, toMs)
+  // Seed the cause automaton with the machine state already in force when the
+  // window opens: an idle_start from before the first session (00:34, sessions
+  // begin 01:01) never re-fires inside the window, yet its absence covers it
+  // when no end event ever arrived.
+  const seed = getLastActivityStateEventBefore(db, fromMs, ABSENCE_SEED_LOOKBACK_MS)
+  return gapCauseIntervals(seed ? [seed, ...events] : events, toMs)
+    .filter((cause) => cause.kind === 'idle' || cause.kind === 'locked' || cause.kind === 'asleep')
+    .map((cause) => ({ startMs: cause.startTime, endMs: cause.endTime }))
+    .sort((left, right) => left.startMs - right.startMs)
+}
+
+/** Union of the candidate's captured-evidence intervals, merged so overlapping
+ *  session rows (browser + focus evidence) never double-count. */
+function mergedEvidenceIntervals(sessions: readonly AppSession[]): EvidenceInterval[] {
+  const intervals = sessions
+    .map((session) => ({
+      startMs: session.startTime,
+      endMs: Math.max(session.startTime, evidenceSessionEndMs(session)),
+    }))
+    .filter((interval) => interval.endMs > interval.startMs)
+    .sort((left, right) => left.startMs - right.startMs)
+  const merged: EvidenceInterval[] = []
+  for (const interval of intervals) {
+    const last = merged[merged.length - 1]
+    if (last && interval.startMs <= last.endMs) last.endMs = Math.max(last.endMs, interval.endMs)
+    else merged.push({ ...interval })
+  }
+  return merged
+}
+
+/** Captured session evidence in ms with real-absence stretches subtracted.
+ *  gapCauseIntervals yields sequential non-overlapping causes, so each absence
+ *  subtracts at most once. */
+function observedEvidenceMs(candidate: CandidateBlock, absences: readonly EvidenceInterval[]): number {
+  let total = 0
+  for (const interval of mergedEvidenceIntervals(candidate.sessions)) {
+    total += interval.endMs - interval.startMs
+    for (const absence of absences) {
+      const overlap = Math.min(absence.endMs, interval.endMs) - Math.max(absence.startMs, interval.startMs)
+      if (overlap > 0) total -= overlap
+    }
+  }
+  return Math.max(0, total)
+}
+
+/** The evidence mint floor: no floor-sized non-meeting candidate is minted
+ *  whose span holds under TIMELINE_MIN_MINT_EVIDENCE_MS of observed session
+ *  evidence once real absences are subtracted (a projected session opened by
+ *  one spurious activation event inside an idle dead zone claims its whole
+ *  span as "activity"). Sub-floor candidates stay: the 15-minute floor already
+ *  folds or drops them. Meetings and spans the person explicitly fused are
+ *  exempt, like every other destructive pass (invariant 8). Exported for tests. */
+export function enforceEvidenceMintFloor(
+  candidates: CandidateBlock[],
+  db: Database.Database,
+  userMergedSpans: readonly MergedSpan[] = [],
+): CandidateBlock[] {
+  if (candidates.length === 0) return candidates
+  const absences = hardAbsenceIntervals(db, candidates.flatMap((candidate) => candidate.sessions))
+  if (absences.length === 0) return candidates
+  return candidates.filter((candidate) => {
+    if (candidate.formation === 'meeting') return true
+    if (candidate.sessions.length === 0) return true
+    if (candidateSpanMs(candidate) < TIMELINE_MIN_BLOCK_FLOOR_MS) return true
+    const startMs = candidate.sessions[0].startTime
+    const endMs = sessionEndMs(candidate.sessions[candidate.sessions.length - 1])
+    if (userMergedSpans.some((span) => span.startMs < endMs && span.endMs > startMs)) return true
+    const evidenceMs = observedEvidenceMs(candidate, absences)
+    if (evidenceMs >= TIMELINE_MIN_MINT_EVIDENCE_MS) return true
+    console.warn(
+      `[timeline] evidence mint floor: dropping a candidate spanning `
+      + `${formatAbsenceRange({ startMs, endMs })} that holds only `
+      + `${Math.round(evidenceMs / 1000)}s of observed evidence inside a real absence`,
+    )
+    return false
+  })
+}
+
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
   const context = buildTimelineContext(db, sessions)
   const corrections = loadBoundaryCorrections(db, dateStr)
@@ -4351,6 +4462,10 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
   // is a span the person explicitly fused (DEV-233): their merge outranks the
   // seam.
   const seamed = splitCandidatesAtEvidenceSeams(floored, db, corrections.mergedSpans)
+  // The mint floor runs on the seam-split result: a phantom candidate whose
+  // span the machine-state ledger marks as a real absence is dropped before
+  // the re-floor, so nothing folds into it.
+  const minted = enforceEvidenceMintFloor(seamed, db, corrections.mergedSpans)
   // The seam split can strand a sub-floor sliver (an envelope-stretched
   // candidate cut back to a 3-minute sitting on the far side of the hole), so
   // the floor re-runs over the split result. It cannot re-join what the seam
@@ -4358,7 +4473,7 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
   // seam is ≥30m of unobserved time — a stranded sliver folds into a
   // neighbour within its own evidence region or, isolated, is dropped. User
   // cuts are re-enforced last so no fold erases one (invariant 8).
-  const refloored = enforceUserCuts(enforceMinimumBlockFloor(seamed, db, context), corrections.cuts)
+  const refloored = enforceUserCuts(enforceMinimumBlockFloor(minted, db, context), corrections.cuts)
   return refloored.map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 

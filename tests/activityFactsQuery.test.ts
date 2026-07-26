@@ -194,6 +194,81 @@ test('shared query falls back to legacy compatibility inputs when focus_events a
   assert.ok(facts.focusSeconds <= facts.totalSeconds)
 })
 
+// The canonical-capture cutover: legacy app_sessions are the only record of
+// the morning; focus_events begin mid-afternoon and dual-write duplicates
+// exist from then on. The mixed read must keep the pre-cutover legacy
+// evidence (a whole 08:42–21:16 working day used to vanish) without double
+// counting the dual-write region.
+test('mixed-era window keeps pre-cutover legacy sessions and never double-counts dual-write rows', () => {
+  const db = createProductionTestDatabase()
+  const insertLegacy = (startMs: number, durationSec: number, app = 'Ghostty', bundle = 'com.mitchellh.ghostty') => {
+    db.prepare(`
+      INSERT INTO app_sessions (
+        bundle_id, app_name, start_time, end_time, duration_sec,
+        category, is_focused, window_title, raw_app_name, canonical_app_id, capture_source, capture_version
+      ) VALUES (?, ?, ?, ?, ?, 'development', 1, 'Editor', ?, 'ghostty', 'test', 1)
+    `).run(bundle, app, startMs, startMs + durationSec * 1000, durationSec, app)
+  }
+  // Legacy-only morning: two sessions separated by a real gap.
+  insertLegacy(ms(9, 0), 3600)
+  insertLegacy(ms(10, 30), 3600)
+  // A legacy session straddling the cutover at 15:00: 14:50–15:10.
+  insertLegacy(ms(14, 50), 1200)
+  // Canonical era from 15:00: one 15:00–15:30 Ghostty session.
+  insertFocusEvents(db, [
+    focusEvent(ms(15, 0), 'app_activated'),
+    focusEvent(ms(15, 30), 'app_deactivated'),
+  ])
+  // A dual-write legacy duplicate of the canonical 15:00 session.
+  insertLegacy(ms(15, 0), 1800)
+
+  const facts = queryCorrectedActivityFactsForDay(db, DATE, { asOfMs: DAY_END, nowMs: DAY_END })
+  assert.equal(facts.evidenceSource, 'mixed')
+  // Morning legacy evidence survives.
+  const morning = facts.sessions.filter((s) => s.startTime < ms(12, 0))
+  assert.equal(morning.length, 2, 'pre-cutover legacy sessions must be kept')
+  // The straddler is clipped at the cutover, never double-counted.
+  const straddler = facts.sessions.find((s) => s.startTime === ms(14, 50))
+  assert.ok(straddler, 'a legacy session straddling the cutover keeps its pre-cutover part')
+  assert.equal(straddler!.endTime, ms(15, 0))
+  assert.equal(straddler!.durationSeconds, 600)
+  // The dual-write duplicate is dropped: exactly one session covers 15:00–15:30.
+  const canonical = facts.sessions.filter((s) => s.startTime >= ms(15, 0))
+  assert.equal(canonical.length, 1, 'the canonical era holds only canonical sessions')
+  assert.equal(canonical[0].captureSource, 'focus_events')
+  // Totals: 60 + 60 + 10 + 30 minutes.
+  assert.equal(facts.totalSeconds, (60 + 60 + 10 + 30) * 60)
+})
+
+// Capture emits the new app's activation before the old app's deactivation at
+// the same timestamp. The stale trailing deactivation must not kill the
+// session that just opened — titleless native apps (no tab events to
+// resurrect them) used to lose nearly all their time to this.
+test('a stale deactivation of the previous app does not close the newly activated session', () => {
+  const db = createProductionTestDatabase()
+  insertFocusEvents(db, [
+    focusEvent(ms(9, 0), 'app_activated', {
+      app_bundle_id: 'com.apple.Safari',
+      app_name: 'Safari',
+      window_title: 'Docs',
+    }),
+    // Activation of titleless Ghostty, THEN Safari's trailing deactivation.
+    focusEvent(ms(9, 10), 'app_activated', { window_title: null }),
+    focusEvent(ms(9, 10), 'app_deactivated', {
+      app_bundle_id: 'com.apple.Safari',
+      app_name: 'Safari',
+    }),
+    // Ghostty's own deactivation ends its session for real.
+    focusEvent(ms(9, 40), 'app_deactivated', { window_title: null }),
+  ])
+  const facts = queryCorrectedActivityFactsForDay(db, DATE, { asOfMs: DAY_END, nowMs: DAY_END })
+  const ghostty = facts.sessions.filter((s) => s.bundleId === 'com.mitchellh.ghostty')
+  assert.equal(ghostty.length, 1)
+  assert.equal(ghostty[0].startTime, ms(9, 10))
+  assert.equal(ghostty[0].endTime, ms(9, 40))
+  assert.equal(ghostty[0].durationSeconds, 30 * 60, 'the titleless session keeps its real duration')
+})
+
 test('same evidence + corrections + projection version is byte-stable across repeated queries', () => {
   const db = createProductionTestDatabase()
   seedCanonicalMorning(db)

@@ -18,7 +18,9 @@ import {
 
 // Bump when segmentation or labeling logic changes. Reprojection rewrites
 // any rows whose stored version is older. Idempotent.
-export const PROJECTION_VERSION = 1
+// v2: app_deactivated only closes the session it belongs to — a stale
+// deactivation of the PREVIOUS app no longer kills the newly activated one.
+export const PROJECTION_VERSION = 2
 
 const IDLE_GAP_MS = 15 * 60 * 1000   // 15 min boundary between blocks
 const MIN_SESSION_MS = 1000          // drop sub-second flicker
@@ -181,7 +183,18 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
         }
         break
       }
-      case 'app_deactivated':
+      case 'app_deactivated': {
+        // Capture emits the new app's activation BEFORE the old app's
+        // deactivation (same timestamp, ordered by id). Closing whatever is
+        // open on any deactivation let the old app's trailing event kill the
+        // session that had just opened — apps that emit no tab events to
+        // resurrect them (terminals, agent runners) lost nearly all their
+        // time (a 212-minute Ghostty day projected as 12 minutes). Only the
+        // deactivated app's own session closes; an event that carries no app
+        // identity keeps the old unconditional close.
+        if (deactivationClosesOpenSession(open, ev)) close(ev.ts_ms)
+        break
+      }
       case 'sleep':
       case 'lock': {
         close(ev.ts_ms)
@@ -203,6 +216,26 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
   close(dayEnd)
 
   return out
+}
+
+/** Whether an app_deactivated event closes the currently open session: yes
+ *  when ANY comparable identity axis (bundle id or app name) matches the open
+ *  session — different capture sources can stamp different bundle ids for the
+ *  same app — or when no axis is comparable at all (conservative unconditional
+ *  close). Only a deactivation whose identity is known and disagrees on every
+ *  comparable axis is skipped: that is the previous app's stale trailing
+ *  event, not the open session's end. */
+function deactivationClosesOpenSession(
+  open: OpenSession | null,
+  ev: Pick<StoredFocusEvent, 'app_bundle_id' | 'app_name'>,
+): boolean {
+  if (!open) return false
+  const bundleComparable = Boolean(ev.app_bundle_id && open.app_bundle_id)
+  const nameComparable = Boolean(ev.app_name && open.app_name)
+  if (!bundleComparable && !nameComparable) return true
+  if (bundleComparable && ev.app_bundle_id === open.app_bundle_id) return true
+  if (nameComparable && ev.app_name === open.app_name) return true
+  return false
 }
 
 function buildSessionRow(open: OpenSession, endMs: number): DerivedSessionRow {
