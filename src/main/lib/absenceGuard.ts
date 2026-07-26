@@ -38,7 +38,10 @@ export interface AbsenceGap {
   endMs: number
 }
 
-function guardSessionEndMs(session: GuardSession): number {
+/** The end of a session's CAPTURED EVIDENCE, as opposed to its wall-clock
+ *  envelope. Exported for the segmentation seam (workBlocks.ts), which must
+ *  never let an envelope-stretched row vouch for time nothing captured. */
+export function evidenceSessionEndMs(session: GuardSession): number {
   const derived = session.startTime + Math.max(0, session.durationSeconds) * 1000
   if (typeof session.endTime !== 'number' || session.endTime <= session.startTime) return derived
 
@@ -67,13 +70,13 @@ export function findRealAbsences(
   if (sessions.length < 2) return []
   const ordered = [...sessions].sort((a, b) => a.startTime - b.startTime)
   const gaps: AbsenceGap[] = []
-  let coveredUntil = guardSessionEndMs(ordered[0])
+  let coveredUntil = evidenceSessionEndMs(ordered[0])
   for (let index = 1; index < ordered.length; index++) {
     const session = ordered[index]
     if (isRealAbsenceGap(session.startTime - coveredUntil, thresholdMs)) {
       gaps.push({ startMs: coveredUntil, endMs: session.startTime })
     }
-    coveredUntil = Math.max(coveredUntil, guardSessionEndMs(session))
+    coveredUntil = Math.max(coveredUntil, evidenceSessionEndMs(session))
   }
   return gaps
 }
