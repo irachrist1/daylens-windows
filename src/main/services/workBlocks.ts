@@ -51,7 +51,7 @@ import type {
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES, isAppCategory } from '@shared/types'
 import { isAppFocused } from '../lib/focusScore'
 import { getSettings } from './settings'
-import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
+import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost, policyBlockedHosts } from '@shared/domainPolicy'
 import { categoryForDomain } from '@shared/domainCategories'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
@@ -5294,6 +5294,117 @@ function loadPersistedTimelineBlocksForDay(
   // overrides and AI suggestions are read back inside the finalizer, so curated
   // labels still win.
   return blocks.map((block) => finalizedLabelForBlock(db, block, dateStr))
+}
+
+// ── Stored-label guard checks (labelGuardRepair.ts) ─────────────────────────
+// Labels persisted before today's work-name guards existed can carry exactly
+// the strings the guards now reject — "Working on Cursor Agents" (a tool's own
+// UI surface dressed as work), "Watching Netflix & YouTube" as the headline of
+// a work block. The finalize ladder never *produces* them anymore, but the
+// stored label_current / timeline_block_labels rows keep serving them to every
+// SQL-direct consumer (facts, snapshots, search). These helpers give the
+// startup repair pass one predicate for "would today's rules still say this?"
+// and one re-derivation path that IS the real finalize ladder.
+
+// A leisure-shaped headline ("Watching …", "On …") — the shape the
+// deterministic leisure floor and the old AI labeler both produced.
+const LEISURE_SHAPED_LABEL_RE = /^(?:watching|streaming|listening|browsing|scrolling)\b|^on\s/i
+
+// True when the label names a brand from the domain display policy's blocked
+// list (Netflix, YouTube, Twitch, …) as a standalone word.
+function labelNamesBlockedLeisureBrand(label: string): boolean {
+  const normLabel = normalizeForLeakCheck(label)
+  if (!normLabel) return false
+  for (const host of policyBlockedHosts()) {
+    const brand = brandTokenForHost(host)
+    if (brand && new RegExp(`(^| )${brand}( |$)`).test(normLabel)) return true
+  }
+  return false
+}
+
+/** The stored-row context a guard check needs; all of it comes straight off a
+ *  persisted timeline_blocks row (evidence_summary_json + dominant_category). */
+export interface StoredBlockLabelContext {
+  dominantCategory: AppCategory
+  pageRefs?: PageRef[]
+  topApps?: WorkContextAppSummary[]
+}
+
+/**
+ * True when a STORED block label would be rejected by today's work-name
+ * guards. Covers the shapes the guards reject at build time:
+ *  - the label itself is a disqualified work subject (a tool brand, a tool's
+ *    own UI surface like "Cursor Agents", a command line, a joined tab title);
+ *  - a "Working on <subject>[ in <project>]" wrapper whose subject is
+ *    disqualified — the ladder builds these and now guards the subject
+ *    (isDisqualifiedWorkSubject) before wrapping it;
+ *  - an entertainment/social headline on a block whose evidence says the time
+ *    was focused work (labelIsBrowserContentLeak, plus the pageRef-free brand
+ *    check for old rows whose evidence no longer carries the leisure page).
+ */
+export function storedLabelViolatesWorkNameGuards(
+  label: string | null | undefined,
+  context: StoredBlockLabelContext,
+): boolean {
+  const trimmed = label?.trim()
+  if (!trimmed) return false
+  if (isDisqualifiedWorkSubject(trimmed)) return true
+  const wrapped = /^working on (.+)$/i.exec(trimmed)
+  if (wrapped) {
+    const subject = wrapped[1]
+    const lastIn = subject.toLowerCase().lastIndexOf(' in ')
+    const candidates = lastIn > 0 ? [subject, subject.slice(0, lastIn)] : [subject]
+    if (candidates.some((candidate) => isDisqualifiedWorkSubject(candidate.trim()))) return true
+  }
+  const pseudoBlock = {
+    pageRefs: context.pageRefs ?? [],
+    topApps: context.topApps ?? [],
+    dominantCategory: context.dominantCategory,
+  } as WorkContextBlock
+  if (labelIsBrowserContentLeak(trimmed, pseudoBlock)) return true
+  // Same work-block gate as labelIsBrowserContentLeak, without requiring the
+  // leisure page to still be in the stored evidence: a work block never
+  // headlines as "Watching Netflix & YouTube" no matter where the string came
+  // from. The leisure-shape requirement keeps genuine work about these
+  // services ("Building the YouTube downloader") safe.
+  const workShaped = blockHasWorkAppDominance(pseudoBlock)
+    || FOCUSED_CATEGORIES.includes(context.dominantCategory)
+  return workShaped && LEISURE_SHAPED_LABEL_RE.test(trimmed) && labelNamesBlockedLeisureBrand(trimmed)
+}
+
+export interface RederivedBlockLabel {
+  label: string
+  source: LabelSource
+  confidence: number
+}
+
+/**
+ * Re-run the real finalize ladder over a date's persisted blocks and return
+ * each block's freshly derived label. Used by the label-guard repair AFTER it
+ * deletes disqualified ai/rule label rows, so the ladder re-chooses from what
+ * legitimately remains (surviving labels, artifacts, editor projects, floors)
+ * exactly as the renderer read would. Sessions are intentionally empty: a
+ * label derivation needs the stored evidence, not the session objects.
+ */
+export function rederivePersistedDayLabels(
+  db: Database.Database,
+  dateStr: string,
+): Map<string, RederivedBlockLabel> {
+  const blocks = loadPersistedTimelineBlocksForDay(db, dateStr, []) ?? []
+  return new Map(blocks.map((block) => [block.id, {
+    label: block.label.current,
+    source: block.label.source,
+    confidence: block.label.confidence,
+  }]))
+}
+
+/** The repair's projection invalidation: the date's labels changed, so its
+ *  frozen snapshot and any wrap narrative written over the old labels are
+ *  stale — WITHOUT invalidating the blocks themselves (the heal is in place;
+ *  the day's segmentation and surviving analysis are kept). */
+export function invalidateDayProjectionsForLabelChange(db: Database.Database, dateStr: string): void {
+  deleteDaySnapshotRow(db, dateStr)
+  deleteWrappedNarrativesForDate(db, dateStr, 'correction')
 }
 
 // A day is "processed" once any of its persisted blocks carries an AI,

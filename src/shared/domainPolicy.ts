@@ -56,6 +56,12 @@ export function policyForHost(host: string | null | undefined): DomainPolicyCate
   return null
 }
 
+/** Every host the rail/label policy knows, for guard checks that need the
+ *  brand list itself (e.g. "does this stored label name a leisure service?"). */
+export function policyBlockedHosts(): string[] {
+  return [...HOST_RULES.keys()]
+}
+
 // Kept as named policy points so call sites stay stable if categories evolve.
 export function isHostBlockedForLabel(_host: string | null | undefined): boolean {
   return false

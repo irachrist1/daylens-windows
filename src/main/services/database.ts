@@ -118,6 +118,26 @@ export function initDb(): void {
       } catch (err) {
         console.warn('[db] deferred repairs failed:', err)
       }
+      // Heal stored block labels that today's work-name guards disqualify
+      // ("Working on Cursor Agents", leisure headlines on work blocks). Runs
+      // once per guard version (WORK_NAME_GUARD_VERSION stamp), in bounded
+      // batches, and is safe to interrupt. Dynamic import: labelGuardRepair
+      // pulls in the whole workBlocks module, which must not join the cold
+      // launch path.
+      if (_db) {
+        const db = _db
+        import('./labelGuardRepair')
+          .then(({ runLabelGuardRepairIfNeeded }) => runLabelGuardRepairIfNeeded(db))
+          .then((result) => {
+            if (result.status === 'ran' && result.healedBlocks > 0) {
+              console.log(
+                `[db] label guard repair healed ${result.healedBlocks} block(s) `
+                + `across ${result.affectedDates.length} day(s)`,
+              )
+            }
+          })
+          .catch((err) => console.warn('[db] label guard repair failed:', err))
+      }
     })
 
     // Snapshot the table set after all schema/migration work so hot-path
