@@ -3565,6 +3565,19 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           description="Control which files the AI may read. Observed activity is always on; contents need an explicit grant."
           maxWidth={760}
         >
+          <div style={{ display: 'grid', gap: 0, marginBottom: 22 }}>
+            <SettingsRow
+              first
+              title="Granola meeting notes"
+              description="Let the AI read your local Granola meeting notes when a question needs them."
+              control={<Toggle checked={settings.granolaAccessEnabled !== false} onChange={(value) => void persist({ granolaAccessEnabled: value })} />}
+            />
+            <SettingsRow
+              title="Terminal access"
+              description="Let the AI run read-only allowlisted commands. Off by default; the first use each session still asks you."
+              control={<Toggle checked={settings.terminalAccessEnabled ?? false} onChange={(value) => void persist({ terminalAccessEnabled: value })} />}
+            />
+          </div>
           <FileAccessSection />
         </SectionPage>
       )
