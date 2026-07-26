@@ -81,6 +81,43 @@ export function getExternalSignal<T>(
   }
 }
 
+// ─── Scan ledger ──────────────────────────────────────────────────────────────
+// external_signals only ever stores NON-EMPTY connector results, so on its own
+// it cannot distinguish "collected, nothing found" from "never collected". The
+// scan ledger records that a connector RAN TO COMPLETION for a finished (past)
+// day, even when it found nothing — without it, on-demand backfill would re-run
+// git/icalBuddy on every wrap regeneration of a commit-less historical day.
+// Live days are never marked: an empty morning says nothing about the finished
+// day, and the today/yesterday refresh cadence already covers them.
+
+export function recordExternalSignalScan(
+  db: Database.Database,
+  date: string,
+  source: ExternalSignalSource,
+): void {
+  try {
+    db.prepare(`
+      INSERT INTO external_signal_scans (date, source, scanned_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(date, source) DO UPDATE SET scanned_at = excluded.scanned_at
+    `).run(date, source, Date.now())
+  } catch { /* pre-v67 DB: no ledger — collection stays re-runnable, never an error */ }
+}
+
+export function hasExternalSignalScan(
+  db: Database.Database,
+  date: string,
+  source: ExternalSignalSource,
+): boolean {
+  try {
+    return db.prepare(
+      'SELECT 1 FROM external_signal_scans WHERE date = ? AND source = ?',
+    ).get(date, source) !== undefined
+  } catch {
+    return false
+  }
+}
+
 // ─── Collection ───────────────────────────────────────────────────────────────
 
 /** How stale a stored signal may be before a refresh re-runs its connector.
@@ -89,9 +126,14 @@ const LIVE_DAY_STALE_MS = 30 * 60 * 1000
 
 function isFresh(db: Database.Database, date: string, source: ExternalSignalSource): boolean {
   const stored = getExternalSignal(db, date, source)
-  if (!stored) return false
-  if (date < localDateString()) return true
-  return Date.now() - stored.capturedAt < LIVE_DAY_STALE_MS
+  if (stored) {
+    if (date < localDateString()) return true
+    return Date.now() - stored.capturedAt < LIVE_DAY_STALE_MS
+  }
+  // No stored row: a finished day the connectors already scanned came back
+  // empty ("collected, nothing found") and cannot change — don't re-run its
+  // connectors on every wrap. A never-scanned date still collects.
+  return date < localDateString() && hasExternalSignalScan(db, date, source)
 }
 
 let collecting = false
@@ -157,6 +199,14 @@ export async function collectExternalSignals(
       if (options.force) deleteExternalSignal(db, date, source)
     }
 
+    // A connector that ran to completion for a FINISHED day is remembered in
+    // the scan ledger even when empty, so on-demand backfill never re-runs it.
+    // A connector that THREW is not marked — a transient failure stays
+    // retryable on the next wrap or refresh.
+    const markScanned = (source: ExternalSignalSource) => {
+      if (date < localDateString()) recordExternalSignalScan(db, date, source)
+    }
+
     if (options.force || !isFresh(db, date, 'git')) {
       if (!isConsentCurrent()) return fired
       try {
@@ -168,6 +218,7 @@ export async function collectExternalSignals(
         } else {
           tombstoneIfForced('git')
         }
+        markScanned('git')
       } catch { /* optional source — connector threw; leave any prior row intact */ }
     }
 
@@ -182,6 +233,7 @@ export async function collectExternalSignals(
         } else {
           tombstoneIfForced('calendar')
         }
+        markScanned('calendar')
       } catch { /* optional source — connector threw; leave any prior row intact */ }
     }
 
@@ -199,6 +251,7 @@ export async function collectExternalSignals(
         } else {
           tombstoneIfForced('focus_app')
         }
+        markScanned('focus_app')
       } catch { /* optional source — connector threw; leave any prior row intact */ }
     }
 
@@ -214,6 +267,64 @@ export async function collectExternalSignals(
     collecting = false
   }
   return fired
+}
+
+// ─── On-demand backfill ───────────────────────────────────────────────────────
+// The background cadence below only walks today and yesterday, so a day from
+// months ago has no external_signals rows and no way to ever get them — a wrap
+// of a 73-commit release day couldn't mention a single commit. Backfill runs
+// the SAME production collection path for one date when a wrap or Analyze
+// touches it: git log --since/--until works arbitrarily far back, and the
+// calendar readers (icalBuddy / Outlook COM) accept any date the local store
+// still has synced. Idempotent via the stored rows + scan ledger; bounded so a
+// slow repo scan can't hold the wrap hostage (a timed-out collection finishes
+// in the background and its rows are there for the next open).
+
+/** The sources collectExternalSignals owns; 'notes' has its own pipeline. */
+const BACKFILLED_SOURCES: ExternalSignalSource[] = ['git', 'calendar', 'focus_app']
+
+const BACKFILL_TIMEOUT_MS = 15_000
+
+export async function ensureExternalSignalsForDate(
+  db: Database.Database,
+  date: string,
+  options: { timeoutMs?: number; deps?: CollectExternalSignalsDeps } = {},
+): Promise<void> {
+  try {
+    // Fast path — three sync reads: every source already has a stored row, a
+    // completed scan, or (live day) a fresh-enough row. Nothing to do.
+    if (BACKFILLED_SOURCES.every((source) => isFresh(db, date, source))) return
+    const collection = collectExternalSignals(date, { deps: options.deps })
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const expired = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, options.timeoutMs ?? BACKFILL_TIMEOUT_MS)
+    })
+    try {
+      await Promise.race([collection, expired])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  } catch { /* backfill is best-effort: no enrichment, never a blocked wrap */ }
+}
+
+// Production wiring (index.ts) registers the real backfill; the wrap and
+// Analyze pipelines call runExternalSignalBackfill without importing the live
+// connectors into their call graph. Nothing registers in the hermetic test
+// suite, so it is a no-op there — a unit test of getWrappedNarrative must
+// never shell out to git or scan the developer's real repos.
+let backfillRunner: ((date: string) => Promise<void>) | null = null
+
+export function registerExternalSignalBackfill(runner: (date: string) => Promise<void>): void {
+  backfillRunner = runner
+}
+
+/** Run the registered backfill for a date. Never throws, no-op when nothing
+ *  is registered — a collection failure degrades to "no enrichment". */
+export async function runExternalSignalBackfill(date: string): Promise<void> {
+  if (!backfillRunner) return
+  try {
+    await backfillRunner(date)
+  } catch { /* degrade to no enrichment; the wrap proceeds on stored data */ }
 }
 
 let scheduled: ReturnType<typeof setInterval> | null = null
