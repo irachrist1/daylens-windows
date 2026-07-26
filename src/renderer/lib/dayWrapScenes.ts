@@ -8,10 +8,10 @@
 //
 // Pure (no React) so it can be unit-tested without the carousel.
 
-import type { AppCategory, DayTimelinePayload, DayWrapEntity, WorkContextBlock } from '@shared/types'
+import type { AppCategory, DayTimelinePayload, DayWrapEntity, TimelineGapSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
-import { inferWorkIntent } from '@shared/workIntent'
+import { inferWorkIntent, workSubjectCandidates } from '@shared/workIntent'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { friendlyDomain, humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { categoryForDomain } from '@shared/domainCategories'
@@ -107,6 +107,51 @@ export type DayStory = DayStorySegment[]
 
 export type WrapQuality = 'empty' | 'tooEarly' | 'partial' | 'full'
 
+// ─── Gaps are facts (day-recap-and-analysis.md) ──────────────────────────────
+// Untracked time of 45 minutes or more inside the day's span is an explicit
+// fact with clock bounds, cross-referenced against the calendar when the
+// payload carries the day's scheduled events. The narrative layer already has
+// honesty directives about untracked time; giving it the gap as a FACT lets it
+// say something true ("5:14pm to 9:24pm away from the computer") instead of
+// avoiding the topic — or worse, implying a continuous grind.
+
+export type DayWrapGapKind = 'asleep' | 'locked' | 'idle' | 'passive' | 'paused' | 'untracked' | 'away'
+
+export interface DayWrapGap {
+  fromMs: number
+  toMs: number
+  fromClock: string
+  toClock: string
+  minutes: number
+  /** The strongest recorded cause (from the timeline's own gap segments):
+   *  asleep / locked / idle / passive / paused / untracked / away. */
+  kind: DayWrapGapKind
+  /** The scheduled calendar event this gap lines up with, when there is one
+   *  ("Run" for a 6pm–8pm event inside a 5:14pm–9:24pm hole). Title only. */
+  matchesEvent: string | null
+}
+
+// ─── Day threads (day-recap-and-analysis.md) ─────────────────────────────────
+// The same subject recurring in three or more blocks across three or more
+// hours is a DAY THREAD — a first-class fact ("Daylens ran through the whole
+// day"), so prose can tell the day's real shape instead of twelve fragments.
+
+export interface DayWrapThread {
+  /** The human work name, from the same naming ladder the blocks use. */
+  name: string
+  /** How many separate blocks the subject appeared in — as the block's own
+   *  name or as clean secondary evidence (a channel artifact, a workflow). */
+  blockCount: number
+  /** Active seconds ONLY across the blocks this subject headlined. A
+   *  secondary appearance proves recurrence, never claims the block's time. */
+  seconds: number
+  firstMs: number
+  lastMs: number
+  fromClock: string
+  toClock: string
+  category: AppCategory
+}
+
 export interface DayWrapFacts {
   date: string
   weekday: string      // "TUESDAY"
@@ -154,6 +199,16 @@ export interface DayWrapFacts {
    *  "what the day was about" scene. Empty or absent when the ledger has
    *  nothing to say — the scene simply doesn't exist then. */
   entities?: DayWrapEntity[]
+  /** Untracked stretches of 45+ minutes inside the day's span, with clock
+   *  bounds and (when known) the calendar event they line up with. Gaps are
+   *  facts: the deck and the model say them plainly instead of going silent.
+   *  Optional like `entities`: absent only on facts frozen before the field
+   *  existed; the builder always sets it. */
+  gaps?: DayWrapGap[]
+  /** Subjects that recurred across 3+ blocks spanning 3+ hours, biggest
+   *  first — the day's real through-lines ("Daylens ran through the whole
+   *  day"), so interleaving can be told honestly. Optional like `entities`. */
+  threads?: DayWrapThread[]
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -309,6 +364,138 @@ export function workActionPhrase(name: string, category: AppCategory): string {
   return `${categoryAction(category)} ${trimmed}`
 }
 
+// ─── Gap facts ────────────────────────────────────────────────────────────────
+
+const GAP_FACT_MIN_MS = 45 * 60_000
+// A calendar event explains a gap only when the gap really held it: at least
+// half an hour of overlap, covering most of the event's scheduled length.
+const GAP_EVENT_MIN_OVERLAP_MS = 30 * 60_000
+const GAP_EVENT_MIN_COVERAGE = 0.6
+
+function gapKindFor(kind: TimelineGapSegment['kind']): DayWrapGapKind {
+  switch (kind) {
+    case 'asleep': return 'asleep'
+    case 'machine_off': return 'asleep'
+    case 'locked': return 'locked'
+    case 'idle': return 'idle'
+    case 'idle_gap': return 'idle'
+    case 'passive': return 'passive'
+    case 'paused': return 'paused'
+    case 'away': return 'away'
+    default: return 'untracked'
+  }
+}
+
+/** The plain-words read of a gap kind — what a person would say, never the
+ *  internal state name. Exported so the deck and the model-facing facts speak
+ *  the identical dialect. */
+export function gapKindPhrase(kind: DayWrapGapKind): string {
+  switch (kind) {
+    case 'passive': return 'screen on, hands off the keyboard'
+    case 'paused': return 'tracking was paused'
+    default: return 'away from the computer'
+  }
+}
+
+function buildGapFacts(payload: DayTimelinePayload): DayWrapGap[] {
+  const events = payload.scheduledMeetings ?? []
+  return (payload.segments ?? [])
+    .filter((segment): segment is TimelineGapSegment => segment.kind !== 'work_block')
+    .filter((segment) => segment.endTime - segment.startTime >= GAP_FACT_MIN_MS)
+    .sort((left, right) => left.startTime - right.startTime)
+    .map((segment) => {
+      let matchesEvent: string | null = null
+      let bestOverlap = 0
+      for (const event of events) {
+        const title = event.title?.trim()
+        if (!title) continue
+        const overlap = Math.min(segment.endTime, event.endMs) - Math.max(segment.startTime, event.startMs)
+        const eventLen = Math.max(1, event.endMs - event.startMs)
+        if (overlap >= GAP_EVENT_MIN_OVERLAP_MS && overlap >= eventLen * GAP_EVENT_MIN_COVERAGE && overlap > bestOverlap) {
+          bestOverlap = overlap
+          matchesEvent = title
+        }
+      }
+      return {
+        fromMs: segment.startTime,
+        toMs: segment.endTime,
+        fromClock: formatClock(segment.startTime),
+        toClock: formatClock(segment.endTime),
+        minutes: Math.round((segment.endTime - segment.startTime) / 60_000),
+        kind: gapKindFor(segment.kind),
+        matchesEvent,
+      }
+    })
+}
+
+// ─── Day threads ──────────────────────────────────────────────────────────────
+
+const THREAD_MIN_BLOCKS = 3
+const THREAD_MIN_SPAN_MS = 3 * 3_600_000
+const MAX_THREADS = 3
+
+function buildDayThreads(blocks: WorkContextBlock[]): DayWrapThread[] {
+  interface Accumulator { name: string; blockCount: number; seconds: number; firstMs: number; lastMs: number; category: AppCategory; headlined: boolean }
+  const byName = new Map<string, Accumulator>()
+  for (const block of blocks) {
+    if (effectiveBlockKind(block) !== 'work') continue
+    // The block's own name comes from the same ladder every surface uses:
+    // corrected subject → inferred intent subject → humanized label, through
+    // the shared sanitize-then-guard gate. Membership additionally counts the
+    // block's clean SECONDARY subjects (workSubjectCandidates: channel
+    // artifacts, workflows) — the daylens Slack channel inside an ML-study
+    // block proves daylens ran through the morning, without claiming its time.
+    const primary = workActivityName(block)
+    const names = new Map<string, string>()
+    if (primary) names.set(primary.toLowerCase(), primary)
+    for (const candidate of workSubjectCandidates(block)) {
+      const cleaned = cleanWorkSubject(candidate)
+      if (!cleaned || looksLikeRawArtifactLabel(cleaned)) continue
+      const display = cap(cleaned)
+      if (!names.has(display.toLowerCase())) names.set(display.toLowerCase(), display)
+    }
+    const seconds = blockActiveSeconds(block)
+    for (const [key, display] of names) {
+      const isPrimary = primary !== '' && key === primary.toLowerCase()
+      const existing = byName.get(key)
+      if (existing) {
+        existing.blockCount += 1
+        if (isPrimary) {
+          existing.seconds += seconds
+          existing.headlined = true
+          existing.category = block.dominantCategory
+        }
+        existing.firstMs = Math.min(existing.firstMs, block.startTime)
+        existing.lastMs = Math.max(existing.lastMs, block.endTime)
+      } else {
+        byName.set(key, {
+          name: display,
+          blockCount: 1,
+          seconds: isPrimary ? seconds : 0,
+          firstMs: block.startTime,
+          lastMs: block.endTime,
+          category: block.dominantCategory,
+          headlined: isPrimary,
+        })
+      }
+    }
+  }
+  return [...byName.values()]
+    .filter((acc) => acc.blockCount >= THREAD_MIN_BLOCKS && acc.lastMs - acc.firstMs >= THREAD_MIN_SPAN_MS)
+    .sort((left, right) => right.blockCount - left.blockCount || right.seconds - left.seconds)
+    .slice(0, MAX_THREADS)
+    .map((acc) => ({
+      name: acc.name,
+      blockCount: acc.blockCount,
+      seconds: acc.seconds,
+      firstMs: acc.firstMs,
+      lastMs: acc.lastMs,
+      fromClock: formatClock(acc.firstMs),
+      toClock: formatClock(acc.lastMs),
+      category: acc.category,
+    }))
+}
+
 // ─── Builder ──────────────────────────────────────────────────────────────────
 
 export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
@@ -418,6 +605,8 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     mainStartClock,
     titleContext,
     entities: payload.dayEntities ?? [],
+    gaps: buildGapFacts(payload),
+    threads: buildDayThreads(blocks),
   }
 }
 

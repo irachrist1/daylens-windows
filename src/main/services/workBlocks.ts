@@ -64,7 +64,7 @@ import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForCategory, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { daysFromTodayLocalDateString, localDayBounds, localDateString } from '../lib/localDate'
-import { REAL_ABSENCE_MIN_MS, absenceSpannedBy, formatAbsenceRange, isRealAbsenceGap } from '../lib/absenceGuard'
+import { REAL_ABSENCE_MIN_MS, absenceSpannedBy, evidenceSessionEndMs, formatAbsenceRange, isRealAbsenceGap } from '../lib/absenceGuard'
 import { ownedDayBounds } from '../lib/dayOwnership'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import { extractFilenames } from '../lib/windowTitleFilenames'
@@ -198,6 +198,17 @@ const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = Number.POSITIVE_INFINITY
 const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = Number.POSITIVE_INFINITY
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
+// timeline.md "Segmentation": an unobserved gap of 30 minutes or more ALWAYS
+// ends a block — no block may span an untracked gap, because bridging one (a
+// lunch break inside a single "block") propagates invented continuity into
+// every downstream account of the day. The inter-session coarse cut already
+// splits at 15 minutes, but it trusts each row's wall-clock envelope; this
+// seam is the hard invariant behind it, measured against CAPTURED EVIDENCE
+// (evidenceSessionEndMs) so an envelope-stretched row (236s of activity across
+// a 2,139s envelope) cannot vouch for time nothing observed. Passive presence
+// (a video playing, a meeting on screen — idle_start heldForMediaPlayback)
+// is evidence of presence, NOT a gap, and counts as coverage.
+const TIMELINE_EVIDENCE_SEAM_MS = 30 * 60_000
 // v11: the duration ceiling is gone (DEV-232). Blocks split only on a real
 // absence, sleep, idle, a meeting, or a kind change — never at 3/5/6 hours. The
 // bump reconstructs already-captured, un-processed days that were fragmented by
@@ -4116,6 +4127,134 @@ function enforceUserCuts(candidates: CandidateBlock[], cuts: number[]): Candidat
   return result
 }
 
+// ─── The evidence seam ────────────────────────────────────────────────────────
+// The last, unconditional segmentation pass: no candidate that leaves the
+// pipeline may span TIMELINE_EVIDENCE_SEAM_MS (30 min) of unobserved time.
+// Every earlier pass measures gaps with the wall-clock envelope (sessionEndMs),
+// so a row whose envelope stretches far past its captured activity can carry a
+// candidate across a real hole — and merge passes, stored corrections, and
+// sliver folds all inherit that invented continuity. This pass re-measures
+// coverage from captured evidence plus passive presence and cuts what remains.
+
+interface EvidenceInterval { startMs: number; endMs: number }
+
+/** Passive-presence intervals (media playing / a meeting held on screen while
+ *  input was idle) across the sessions' span. Presence without input is still
+ *  presence: these count as evidence coverage, never as a gap. */
+function passiveCoverageIntervals(db: Database.Database, sessions: AppSession[]): EvidenceInterval[] {
+  if (sessions.length === 0) return []
+  const fromMs = sessions[0].startTime
+  const toMs = sessions.reduce((max, session) => Math.max(max, sessionEndMs(session)), fromMs)
+  const events = getActivityStateEventsForRange(db, fromMs, toMs)
+  return gapCauseIntervals(events, toMs)
+    .filter((cause) => cause.kind === 'passive')
+    .map((cause) => ({ startMs: cause.startTime, endMs: cause.endTime }))
+    .sort((left, right) => left.startMs - right.startMs)
+}
+
+/** True when [fromMs, toMs) still contains a contiguous unobserved stretch of
+ *  at least the seam length after subtracting passive-presence coverage. */
+function hasUnobservedSeam(fromMs: number, toMs: number, passive: EvidenceInterval[]): boolean {
+  let cursor = fromMs
+  for (const interval of passive) {
+    if (interval.endMs <= cursor) continue
+    if (interval.startMs >= toMs) break
+    if (interval.startMs - cursor >= TIMELINE_EVIDENCE_SEAM_MS) return true
+    cursor = Math.max(cursor, interval.endMs)
+    if (cursor >= toMs) return false
+  }
+  return toMs - cursor >= TIMELINE_EVIDENCE_SEAM_MS
+}
+
+/** The index of the first session that resumes AFTER an unobserved seam inside
+ *  this run, or null when the run is continuous evidence. A hole whose
+ *  junction falls inside a span the PERSON explicitly fused is not cut: an
+ *  explicit user merge outranks the seam (DEV-233 — the person may join their
+ *  own time away; the automatic pipeline may not). */
+function firstEvidenceSeamIndex(
+  sessions: AppSession[],
+  passive: EvidenceInterval[],
+  userMergedSpans: readonly MergedSpan[] = [],
+): number | null {
+  if (sessions.length < 2) return null
+  let coveredUntil = evidenceSessionEndMs(sessions[0])
+  for (let index = 1; index < sessions.length; index++) {
+    const next = sessions[index].startTime
+    if (next - coveredUntil >= TIMELINE_EVIDENCE_SEAM_MS
+      && hasUnobservedSeam(coveredUntil, next, passive)) {
+      const junction = (coveredUntil + next) / 2
+      const userFused = userMergedSpans.some((span) => junction > span.startMs && junction < span.endMs)
+      if (!userFused) return index
+    }
+    coveredUntil = Math.max(coveredUntil, evidenceSessionEndMs(sessions[index]))
+  }
+  return null
+}
+
+/** Clamp the run's trailing wall-clock envelope to its captured evidence when
+ *  the split happened BECAUSE that envelope stretched across the seam —
+ *  otherwise the left block's rendered end would still cross the hole its own
+ *  sessions could not vouch for. */
+function clampTrailingEnvelope(sessions: AppSession[]): AppSession[] {
+  const last = sessions[sessions.length - 1]
+  const evidenceEnd = evidenceSessionEndMs(last)
+  if (sessionEndMs(last) <= evidenceEnd) return sessions
+  return [...sessions.slice(0, -1), { ...last, endTime: evidenceEnd }]
+}
+
+/** Split one ordered session run at every unobserved seam. Returns the runs in
+ *  time order; a run with no seam comes back as-is. */
+function splitSessionsAtEvidenceSeams(
+  sessions: AppSession[],
+  passive: EvidenceInterval[],
+  userMergedSpans: readonly MergedSpan[] = [],
+): AppSession[][] {
+  const runs: AppSession[][] = []
+  let rest = sessions
+  for (;;) {
+    const seamIndex = firstEvidenceSeamIndex(rest, passive, userMergedSpans)
+    if (seamIndex === null) {
+      runs.push(rest)
+      return runs
+    }
+    runs.push(clampTrailingEnvelope(rest.slice(0, seamIndex)))
+    rest = rest.slice(seamIndex)
+  }
+}
+
+/** The hard seam over finished candidates: any candidate spanning an
+ *  unobserved 30-minute hole is cut at the hole, whatever pass produced it —
+ *  a stored merge correction, a same-work bridge, or a sliver fold. */
+function splitCandidatesAtEvidenceSeams(
+  candidates: CandidateBlock[],
+  db: Database.Database,
+  userMergedSpans: readonly MergedSpan[] = [],
+): CandidateBlock[] {
+  const allSessions = candidates.flatMap((candidate) => candidate.sessions)
+  const passive = passiveCoverageIntervals(db, allSessions)
+  return candidates.flatMap((candidate) => {
+    const runs = splitSessionsAtEvidenceSeams(candidate.sessions, passive, userMergedSpans)
+    if (runs.length <= 1) return [candidate]
+    console.warn(
+      `[timeline] evidence seam: splitting a candidate that spanned `
+      + `${runs.length - 1} unobserved ${runs.length === 2 ? 'gap' : 'gaps'} of 30m+ `
+      + `(${formatAbsenceRange({ startMs: candidate.sessions[0].startTime, endMs: sessionEndMs(candidate.sessions[candidate.sessions.length - 1]) })})`,
+    )
+    return runs.map((run, index): CandidateBlock => ({
+      ...candidate,
+      sessions: run,
+      boundedBeforeGap: index === 0 ? candidate.boundedBeforeGap : true,
+      boundedAfterGap: index === runs.length - 1 ? candidate.boundedAfterGap : true,
+      startReasons: index === 0
+        ? candidate.startReasons
+        : [...new Set<BoundaryReason>([...(candidate.startReasons ?? []), 'idle-gap'])],
+      endReasons: index === runs.length - 1
+        ? candidate.endReasons
+        : [...new Set<BoundaryReason>([...(candidate.endReasons ?? []), 'idle-gap'])],
+    }))
+  })
+}
+
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
   const context = buildTimelineContext(db, sessions)
   const corrections = loadBoundaryCorrections(db, dateStr)
@@ -4135,7 +4274,12 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
     })
   const bridged = bridgeSameWorkCandidates(candidates, db, context)
   const reconciled = reconcileBoundaries(bridged, db, context, corrections)
-  return enforceUserCuts(enforceMinimumBlockFloor(reconciled, db, context), corrections.cuts)
+  const floored = enforceUserCuts(enforceMinimumBlockFloor(reconciled, db, context), corrections.cuts)
+  // The evidence seam runs LAST: whatever a merge pass, stored correction, or
+  // sliver fold produced, no block leaves here spanning a 30-minute unobserved
+  // hole (timeline.md "Segmentation"). The one exception is a span the person
+  // explicitly fused (DEV-233): their merge outranks the seam.
+  return splitCandidatesAtEvidenceSeams(floored, db, corrections.mergedSpans)
     .map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
@@ -5479,7 +5623,20 @@ function buildProvisionalBlocksForDay(
   // sittings still need to clear the block floor on span or active time: a
   // 24s 1:56am blip separated from the real day by an 8h sleep gap must not
   // become its own phantom block.
-  const segments = coarseSegmentsFromSessions(sessions).filter((seg) => seg.sessions.length > 0)
+  // The coarse cut trusts wall-clock envelopes; re-cut each sitting at the
+  // evidence seam so a provisional day never bridges an unobserved hole either.
+  const passive = passiveCoverageIntervals(db, sessions)
+  const segments = coarseSegmentsFromSessions(sessions)
+    .filter((seg) => seg.sessions.length > 0)
+    .flatMap((seg) => {
+      const runs = splitSessionsAtEvidenceSeams(seg.sessions, passive)
+      if (runs.length <= 1) return [seg]
+      return runs.map((run, index) => ({
+        sessions: run,
+        boundedBeforeGap: index === 0 ? seg.boundedBeforeGap : true,
+        boundedAfterGap: index === runs.length - 1 ? seg.boundedAfterGap : true,
+      }))
+    })
   const kept = segments.filter((seg, index) => {
     if (index === segments.length - 1) return true
     const span = sessionEndMs(seg.sessions[seg.sessions.length - 1]) - seg.sessions[0].startTime

@@ -577,3 +577,41 @@ test('repair: an unparseable repair response leaves the original result intact',
   assert.deepEqual(merged, raw)
   assert.equal(parseWrapResponse('not json at all'), null)
 })
+
+// ─── Gap + thread facts reach the model (day-recap-and-analysis.md) ──────────
+
+test('compactDayFacts carries gaps and day threads so the prose can tell the truth', () => {
+  const hour = 3_600_000
+  const blocks = [
+    makeBlock({ label: 'Daylens development', start: NINE_AM, durationSeconds: 50 * 60 }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 2 * hour, durationSeconds: 50 * 60 }),
+    makeBlock({ label: 'Daylens development', start: NINE_AM + 4 * hour, durationSeconds: 50 * 60 }),
+  ]
+  const gapStart = NINE_AM + 8 * hour  // 5pm
+  const gapEnd = NINE_AM + 12 * hour   // 9pm
+  const payload = {
+    ...makeDayPayload(blocks),
+    segments: [
+      { kind: 'untracked' as const, startTime: gapStart, endTime: gapEnd, label: 'No data captured', source: 'derived_gap' as const },
+    ],
+  }
+  const facts = buildDayWrapFacts(payload)
+  assert.equal(facts.gaps.length, 1)
+  assert.equal(facts.threads.length, 1)
+
+  const compact = compactDayFacts(facts, null) as Record<string, unknown>
+  const away = compact.awayFromScreen as Array<Record<string, string>>
+  assert.ok(Array.isArray(away) && away.length === 1, 'awayFromScreen missing from compact facts')
+  assert.equal(away[0].from, '5pm')
+  assert.equal(away[0].to, '9pm')
+  assert.equal(away[0].for, '4h')
+  const threads = compact.dayThreads as Array<Record<string, string>>
+  assert.ok(Array.isArray(threads) && threads.length === 1, 'dayThreads missing from compact facts')
+  assert.match(threads[0].thread.toLowerCase(), /daylens/)
+  assert.equal(threads[0].returnedToIn, '3 separate blocks')
+
+  // The facts hash reflows when a gap or thread appears — a wrap frozen
+  // before the hole existed regenerates once on a later-day open.
+  const bare = buildDayWrapFacts(makeDayPayload(blocks.slice(0, 1)))
+  assert.notEqual(computeFactsHash(facts, null), computeFactsHash(bare, null))
+})

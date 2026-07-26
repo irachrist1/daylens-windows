@@ -295,16 +295,20 @@ test('the visible deck plan renders unchanged for a fixture day', () => {
   const slides = planDayWrapSlides(facts, { browser: false, connectors: null })
   // The pinned deck shape for this fixture day: moving the facts onto the
   // shared corrected seam changes NUMBERS' provenance, never the deck.
+  // (The 'away' slide is the honest 11:40am-2pm hole between the fixture's
+  // stretches — gaps are facts, so the deck states it; the seeded shuffle
+  // also reordered the middle when the new slide joined the pool.)
   assert.deepEqual(slides.map((s) => ({ id: s.id, kind: s.kind })), [
     { id: 'opening', kind: 'opening' },
     { id: 'headline', kind: 'stat' },
     { id: 'coverage', kind: 'coverage' },
     { id: 'story-morning', kind: 'text' },
     { id: 'story-midday', kind: 'text' },
-    { id: 'timesink', kind: 'stat' },
     { id: 'wildcard', kind: 'stat' },
-    { id: 'focus', kind: 'stat' },
     { id: 'apps', kind: 'bars' },
+    { id: 'focus', kind: 'stat' },
+    { id: 'timesink', kind: 'stat' },
+    { id: 'away', kind: 'stat' },
     { id: 'question', kind: 'question' },
     { id: 'reflection', kind: 'reflection' },
     { id: 'finale', kind: 'finale' },
