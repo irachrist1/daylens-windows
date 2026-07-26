@@ -141,6 +141,35 @@ test('fallback kind: an idle social-feed tab is ambience too, not only entertain
   assert.equal(kind, 'work')
 })
 
+test('fallback kind: a native entertainment app votes leisure instead of funding the browser budget', () => {
+  // A native app is not a tab host. Pre-fix, the Spotify app's 3000s were
+  // routed into the site budget and never voted anywhere — an hour of music
+  // next to 1000s of real work read as pure work.
+  const nativeVote = effectiveBlockKind({
+    dominantCategory: 'browsing',
+    topApps: [
+      { category: 'entertainment', totalSeconds: 3000 },
+      { category: 'productivity', totalSeconds: 1000 },
+    ],
+    websites: [],
+  })
+  assert.equal(nativeVote, 'leisure', 'native entertainment seconds vote by their category kind')
+
+  // And the budget stays honest: only the browser's own 300s fund the site
+  // votes, so a stale 1200s github history claim is clamped to 300 instead of
+  // riding on the music app's seconds — the mostly-music block reads leisure.
+  const honestBudget = effectiveBlockKind({
+    dominantCategory: 'browsing',
+    topApps: [
+      { category: 'entertainment', totalSeconds: 1000 },
+      { category: 'browsing', totalSeconds: 300, isBrowser: true },
+      { category: 'development', totalSeconds: 200 },
+    ],
+    websites: [{ domain: 'github.com', totalSeconds: 1200 }],
+  })
+  assert.equal(honestBudget, 'leisure', 'the native app cannot bankroll background-tab site votes')
+})
+
 test('fallback kind: a real watching block stays leisure — majority of the budget is activity', () => {
   const kind = effectiveBlockKind({
     dominantCategory: 'browsing',

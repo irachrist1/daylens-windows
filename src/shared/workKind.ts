@@ -346,10 +346,12 @@ function resolveBlockKind(block: BlockKindInput): WorkKind {
   let browserForegroundSeconds = 0
   let hasBrowserApp = false
   for (const app of block.topApps) {
-    const browserish = app.isBrowser
-      || app.category === 'browsing'
-      || app.category === 'entertainment'
-      || app.category === 'social'
+    // Only an actual browser funds the domain-vote budget below. A NATIVE
+    // entertainment/social app (the Spotify app, a native TikTok client) is
+    // not a tab host: routing its seconds into the budget inflated what the
+    // sites were allowed to spend while the app itself never voted — its
+    // seconds vote directly by their category kind like any other native app.
+    const browserish = app.isBrowser || app.category === 'browsing'
     if (browserish) {
       // Spent through the domain votes below, capped at this budget.
       hasBrowserApp = true
