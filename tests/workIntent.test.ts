@@ -9,7 +9,7 @@ import type {
   WorkflowRef,
   WebsiteSummary,
 } from '../src/shared/types.ts'
-import { inferWorkIntent } from '../src/shared/workIntent.ts'
+import { inferWorkIntent, workSubjectCandidates } from '../src/shared/workIntent.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 
 function makeApp(appName: string, category: WorkContextAppSummary['category'], totalSeconds: number, isBrowser = false): WorkContextAppSummary {
@@ -316,4 +316,40 @@ test('browser-hosted operational trackers are coordination, not writing executio
   })
 
   assert.equal(inferWorkIntent(block).role, 'coordination')
+})
+
+// A channel artifact names the project it hosts; a DM or thread names the
+// PERSON talked to. "Sarah Chen (DM)" once became the work subject of a
+// comms block — a person is never what the work was about.
+test('a channel artifact names the work; a DM or thread artifact never does', () => {
+  const channelBlock = makeBlock({
+    dominantCategory: 'communication',
+    topApps: [makeApp('Slack', 'communication', 3600)],
+    documentRefs: [makeDocumentRef('daylens (Channel)')],
+    topArtifacts: [makeArtifact('daylens (Channel)')],
+  })
+  const channelIntent = inferWorkIntent(channelBlock)
+  assert.match(channelIntent.subject ?? '', /daylens/i, 'a channel still names the project it hosts')
+  assert.ok(channelIntent.subject && !/channel/i.test(channelIntent.subject), 'the (Channel) suffix never leaks')
+
+  const dmBlock = makeBlock({
+    dominantCategory: 'communication',
+    topApps: [makeApp('Slack', 'communication', 3600)],
+    documentRefs: [makeDocumentRef('Sarah Chen (DM)')],
+    topArtifacts: [makeArtifact('Sarah Chen (DM)')],
+  })
+  const dmIntent = inferWorkIntent(dmBlock)
+  assert.ok(!/sarah/i.test(dmIntent.subject ?? ''), `a DM partner became the subject: "${dmIntent.subject}"`)
+  for (const candidate of workSubjectCandidates(dmBlock)) {
+    assert.ok(!/sarah/i.test(candidate), `a DM partner reached the thread candidates: "${candidate}"`)
+  }
+
+  const threadBlock = makeBlock({
+    dominantCategory: 'communication',
+    topApps: [makeApp('Slack', 'communication', 3600)],
+    documentRefs: [makeDocumentRef('Q3 planning (Thread)')],
+    topArtifacts: [makeArtifact('Q3 planning (Thread)')],
+  })
+  const threadIntent = inferWorkIntent(threadBlock)
+  assert.ok(!/q3 planning/i.test(threadIntent.subject ?? ''), `a thread title became the subject: "${threadIntent.subject}"`)
 })

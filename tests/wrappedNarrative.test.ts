@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
   buildFallbackNarrative,
   buildWrappedPrompts,
@@ -282,6 +283,66 @@ test('hash: changing the date changes the hash', () => {
   const a = workingDayFacts()
   const b = { ...a, date: '2026-05-13' }
   assert.notEqual(computeFactsHash(a), computeFactsHash(b))
+})
+
+// Gaps/threads were added to the hash unconditionally, which silently changed
+// EVERY stored day's hash — one AI regeneration per historical day. A day with
+// no gap and no thread facts must keep hashing exactly as it did before the
+// fields existed; the keys enter the canonical form only when non-empty.
+test('hash: empty gaps/threads keep the pre-gaps canonical hash', () => {
+  const facts = workingDayFacts()
+  assert.deepEqual(facts.gaps ?? [], [], 'fixture day has no gap facts')
+  assert.deepEqual(facts.threads ?? [], [], 'fixture day has no thread facts')
+
+  // The canonical form as it was BEFORE gaps/threads existed, reconstructed
+  // verbatim: same keys, same order, no gaps/threads entries.
+  const bucket = (s: number) => Math.round(s / 60)
+  const preGapsCanonical = JSON.stringify({
+    date: facts.date,
+    quality: facts.quality,
+    active: bucket(facts.activeSeconds),
+    work: bucket(facts.workSeconds),
+    leisure: bucket(facts.leisureSeconds),
+    personal: bucket(facts.personalSeconds),
+    isLeisure: facts.isLeisureDay,
+    activities: facts.workActivities.map((a) => [a.name.toLowerCase(), bucket(a.seconds)]),
+    appSites: facts.appSites.map((s) => [s.name.toLowerCase(), bucket(s.seconds)]),
+    standout: facts.standout ? [facts.standout.name.toLowerCase(), bucket(facts.standout.seconds)] : null,
+    wildcard: facts.wildcardHook ? [facts.wildcardHook.kind, facts.wildcardHook.value] : null,
+    story: facts.dayStory.map((seg) => [seg.part, seg.items.map((i) => i.toLowerCase()), bucket(seg.seconds)]),
+    entities: (facts.entities ?? []).map((e) => [e.type, e.name.toLowerCase(), bucket(e.seconds)]),
+    enrichment: null,
+  })
+  const preGapsHash = createHash('sha1').update(preGapsCanonical).digest('hex').slice(0, 12)
+  assert.equal(computeFactsHash(facts), preGapsHash,
+    'a day without gap/thread facts must hash identically to its pre-change stored hash')
+
+  // Facts frozen before the fields existed (undefined) and facts built today
+  // (empty arrays) are the same day.
+  const frozen = { ...facts }
+  delete frozen.gaps
+  delete frozen.threads
+  assert.equal(computeFactsHash(frozen), computeFactsHash({ ...facts, gaps: [], threads: [] }))
+})
+
+test('hash: a day genuinely gaining gap or thread facts re-hashes once', () => {
+  const base = workingDayFacts()
+  const withGap: DayWrapFacts = {
+    ...base,
+    gaps: [{
+      fromMs: NINE_AM + 2 * 3600_000, toMs: NINE_AM + 3 * 3600_000,
+      fromClock: '11:00am', toClock: '12:00pm', minutes: 60, kind: 'away', matchesEvent: null,
+    }],
+  }
+  const withThread: DayWrapFacts = {
+    ...base,
+    threads: [{
+      name: 'Daylens', blockCount: 3, seconds: 5400,
+      firstMs: NINE_AM, lastMs: SIX_PM, fromClock: '9:00am', toClock: '6:00pm', category: 'development',
+    }],
+  }
+  assert.notEqual(computeFactsHash(base), computeFactsHash(withGap), 'a gap fact reflows the wrap')
+  assert.notEqual(computeFactsHash(base), computeFactsHash(withThread), 'a thread fact reflows the wrap')
 })
 
 // ─── buildWrappedPrompts ─────────────────────────────────────────────────────

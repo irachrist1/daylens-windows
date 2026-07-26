@@ -346,10 +346,12 @@ function resolveBlockKind(block: BlockKindInput): WorkKind {
   let browserForegroundSeconds = 0
   let hasBrowserApp = false
   for (const app of block.topApps) {
-    const browserish = app.isBrowser
-      || app.category === 'browsing'
-      || app.category === 'entertainment'
-      || app.category === 'social'
+    // Only an actual browser funds the domain-vote budget below. A NATIVE
+    // entertainment/social app (the Spotify app, a native TikTok client) is
+    // not a tab host: routing its seconds into the budget inflated what the
+    // sites were allowed to spend while the app itself never voted — its
+    // seconds vote directly by their category kind like any other native app.
+    const browserish = app.isBrowser || app.category === 'browsing'
     if (browserish) {
       // Spent through the domain votes below, capped at this budget.
       hasBrowserApp = true
@@ -372,10 +374,12 @@ function resolveBlockKind(block: BlockKindInput): WorkKind {
   for (const site of block.websites) {
     const seconds = Math.max(0, site.totalSeconds) * scale
     if (seconds <= 0) continue
-    // Media ambience: an entertainment domain votes only when it held the
-    // majority of the browser's clamped budget — anything less is a background
-    // tab (a paused video, an idle Netflix tab), excluded from kind voting.
-    if (policyForHost(site.domain) === 'entertainment' && !(seconds > budgetSeconds / 2)) continue
+    // Media ambience: a leisure-sink domain (entertainment AND social_feed —
+    // both domain-policy categories map to leisure in kindForDomain) votes
+    // only when it held the majority of the browser's clamped budget —
+    // anything less is a background tab (a paused video, an idle Netflix or
+    // x.com tab), excluded from kind voting.
+    if (policyForHost(site.domain) !== null && !(seconds > budgetSeconds / 2)) continue
     const domainKind = kindForDomain(site.domain)
     weighted.push({ kind: domainKind ?? 'personal', seconds })
   }

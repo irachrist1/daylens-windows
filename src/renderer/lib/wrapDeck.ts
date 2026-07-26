@@ -352,18 +352,25 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
   // when the day's schedule explains the hole.
   const gapFacts = facts.gaps ?? []
   if (gapFacts.length > 0) {
-    const biggest = gapFacts.reduce((a, b) => (b.minutes > a.minutes ? b : a))
+    // A 'passive' gap is screen ON, hands off — headlining it "Off the
+    // screen" contradicts its own phrase. The card prefers the biggest gap
+    // that really was time away; only a day whose every gap is passive gets
+    // the passive card, honestly titled.
+    const awayGaps = gapFacts.filter((gap) => gap.kind !== 'passive')
+    const biggest = (awayGaps.length > 0 ? awayGaps : gapFacts)
+      .reduce((a, b) => (b.minutes > a.minutes ? b : a))
+    const passive = biggest.kind === 'passive'
     const gapSeconds = Math.round((biggest.toMs - biggest.fromMs) / 1000)
     const phrase = gapKindPhrase(biggest.kind)
     pushMiddle({
-      id: 'away', kind: 'stat', kicker: 'Off the screen',
+      id: 'away', kind: 'stat', kicker: passive ? 'Screen on, hands off' : 'Off the screen',
       stat: {
         value: hm(gapSeconds),
         seconds: gapSeconds,
         sublabel: `${biggest.fromClock} to ${biggest.toClock}${biggest.matchesEvent ? ` · ${biggest.matchesEvent}` : ''}`,
       },
       fallbackLine: `${biggest.fromClock} to ${biggest.toClock} ${phrase}${biggest.matchesEvent ? `, matching "${biggest.matchesEvent}" on your calendar` : ''}.`,
-      ask: `The day had a real hole: ${biggest.fromClock} to ${biggest.toClock} ${phrase}. One plain line that owns it as part of the day's shape${biggest.matchesEvent ? `, naming the calendar event it matches ("${biggest.matchesEvent}")` : '. Daylens does not know what happened off-screen, so never guess an activity for it'}; time away needs no defense and no apology.`,
+      ask: `The day had a real hole: ${biggest.fromClock} to ${biggest.toClock} ${phrase}. One plain line that owns it as part of the day's shape${biggest.matchesEvent ? `, naming the calendar event it matches ("${biggest.matchesEvent}")` : '. Daylens does not know what happened during it, so never guess an activity for it'}; time away needs no defense and no apology.`,
       factsNote: gapFacts.map((gap) =>
         `${gap.fromClock} to ${gap.toClock} (${hm(Math.round((gap.toMs - gap.fromMs) / 1000))}) ${gapKindPhrase(gap.kind)}${gap.matchesEvent ? `, matches calendar event "${gap.matchesEvent}"` : ''}`,
       ).join('; '),

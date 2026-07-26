@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppSession } from '../src/shared/types.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
-import { buildTimelineBlocksFromSessions } from '../src/main/services/workBlocks.ts'
+import { buildTimelineBlocksFromSessions, splitCandidatesAtEvidenceSeams } from '../src/main/services/workBlocks.ts'
 
 // Local-time millis on a fixed day, so block boundaries are deterministic.
 function at(hour: number, minute: number): number {
@@ -116,6 +116,61 @@ test('passive presence (media playback hold) is coverage, not a gap', () => {
   seedActivityEvent(db, at(14, 0), 'idle_end')
   const blocks = buildTimelineBlocksFromSessions(db, sessions)
   assert.equal(blocks.length, 1, `passive presence must not split the block, got ${spans(blocks).join(', ')}`)
+  db.close()
+})
+
+// The seam runs after the block floor, so a split must not ship a sub-floor
+// sliver: an envelope-stretched candidate cut back at the hole leaves a
+// 3-minute sitting stranded on the far side, and the floor re-runs to fold or
+// drop it. The probe shape: real 11:00–11:30 evidence, an envelope stretched
+// across the hole with 3 minutes of captured activity, and a 3-minute sitting
+// at 12:58.
+test('a seam split never ships a sub-floor sliver', () => {
+  const db = createProductionTestDatabase()
+  const sessions = [
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(11, 0), endTime: at(11, 30), windowTitle: 'workBlocks.ts — daylens' }),
+    // Envelope stretched to 13:01, activity stopped at 11:33.
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(11, 30), endTime: at(13, 1), durationSeconds: 180, windowTitle: 'workBlocks.ts — daylens' }),
+    // The 3-minute sitting after the hole.
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(12, 58), endTime: at(13, 1), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  for (const block of blocks) {
+    const spanMinutes = (block.endTime - block.startTime) / 60_000
+    assert.ok(spanMinutes >= 15,
+      `a sub-floor sliver shipped: ${spans([block]).join('')} (${spanMinutes.toFixed(1)}m)`)
+    assert.ok(
+      !(block.startTime < at(12, 0) && block.endTime > at(12, 30)),
+      `block ${spans([block]).join('')} spans the unobserved hole`,
+    )
+  }
+  db.close()
+})
+
+// Meetings are exempt from the seam like every other destructive pass (the
+// floor, the merges): a calendar-formed meeting legitimately spans a capture
+// hole — being IN the meeting is why the machine saw nothing. A heuristic
+// candidate with the same shape still splits.
+test('a meeting candidate with a capture hole stays one block', () => {
+  const db = createProductionTestDatabase()
+  const meetingSessions = [
+    session({ bundleId: 'us.zoom.xos', appName: 'zoom.us', category: 'meetings', startTime: at(10, 0), endTime: at(10, 15), windowTitle: 'Zoom Meeting' }),
+    session({ bundleId: 'us.zoom.xos', appName: 'zoom.us', category: 'meetings', startTime: at(10, 50), endTime: at(11, 10), windowTitle: 'Zoom Meeting' }),
+  ]
+  const meeting = {
+    sessions: meetingSessions,
+    formation: 'meeting' as const,
+    boundedBeforeGap: true,
+    boundedAfterGap: true,
+    forcedLabel: 'Zoom Call',
+  }
+  const kept = splitCandidatesAtEvidenceSeams([meeting], db)
+  assert.equal(kept.length, 1, 'the meeting survives the seam as one candidate')
+  assert.equal(kept[0].sessions.length, 2, 'both meeting sittings stay in the block')
+
+  const heuristic = { ...meeting, formation: 'heuristic' as const, forcedLabel: undefined }
+  const split = splitCandidatesAtEvidenceSeams([heuristic], db)
+  assert.equal(split.length, 2, 'the same shape without the meeting formation still splits at the hole')
   db.close()
 })
 

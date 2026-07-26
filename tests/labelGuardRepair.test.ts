@@ -34,6 +34,7 @@ interface SeedBlockOptions {
   labelSource: string
   dominantCategory?: string
   evidence?: Record<string, unknown>
+  narrative?: string | null
   labelRows?: Array<{ id: string; label: string; source: string }>
 }
 
@@ -46,7 +47,7 @@ function seedBlock(db: Database.Database, options: SeedBlockOptions): void {
       category_distribution_json, switch_count, label_current, label_source,
       label_confidence, narrative_current, evidence_summary_json, is_live,
       heuristic_version, computed_at, invalidated_at
-    ) VALUES (?, ?, ?, ?, 'deep-work', ?, ?, 0, ?, ?, 0.9, NULL, ?, 0, 'test-v1', ?, NULL)
+    ) VALUES (?, ?, ?, ?, 'deep-work', ?, ?, 0, ?, ?, 0.9, ?, ?, 0, 'test-v1', ?, NULL)
   `).run(
     options.id,
     date,
@@ -56,6 +57,7 @@ function seedBlock(db: Database.Database, options: SeedBlockOptions): void {
     JSON.stringify({ [options.dominantCategory ?? 'development']: (options.endHour - options.startHour) * 3600 }),
     options.label,
     options.labelSource,
+    options.narrative ?? null,
     JSON.stringify(options.evidence ?? {}),
     now,
   )
@@ -214,6 +216,84 @@ test('the repair heals ai-labeled blocks, never user overrides, and stamps the g
   assert.equal(forced.healedBlocks, 0, 'a forced re-run finds nothing left to heal (idempotent)')
   assert.deepEqual(blockRow(db, 'blk_cursor_agents'), healedRow, 'a re-run changes nothing')
 
+  db.close()
+})
+
+// The v2 predicate read "Git workflow cleanup" as a `git` invocation and the
+// repair deleted the legitimate AI label rows unrecoverably. Prose that merely
+// starts with a binary's name must survive the scan byte-identical.
+test('legitimate AI labels that start with a binary name are never healed away', async () => {
+  const db = createProductionTestDatabase()
+  const proseLabels: Array<[string, string]> = [
+    ['blk_git_cleanup', 'Git workflow cleanup'],
+    ['blk_make_deck', 'Make the onboarding deck'],
+    ['blk_go_budget', 'Go over the quarterly budget'],
+  ]
+  proseLabels.forEach(([id, label], index) => {
+    seedBlock(db, {
+      id,
+      startHour: 9 + index,
+      endHour: 10 + index,
+      label,
+      labelSource: 'ai',
+      evidence: DEV_EVIDENCE,
+      narrative: `An hour spent on ${label.toLowerCase()}.`,
+      labelRows: [{ id: `lbl_${id}`, label, source: 'ai' }],
+    })
+  })
+  // A REAL command-line label on the same day must still be flagged and healed.
+  seedBlock(db, {
+    id: 'blk_real_command',
+    startHour: 13,
+    endHour: 14,
+    label: 'npx @agent-native/core@latest skills add visual-plans',
+    labelSource: 'ai',
+    evidence: DEV_EVIDENCE,
+    labelRows: [{ id: 'lbl_real_command', label: 'npx @agent-native/core@latest skills add visual-plans', source: 'ai' }],
+  })
+
+  const result = await runLabelGuardRepair(db)
+  assert.equal(result.status, 'ran')
+  assert.equal(result.healedBlocks, 1, 'only the real command-line label healed')
+  assert.equal(result.deletedLabelRows, 1, 'only the real command-line label row was deleted')
+
+  for (const [id, label] of proseLabels) {
+    const row = blockRow(db, id)
+    assert.equal(row.label_current, label, `${id} kept its legitimate AI label`)
+    assert.equal(row.label_source, 'ai')
+    assert.deepEqual(labelRowSources(db, id), ['ai'], `${id}'s AI label row survives`)
+    const narrative = (db.prepare(`SELECT narrative_current FROM timeline_blocks WHERE id = ?`).get(id) as { narrative_current: string | null }).narrative_current
+    assert.ok(narrative, `${id} kept its stored narrative`)
+  }
+
+  const healed = blockRow(db, 'blk_real_command')
+  assert.notEqual(healed.label_current, 'npx @agent-native/core@latest skills add visual-plans')
+  assert.deepEqual(labelRowSources(db, 'blk_real_command'), [], 'the command-line label row is gone')
+  db.close()
+})
+
+// Finding 12: narrative_current was written alongside the AI label it
+// narrates. A label heal that kept it would keep serving prose about the
+// deleted label under the healed name.
+test('a label heal clears the block\'s stored narrative too', async () => {
+  const db = createProductionTestDatabase()
+  seedBlock(db, {
+    id: 'blk_narrated',
+    startHour: 9,
+    endHour: 10,
+    label: 'Working on Cursor Agents',
+    labelSource: 'ai',
+    evidence: DEV_EVIDENCE,
+    narrative: 'You spent the morning inside Cursor Agents, mostly composing.',
+    labelRows: [{ id: 'lbl_narrated_ai', label: 'Working on Cursor Agents', source: 'ai' }],
+  })
+
+  const result = await runLabelGuardRepair(db)
+  assert.equal(result.healedBlocks, 1)
+  const row = db.prepare(`SELECT label_current, narrative_current FROM timeline_blocks WHERE id = 'blk_narrated'`)
+    .get() as { label_current: string; narrative_current: string | null }
+  assert.notEqual(row.label_current, 'Working on Cursor Agents')
+  assert.equal(row.narrative_current, null, 'the narrative about the deleted label is gone')
   db.close()
 })
 

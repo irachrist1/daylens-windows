@@ -208,9 +208,13 @@ function healDate(
   blocks: AffectedBlock[],
 ): { deletedLabelRows: number; healedBlocks: number; healedCategoryBlocks: number } {
   const deleteLabelRow = db.prepare(`DELETE FROM timeline_block_labels WHERE id = ?`)
+  // A label heal also clears the block's stored narrative: narrative_current
+  // was written alongside the AI label it narrates, so keeping it would keep
+  // serving prose about the deleted label ("Spent the evening on Cursor
+  // Agents…") under the healed name.
   const updateBlock = db.prepare(`
     UPDATE timeline_blocks
-    SET label_current = ?, label_source = ?, label_confidence = ?
+    SET label_current = ?, label_source = ?, label_confidence = ?, narrative_current = NULL
     WHERE id = ? AND invalidated_at IS NULL
   `)
   const updateCategoryFacts = db.prepare(`
