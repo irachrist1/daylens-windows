@@ -19,8 +19,13 @@
  * category_distribution_json recomputed with the attention-gated distribution
  * (media history-fill credit no longer counts as watching without foreground
  * title corroboration).
+ *
+ * v3: looksLikeCommandLine no longer flags prose that merely starts with a
+ * binary's name ("Git workflow cleanup", "Make the onboarding deck") — the v2
+ * predicate deleted legitimate AI labels unrecoverably; stamped databases
+ * must re-scan under the corrected rules.
  */
-export const WORK_NAME_GUARD_VERSION = 2
+export const WORK_NAME_GUARD_VERSION = 3
 
 /** Tool brands that are the INSTRUMENT of the work, never its subject. */
 export const TOOL_BRAND_NAMES = new Set([
@@ -65,14 +70,47 @@ export function isToolSurfaceTitle(name: string): boolean {
 
 const CLI_VERBS = /^(npx|npm|pnpm|yarn|node|git|gh|python3?|pip3?|brew|cargo|go|docker|kubectl|curl|wget|make|sudo|cd|ls|rm|cp|mv|ssh|scp|bash|zsh|sh)\b/i
 
-/** True when the label reads as a terminal command, not a human work name:
- *  a CLI verb lead, an npm-style @scope/package ref, or shell flag syntax. */
+// English function words after a CLI-verb lead mark the label as prose:
+// "Go over the quarterly budget" is a plan, not a `go` invocation. Real
+// command arguments are bare technical tokens and never need these.
+const PROSE_FUNCTION_WORDS = new Set([
+  'a', 'an', 'the', 'this', 'that', 'these', 'those', 'my', 'our', 'your',
+  'their', 'his', 'her', 'its', 'to', 'of', 'for', 'with', 'without', 'on',
+  'in', 'at', 'by', 'over', 'under', 'about', 'into', 'from', 'through',
+  'across', 'between', 'after', 'before', 'during', 'and', 'or', 'but', 'as',
+  'is', 'are', 'was', 'were', 'be', 'been', 'it', 'up', 'out', 'off', 'some',
+  'all', 'any', 'more', 'per', 'via',
+])
+
+// A lowercase path-ish token ("daylens/ci.yml", "~/dev/daylens",
+// "feature/seams"). Uppercase acronym pairs ("CI/CD", "A/B") stay prose.
+const PATHISH_TOKEN = /(^|\s)[a-z0-9~.@_-]+\/[a-z0-9~.@_/-]+(\s|$)/
+
+/** True when the label reads as a terminal command, not a human work name.
+ *  An npm-style @scope/package ref or shell flag syntax is a command wherever
+ *  it appears; a CLI-verb lead counts only when what follows actually reads
+ *  as an invocation — shell syntax ($, =, redirects, path-like tokens) or a
+ *  run of bare lowercase argument tokens ("npm run dev"). A sentence that
+ *  merely starts with a binary's name ("Git workflow cleanup", "Make the
+ *  onboarding deck", "Go over the quarterly budget") is a work name the AI
+ *  legitimately chose, never a command — flagging those deleted real labels
+ *  unrecoverably in the startup repair. */
 export function looksLikeCommandLine(label: string): boolean {
   const trimmed = label.trim()
-  if (CLI_VERBS.test(trimmed)) return true
   if (/@[a-z0-9-]+\/[a-z0-9-]+/i.test(trimmed)) return true
   if (/\s--?[a-z][a-z-]*(\s|$)/.test(trimmed)) return true
-  return false
+  const verb = CLI_VERBS.exec(trimmed)
+  if (!verb) return false
+  const rest = trimmed.slice(verb[0].length).trim()
+  if (/[$=<>|`\\]/.test(rest)) return true
+  if (PATHISH_TOKEN.test(rest)) return true
+  // Bare-token invocation: the verb typed lowercase (commands are), every
+  // argument a lowercase technical token, and none of them a word only prose
+  // needs.
+  if (verb[0] !== verb[0].toLowerCase() || !rest) return false
+  return rest.split(/\s+/).every(
+    (token) => /^[a-z0-9@][a-z0-9@._:-]*$/.test(token) && !PROSE_FUNCTION_WORDS.has(token),
+  )
 }
 
 /** True when the label is a joined multi-segment tab/window title (the " · "
