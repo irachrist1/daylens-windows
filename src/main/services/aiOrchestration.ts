@@ -117,6 +117,20 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     cachePolicy: 'stable_prefix',
     modelStrategy: 'balanced',
   },
+  // The interpretation-agent relabel (agent-runtime-and-context.md §Agent
+  // roles): the relabel family's tool-loop lane. Same tier and background
+  // posture as block_cleanup_relabel — it replaces one relabel call with a
+  // small tool loop, not a new billing surface. The loop runs through the AI
+  // SDK (like chat_answer), so its usage is reported per turn via
+  // recordInterpretationAgentUsage rather than executeTextAIJob.
+  interpretation_agent: {
+    jobType: 'interpretation_agent',
+    screen: 'background',
+    foreground: false,
+    timeoutMs: 45_000,
+    cachePolicy: 'off',
+    modelStrategy: 'balanced',
+  },
   day_summary: {
     jobType: 'day_summary',
     screen: 'timeline_day',
@@ -810,6 +824,77 @@ export function recordChatAgentUsage(input: {
   captureAIGeneration({
     traceId: eventId,
     jobType: 'chat_answer',
+    provider: input.config.provider,
+    model: input.config.model,
+    latencyMs,
+    inputTokens: input.usage?.inputTokens ?? null,
+    outputTokens: input.usage?.outputTokens ?? null,
+    cacheReadTokens: input.usage?.cacheReadTokens ?? null,
+    cacheWriteTokens: input.usage?.cacheWriteTokens ?? null,
+    daylensCostUsd: input.usage?.costUsd
+      ?? estimateUsageCostUsd(input.config.model, input.usage?.inputTokens, input.usage?.outputTokens, input.usage?.cacheReadTokens, input.usage?.cacheWriteTokens),
+    daylensCostSource: input.usage?.costUsd != null ? 'provider' : 'estimated',
+    isError: !input.success,
+  })
+}
+
+// Usage accounting for one interpretation-agent relabel turn. Same shape as
+// recordChatAgentUsage: the agent loop makes its provider calls through the
+// AI SDK, not executeTextAIJob, so it reports its summed per-turn usage here —
+// one ai_usage_events row + the same analytics pair. The job_type is its own
+// lane ('interpretation_agent', grouped under Timeline labeling in
+// aiFeatures.ts) so Usage never hides the tool loop inside plain relabels.
+export function recordInterpretationAgentUsage(input: {
+  config: ResolvedProviderConfig
+  usage: AIProviderUsage | null
+  startedAt: number
+  success: boolean
+  failureReason?: string | null
+  triggerSource: AIInvocationSource
+}): void {
+  const eventId = randomUUID()
+  const completedAt = Date.now()
+  const latencyMs = completedAt - input.startedAt
+  startAIUsageEvent(getDb(), {
+    id: eventId,
+    jobType: 'interpretation_agent',
+    screen: 'background',
+    triggerSource: input.triggerSource,
+    provider: input.config.provider,
+    model: input.config.model,
+    startedAt: input.startedAt,
+  })
+  finishAIUsageEvent(getDb(), {
+    id: eventId,
+    provider: input.config.provider,
+    model: input.config.model,
+    success: input.success,
+    failureReason: input.success ? undefined : (input.failureReason ?? 'interpretation agent turn failed'),
+    completedAt,
+    latencyMs,
+    inputTokens: input.usage?.inputTokens ?? null,
+    outputTokens: input.usage?.outputTokens ?? null,
+    cacheReadTokens: input.usage?.cacheReadTokens ?? null,
+    cacheWriteTokens: input.usage?.cacheWriteTokens ?? null,
+    cacheHit: Boolean((input.usage?.cacheReadTokens ?? 0) > 0),
+    costUsd: input.usage?.costUsd ?? null,
+    billingMode: input.config.billingMode ?? 'own_key',
+  })
+  capture(input.success ? ANALYTICS_EVENT.AI_JOB_COMPLETED : ANALYTICS_EVENT.AI_JOB_FAILED, {
+    job_type: 'interpretation_agent',
+    screen: 'background',
+    provider: input.config.provider,
+    model: input.config.model,
+    trigger_source: input.triggerSource,
+    latency_ms: latencyMs,
+    input_tokens: input.usage?.inputTokens ?? null,
+    output_tokens: input.usage?.outputTokens ?? null,
+    cache_hit: Boolean((input.usage?.cacheReadTokens ?? 0) > 0),
+    cache_policy: 'off',
+  })
+  captureAIGeneration({
+    traceId: eventId,
+    jobType: 'interpretation_agent',
     provider: input.config.provider,
     model: input.config.model,
     latencyMs,

@@ -1628,6 +1628,7 @@ export type AIJobType =
   | 'search_intent'
   | 'memory_write'
   | 'weekly_brief'
+  | 'interpretation_agent'
 
 export interface AIWrappedNarrative {
   /** The hook: a one-line read on the shape of the day. Always present, and
