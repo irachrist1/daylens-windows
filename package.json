@@ -127,5 +127,19 @@
   "overrides": {
     "lodash": "4.18.1",
     "protobufjs": "7.5.9"
+  },
+  "allowScripts": {
+    "electron@34.5.8": true,
+    "@paymoapp/active-window@2.1.4": true,
+    "keytar@7.9.0": true,
+    "esbuild@0.27.0": true,
+    "sharp@0.34.5": true,
+    "@google/genai@1.52.0": true,
+    "core-js@3.49.0": true,
+    "onnxruntime-node@1.21.0": true,
+    "protobufjs@7.5.9": true,
+    "better-sqlite3@12.8.0": true,
+    "esbuild@0.25.12": true,
+    "lzma-native@8.0.6": true
   }
 }
