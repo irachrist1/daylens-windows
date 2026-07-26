@@ -266,6 +266,7 @@ export async function runChatAgentTurn(
         db: deps.db,
         threadId: deps.threadId ?? null,
         destination: `${deps.config.provider}:${deps.config.model}`,
+        signal: deps.signal,
         requestTerminalAccess,
         onDisclosure: (row) => fileDisclosures.push(row),
       }),

@@ -225,6 +225,10 @@ export interface RecordDisclosureInput {
   threadId?: number | null
   messageId?: number | null
   filePath: string
+  /** What the ledger names as the disclosed artifact. Defaults to the file's
+   *  basename; run_command passes the full command line instead, so the trail
+   *  shows WHAT ran, not just where. */
+  displayName?: string
   versionFingerprint: string
   excerptStart: number
   excerptEnd: number
@@ -247,7 +251,7 @@ export function recordFileDisclosure(db: Database.Database, input: RecordDisclos
     input.threadId ?? null,
     input.messageId ?? null,
     input.filePath,
-    path.basename(input.filePath),
+    input.displayName ?? path.basename(input.filePath),
     input.versionFingerprint,
     input.excerptStart,
     input.excerptEnd,
