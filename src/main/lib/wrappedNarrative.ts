@@ -513,8 +513,17 @@ export function factOnlyRecapLine(facts: DayWrapFacts): string | null {
   if (facts.isLeisureDay) {
     return `${total} on screen${span}, mostly off the clock.`
   }
+  // The one-line summary names real focused work when any exists, even when
+  // a browsing-derived activity out-seconds it — but the claim stays honest:
+  // "most of it" only when the named work IS the top activity by time.
   const top = facts.workActivities[0]
-  const work = top ? `, most of it ${lowerName(workActionPhrase(top.name, top.category))}` : ''
+  const focused = facts.workActivities.find((a) => a.category !== 'browsing')
+  const named = focused ?? top
+  const work = named
+    ? named === top
+      ? `, most of it ${lowerName(workActionPhrase(named.name, named.category))}`
+      : `, including ${lowerName(workActionPhrase(named.name, named.category))}`
+    : ''
   return `${total} on screen${span}${work}.`
 }
 
