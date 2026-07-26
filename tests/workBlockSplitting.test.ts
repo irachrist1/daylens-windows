@@ -577,7 +577,7 @@ test('a stale, never-processed past day is reconstructed on revisit', () => {
 
   // Revisiting an older, unprocessed day rebuilds it more accurately.
   getTimelineDayPayload(db, TEST_DATE)
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v11'), 'stale unprocessed day should be rebuilt')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v12'), 'stale unprocessed day should be rebuilt')
   db.close()
 })
 
@@ -635,7 +635,7 @@ test('a processed stale day refreshes its category facts in place, without touch
   // too, and stamped so it runs once per heuristic bump.
   const row = db.prepare(`SELECT dominant_category, heuristic_version FROM timeline_blocks WHERE id = ?`).get(blockId) as { dominant_category: string; heuristic_version: string }
   assert.equal(row.dominant_category, 'development')
-  assert.equal(row.heuristic_version, 'timeline-v11')
+  assert.equal(row.heuristic_version, 'timeline-v12')
   db.close()
 })
 
@@ -716,7 +716,7 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   assert.equal(rebuilt.review.state, 'corrected')
   assert.equal(rebuilt.review.source, 'stored_evidence')
   assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v11'), 'stale day should rebuild while preserving correction')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v12'), 'stale day should rebuild while preserving correction')
   db.close()
 })
 

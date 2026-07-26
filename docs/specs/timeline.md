@@ -80,6 +80,15 @@ An unobserved gap of 30 minutes or more always ends a block. No block may span a
 
 Segmentation is deterministic for the same facts, projection version, and corrections. A model may propose a label or relationship but cannot own durations or silently change block boundaries.
 
+### Heuristic version bumps
+
+Every persisted block is stamped with the segmentation heuristic version that shaped it (`TIMELINE_HEURISTIC_VERSION` in `workBlocks.ts`; bump it whenever a change alters block boundaries or kind). After a bump, a historical day converges as follows:
+
+- An un-processed day rebuilds from sessions on its next analysis read and renders coarse until then; the bump changes nothing.
+- A processed (AI/user-labeled or corrected) day heals on read: opening it re-derives the deterministic segmentation once. Corrections re-apply in full, AI labels re-attach where their stretch of work survived, and stretches whose label stranded fall to deterministic labels — ordinary re-analysis targets.
+- The heal never spends an AI call. Wrap narratives converge lazily through the facts-hash comparison, only for days whose facts genuinely moved.
+- The heal declines — keeping the sealed shape, refreshing only category facts — when sessions can no longer re-derive the day, when re-segmentation would revert an analyzed day, or when a corrected label would strand. Explicit re-analyze remains the path that reshapes such a day.
+
 ## Labels and descriptions
 
 A label describes the activity, not the software:

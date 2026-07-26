@@ -209,6 +209,31 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // (a video playing, a meeting on screen — idle_start heldForMediaPlayback)
 // is evidence of presence, NOT a gap, and counts as coverage.
 const TIMELINE_EVIDENCE_SEAM_MS = 30 * 60_000
+// v12: the hard evidence seam — no block may span a 30-minute unobserved hole
+// (TIMELINE_EVIDENCE_SEAM_MS above: measured against captured evidence, the
+// block floor re-applied after the split, meeting formations exempt). Days
+// persisted under v11 can still hold seam-bridging blocks, so the bump marks
+// them stale.
+//
+// Bump policy — what happens to a historical day stamped with an older version:
+// - An un-processed day already rebuilds from sessions on its next analysis
+//   read and renders coarse until then (DEV-268); the bump changes nothing.
+// - A processed (AI/user-labeled or corrected) day heals ON READ, in
+//   healStaleShapePersistedDay: opening the day re-derives its deterministic
+//   segmentation once, corrections re-apply (invariant 8), AI labels re-attach
+//   where their stretch of work survived, and stretches whose label stranded
+//   fall to deterministic labels — the same re-analysis targets
+//   shouldReanalyzeBlockWithAI already handles. The heal itself never spends
+//   an AI call and never mass-invalidates wraps: the day's frozen snapshot
+//   refreezes deterministically, and stored wrap narratives converge through
+//   the factsHash mechanism only when the day's facts genuinely moved.
+// - A heal that would discard curated work (sessions can no longer re-derive
+//   the day, or no analysis/correction survives re-segmentation, or a
+//   corrected label would strand) keeps the sealed shape;
+//   refreshStaleBlockCategoryFacts still refreshes its deterministic category
+//   facts and stamps it current, so the attempt runs once per bump and
+//   explicit Re-analyze stays the path that reshapes it.
+//
 // v11: the duration ceiling is gone (DEV-232). Blocks split only on a real
 // absence, sleep, idle, a meeting, or a kind change — never at 3/5/6 hours. The
 // bump reconstructs already-captured, un-processed days that were fragmented by
@@ -252,7 +277,7 @@ const TIMELINE_EVIDENCE_SEAM_MS = 30 * 60_000
 // browsing) — the bump makes refreshStaleBlockCategoryFacts recompute the
 // persisted category facts of every already-processed day in place, so old
 // blocks pick up their real colors immediately (labels/boundaries untouched).
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v11'
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v12'
 
 // A block spanning this many hours is only worth a second look when most of the
 // span is untracked time (see flagSuspiciousUnbrokenBlocks) — the signature of
@@ -5853,6 +5878,87 @@ function refreshStaleBlockCategoryFacts(db: Database.Database, blocks: WorkConte
   }
 }
 
+// Heuristic-bump heal-on-read (the TIMELINE_HEURISTIC_VERSION bump policy).
+// A processed day stamped with an older heuristic version re-derives its
+// deterministic segmentation ONCE, on the read that opened it — the same
+// rebuild-with-carried-labels pipeline the DEV-267 seal repair uses, so
+// corrections re-apply (ignored spans stay out, boundary corrections
+// re-anchor, corrected labels win) and AI labels re-attach wherever their
+// stretch of work survived the re-segmentation. No AI is ever spent here:
+// blocks whose label stranded fall to deterministic sources and become
+// ordinary re-analysis targets.
+//
+// Returns null — keep the sealed shape — when the heal cannot preserve the
+// curated work:
+// - the day's sessions can no longer re-derive what the blocks cover (raw
+//   rows pruned), so a rebuild would shrink the day;
+// - re-segmentation strands every AI/user/workflow label and the day has no
+//   corrections, which would revert an analyzed day (DEV-277);
+// - a user-corrected label fails to re-attach (invariant 8: corrections are
+//   law, a shape improvement never outranks one).
+// A declined heal is not retried: the caller's category-facts refresh stamps
+// the blocks current, and explicit Re-analyze remains the path that reshapes
+// such a day.
+function healStaleShapePersistedDay(
+  db: Database.Database,
+  dateStr: string,
+  persisted: WorkContextBlock[],
+  sessions: AppSession[],
+): WorkContextBlock[] | null {
+  const sessionActiveMs = sessions.reduce((sum, session) => sum + Math.max(0, session.durationSeconds * 1000), 0)
+  const coveredMs = persisted.reduce((sum, block) => sum + blockActiveSeconds(block) * 1000, 0)
+  if (coveredMs - sessionActiveMs > PARTIAL_SEAL_MAX_UNCOVERED_MS) return null
+
+  const repaired = rebuildDayBlocksWithCarriedLabels(db, dateStr, sessions)
+  if (repaired.length === 0) return null
+  const analysisSurvived = repaired.some((block) => !block.isLive
+    && (block.label.source === 'ai' || block.label.source === 'workflow' || block.label.source === 'user'))
+  if (!analysisSurvived && !persistedDayHasCorrections(db, dateStr)) return null
+  if (!correctionsSurviveRebuild(persisted, repaired)) return null
+
+  console.log(
+    `[timeline] ${dateStr} was shaped by ${persisted[0]?.heuristicVersion ?? 'an older heuristic'} — `
+    + `re-derived ${persisted.length} block${persisted.length === 1 ? '' : 's'} into ${repaired.length} `
+    + `under ${TIMELINE_HEURISTIC_VERSION}, carrying labels and corrections forward`,
+  )
+  // The range readers' frozen snapshot fast-path never re-checks a
+  // current-builder row; drop it so the healed day refreezes
+  // deterministically on the next period read. Dropped BEFORE the persist:
+  // a crash between the two then leaves stale-stamped blocks (the heal
+  // simply retries on the next open) and a missing snapshot (refrozen from
+  // the current blocks on the next range read) — both self-healing. The
+  // reverse order could seal the healed blocks while the old-shape snapshot
+  // survives forever behind isCurrentSnapshot. Stored wrap narratives are
+  // deliberately NOT dropped — their factsHash comparison regenerates a wrap
+  // lazily, and only when this day's facts genuinely moved.
+  deleteDaySnapshotRow(db, dateStr)
+  persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
+  return repaired
+}
+
+// Every persisted user label correction must still be in force on the rebuilt
+// day: a corrected label re-attaches through the review layer (block id or
+// session-set evidence key), so its text must appear on a rebuilt block
+// OVERLAPPING the corrected span — text alone is not enough, because two
+// blocks corrected to the same name ("Client X audit" at 9:00 and again at
+// 14:00) would let one surviving attachment vouch for the other's silent
+// loss. A category-only correction has no label text to look for — some
+// rebuilt block overlapping the corrected span must carry the corrected
+// state instead.
+function correctionsSurviveRebuild(persisted: WorkContextBlock[], repaired: WorkContextBlock[]): boolean {
+  for (const block of persisted) {
+    if (block.review?.state !== 'corrected') continue
+    const correctedLabel = block.review.correctedLabel?.trim() || block.label.override?.trim()
+    const overlaps = (candidate: WorkContextBlock): boolean =>
+      candidate.startTime < block.endTime && candidate.endTime > block.startTime
+    const survived = correctedLabel
+      ? repaired.some((candidate) => overlaps(candidate) && candidate.label.current === correctedLabel)
+      : repaired.some((candidate) => overlaps(candidate) && candidate.review?.state === 'corrected')
+    if (!survived) return false
+  }
+  return true
+}
+
 function withoutIgnoredSpans(sessions: AppSession[], spans: MergedSpan[]): AppSession[] {
   if (spans.length === 0) return sessions
   return sessions.filter((session) =>
@@ -5963,6 +6069,19 @@ function buildTimelineBlocksForDay(
         invalidateTimelineDay(db, dateStr)
         forceMaterialize = true
       } else {
+        // Heuristic bump heal-on-read: a processed day whose blocks were
+        // shaped by an older segmentation heuristic re-derives once when
+        // opened, keeping corrections and surviving AI labels (the bump
+        // policy documented at TIMELINE_HEURISTIC_VERSION). When the heal
+        // declines, the sealed shape is kept and only its deterministic
+        // facts refresh below.
+        if (persisted.some((block) => block.heuristicVersion !== TIMELINE_HEURISTIC_VERSION)) {
+          const healed = healStaleShapePersistedDay(db, dateStr, persisted, sessions)
+          if (healed) {
+            flagSuspiciousUnbrokenBlocks(dateStr, healed)
+            return healed
+          }
+        }
         // A processed, well-covered day keeps its boundaries and labels forever,
         // but its CATEGORY facts were computed by whatever heuristic was current
         // at the time — and category colors every surface (timeline.md §3.4).
