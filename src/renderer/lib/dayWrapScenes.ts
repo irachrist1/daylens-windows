@@ -15,7 +15,7 @@ import { inferWorkIntent } from '@shared/workIntent'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { friendlyDomain, humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { categoryForDomain } from '@shared/domainCategories'
-import { isDisqualifiedWorkSubject } from '@shared/workNameGuards'
+import { cleanWorkSubject } from '@shared/workNameGuards'
 import { buildDayTitleContext, type AppTitleContext } from '@shared/windowTitleContext'
 import { computeQuality, looksLikeRawArtifactLabel } from './wrappedFacts'
 
@@ -184,18 +184,20 @@ function correctedOrCurrentLabel(block: WorkContextBlock): string {
 /** The human name for a WORK block: a corrected intent subject wins over
  *  inference, then the inferred subject if it reads clean, else a humanized
  *  (corrected-or-current) label, else "" meaning "fold into a few smaller
- *  things". */
+ *  things". Every candidate goes through the shared sanitize-then-check gate
+ *  (cleanWorkSubject), so capture decorations — "✳ Debug Daylens…" from a
+ *  Claude Code window title — are stripped before the guard runs and a raw
+ *  glyph can never lead a floor line. */
 function workActivityName(block: WorkContextBlock): string {
-  const subject = (
-    block.review?.correctedIntentSubject?.trim()
-    || inferWorkIntent(block).subject?.trim()
-  )
-  if (subject && subject.length >= 3 && !looksLikeRawArtifactLabel(subject) && !isDisqualifiedWorkSubject(subject)) {
-    return cap(subject)
-  }
-  const humanized = humanizeTitle(correctedOrCurrentLabel(block))
-  if (humanized && humanized.length >= 3 && !looksLikeRawArtifactLabel(humanized) && !isDisqualifiedWorkSubject(humanized)) {
-    return cap(humanized)
+  const candidates = [
+    block.review?.correctedIntentSubject,
+    inferWorkIntent(block).subject,
+    humanizeTitle(correctedOrCurrentLabel(block)),
+  ]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const cleaned = cleanWorkSubject(candidate)
+    if (cleaned && !looksLikeRawArtifactLabel(cleaned)) return cap(cleaned)
   }
   return ''
 }
@@ -262,17 +264,49 @@ export function categoryAction(category: AppCategory): string {
   }
 }
 
+/** Imperative verbs a captured task title leads with ("Debug Daylens
+ *  freezing…", "Fix the sync race"). The title already IS the action, so the
+ *  lead verb becomes its gerund instead of getting a second verb stacked in
+ *  front ("building Debug Daylens freezing…"). */
+const IMPERATIVE_GERUNDS: Record<string, string> = {
+  add: 'adding', build: 'building', clean: 'cleaning', create: 'creating',
+  debug: 'debugging', design: 'designing', draft: 'drafting', edit: 'editing',
+  explore: 'exploring', fix: 'fixing', implement: 'implementing',
+  improve: 'improving', investigate: 'investigating', plan: 'planning',
+  prepare: 'preparing', refactor: 'refactoring', remove: 'removing',
+  review: 'reviewing', rewrite: 'rewriting', set: 'setting', ship: 'shipping',
+  test: 'testing', update: 'updating', write: 'writing',
+}
+
+/** A subject that already names the work AS work ("OAuth development",
+ *  "site maintenance") is a complete noun phrase; prepending the category
+ *  verb produced "writing Oauth development". */
+const WORK_NOUN_TAIL = /\b(development|design|research|planning|writing|review|reviews|testing|debugging|documentation|maintenance|cleanup|analysis|setup|prep|admin|work)$/i
+
 /** A human work phrase: the action plus the subject ("building Daylens"). Used in
  *  prose and the facts handed to the model, never the bare project noun. A name
  *  that already leads with a gerund ("Redesigning the SPCS website") IS the
  *  action — prepending the category verb produced "building Reviewing work
- *  projects", so those pass through with only the case lowered. */
+ *  projects", so those pass through with only the case lowered. The same goes
+ *  for names that lead with an imperative verb or end in a work noun: the
+ *  category verb is only for bare subjects ("Daylens", "the essay"). */
 export function workActionPhrase(name: string, category: AppCategory): string {
-  const firstWord = name.trim().split(/\s+/)[0] ?? ''
+  const trimmed = name.trim()
+  const firstWord = trimmed.split(/\s+/)[0] ?? ''
+  const passThrough = (value: string) =>
+    /^[A-Z]{2,}/.test(value) ? value : value.charAt(0).toLowerCase() + value.slice(1)
   if (/^[A-Za-z]+ing$/.test(firstWord) && firstWord.length > 4) {
-    return /^[A-Z]{2,}/.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1)
+    return passThrough(trimmed)
   }
-  return `${categoryAction(category)} ${name}`
+  const gerund = IMPERATIVE_GERUNDS[firstWord.toLowerCase()]
+  if (gerund) {
+    const rest = trimmed.slice(firstWord.length).trim()
+    return rest ? `${gerund} ${rest}` : gerund
+  }
+  if (WORK_NOUN_TAIL.test(trimmed)) {
+    return passThrough(trimmed)
+  }
+  return `${categoryAction(category)} ${trimmed}`
 }
 
 // ─── Builder ──────────────────────────────────────────────────────────────────
