@@ -257,17 +257,26 @@ export default function AIWorkspace() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onNewChat])
 
-  // Seed the composer from another view (e.g. Settings → Memory → "Chat about
-  // your memory"). Always start a NEW thread so the seeded prompt opens a fresh
-  // conversation instead of appending to whatever chat was last open.
+  // Seed a chat from another view (e.g. Settings → Memory → "Chat about your
+  // memory"). Always start a NEW thread, then SEND the seed as its first
+  // message so the person lands in a conversation that has visibly started
+  // (DEV-253) — the server-side thread-creation path handles the draft send.
+  // Without AI access the send would silently no-op, so fall back to
+  // pre-filling the composer next to the connect prompt.
   const seedChat = useCallback((prompt: string) => {
     handleNewChat()
-    // Fill and focus after the new-chat state settles this frame.
+    // Act after the new-chat state settles this frame: submitMessage reads the
+    // latest handleSend via ref, so it sees the fresh draft (threadId null),
+    // never the thread that was open before.
     requestAnimationFrame(() => {
-      composerRef.current?.setValue(prompt)
+      if (hasApiKey) {
+        submitMessage(prompt)
+      } else {
+        composerRef.current?.setValue(prompt)
+      }
       composerRef.current?.focus()
     })
-  }, [handleNewChat])
+  }, [handleNewChat, hasApiKey, submitMessage])
 
   // This view mounts only after navigation, so a seed queued before navigate
   // (Settings stashes it, then navigates here) is read on mount. The old

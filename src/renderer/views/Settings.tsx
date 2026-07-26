@@ -30,7 +30,7 @@ import { ContextPacketSection } from './settings/ContextPacketSection'
 import { ConnectionsSection } from './settings/ConnectionsSection'
 import { ExportSection } from './settings/ExportSection'
 import { track } from '../lib/analytics'
-import { setPendingChatSeed } from '../lib/aiSeed'
+import { MEMORY_CHAT_SEED_PROMPT, setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
 import type { DaylensSemanticSearchStatus, UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
@@ -1090,7 +1090,7 @@ function TrackingControlsContent({
         <SettingsRow
           first
           title="Activity capture is off"
-          description="Allow Daylens to record foreground apps, window titles, active browser pages, and machine state on this computer. Private windows, screenshots, audio, keystrokes, message bodies, and file contents are never captured."
+          description="Let Daylens record which apps and pages you use. It never captures screenshots, audio, keystrokes, or message contents."
           control={(
             <button
               type="button"
@@ -1113,16 +1113,16 @@ function TrackingControlsContent({
       <SettingsRow
         first={consentCurrent}
         title="Pause tracking"
-        description="Temporarily stop recording all activity. Stays paused until you turn it back on, even after a restart."
+        description="Stop recording until you turn it back on, even across restarts."
         control={<Toggle checked={settings.trackingPaused ?? false} onChange={(value) => void persist({ trackingPaused: value })} />}
       />
       <SettingsRow
         title="Private / incognito windows"
-        description="Never recorded. Daylens keeps nothing from a browser's private or incognito window — no URL, page title, or session. This protection is always on and cannot be turned off."
+        description="Never recorded. This protection is always on and cannot be turned off."
       />
       <SettingsRow
         title="Limit what's tracked"
-        description="Off by default — Daylens records everything. Turn this on to keep specific apps and sites out of your history and AI answers."
+        description="Keep specific apps and sites out of your history and AI answers. Excluding one also deletes what was already captured."
         control={<Toggle checked={enabled} onChange={(value) => void persist({ trackingControlsEnabled: value })} />}
       />
       {enabled && (
@@ -2275,7 +2275,10 @@ function UsagePage() {
           <tbody>
             {(report?.rows ?? []).slice(0, 200).map((row) => (
               <tr key={row.id} style={{ borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-secondary)' }}>
-                <td style={{ padding: '11px 14px' }}>{new Date(row.occurredAt).toLocaleString()}</td>
+                {/* DEV-249: the timestamp must never wrap or truncate — nowrap
+                    forces the column to its content width and the wrapper's
+                    horizontal scroll carries the overflow. */}
+                <td style={{ padding: '11px 14px', whiteSpace: 'nowrap' }}>{new Date(row.occurredAt).toLocaleString()}</td>
                 <td style={{ padding: '11px 14px' }}>{formatJobFeature(row.feature)}</td>
                 <td style={{ padding: '11px 14px' }}>{formatUsageType(row.type)}</td>
                 <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
@@ -3142,7 +3145,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <button
                 type="button"
                 onClick={() => {
-                  setPendingChatSeed("I want to talk about my work patterns and what you know about me — let's start there.")
+                  setPendingChatSeed(MEMORY_CHAT_SEED_PROMPT)
                   navigate('/ai')
                 }}
                 style={{ ...inlineButtonStyle, background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: 'none' }}
@@ -3565,7 +3568,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Agent file access"
-          description="Control which files the AI may read. Observed activity is always on; contents need an explicit grant."
+          description="Choose which files the AI can read. It always sees which files were open; reading contents needs your grant."
           maxWidth={760}
         >
           <FileAccessSection />
@@ -3576,7 +3579,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Screen context"
-          description="An opt-in experiment: fleeting screen snapshots, read once for useful details and then destroyed — everything stays on this machine, and you can leave and wipe it all at any time."
+          description="An opt-in experiment. Screen snapshots are read once for useful details, then destroyed. Everything stays on this machine."
           maxWidth={760}
         >
           <ScreenContextSection />
@@ -4074,7 +4077,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'privacy':
       content = (
-        <SectionPage title="Privacy & tracking" description="Decide what Daylens sees. Your history stays on this machine, and exclusions are honored everywhere — including data already captured before you excluded them.">
+        <SectionPage title="Privacy & tracking" description="Decide what Daylens records. Everything stays on this machine.">
           <div style={{ display: 'grid', gap: 24 }}>
             <div>
               <GroupLabel>Preferences</GroupLabel>
@@ -4089,7 +4092,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <SettingsRow
                 first
                 title="Analytics"
-                description="Anonymous product telemetry — event names and counts only. No titles, URLs, or file paths ever leave this machine."
+                description="Anonymous event counts only. No titles, URLs, or file paths ever leave this machine."
                 control={<StatusPill label="Anonymous" />}
               />
               <SettingsRow
@@ -4099,7 +4102,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               />
               <SettingsRow
                 title="Reset and uninstall"
-                description="Remove Daylens from this computer: the launch-at-login entry is cleared, and you choose whether your local data is deleted or kept."
+                description="Remove Daylens from this computer. You choose whether your local data is deleted or kept."
                 control={(
                   <button
                     type="button"

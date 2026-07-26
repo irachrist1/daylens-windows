@@ -171,6 +171,9 @@ export function getSettings(): AppSettings {
     billingInstallationId: (_store.get('billingInstallationId', '') as string),
     activityColorOverrides: sanitizeActivityColorOverrides(_store.get('activityColorOverrides', {})),
     dimLeisureBlocks: (_store.get('dimLeisureBlocks', true) as boolean),
+    // DEV-252: setSettings persisted this key but getSettings never read it
+    // back, so every enrichment toggle silently reverted on the next read.
+    enrichmentSources: (_store.get('enrichmentSources', {}) as Record<string, boolean>),
     connectedSourcesEnabled: (_store.get('connectedSourcesEnabled', true) as boolean),
     // Screen-context experiment (DEV-197/DEV-198). Absent means not consented;
     // the experiment surface (screenContext/experiment.ts) is the only writer.
