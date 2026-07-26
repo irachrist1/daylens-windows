@@ -571,7 +571,14 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     .map(([name]) => name)
 
   const tracked = workSeconds + leisureSeconds + personalSeconds
+  // A rest-day call needs coverage to back it: when the day's unobserved
+  // holes outweigh what reached the screen, the day's character is UNKNOWN —
+  // a real workday whose writing happened off-capture was being declared
+  // "mostly a rest day" on the strength of a thin leisure slice.
+  const gapFacts = buildGapFacts(payload)
+  const gapSeconds = gapFacts.reduce((sum, gap) => sum + Math.round((gap.toMs - gap.fromMs) / 1000), 0)
   const isLeisureDay = tracked > 0 && leisureSeconds >= workSeconds && leisureSeconds / tracked >= 0.5
+    && gapSeconds <= tracked * 0.5
 
   const seed = seedFromDate(payload.date)
   const appSites = buildAppSiteDistribution(blocks, activeSeconds)
@@ -609,7 +616,7 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     mainStartClock,
     titleContext,
     entities: payload.dayEntities ?? [],
-    gaps: buildGapFacts(payload),
+    gaps: gapFacts,
     threads: buildDayThreads(blocks),
   }
 }
