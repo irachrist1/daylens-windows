@@ -165,21 +165,33 @@ export function cleanSubject(subject: string): string {
   return stripped.length > MAX_MESSAGE_LENGTH ? `${stripped.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : stripped
 }
 
+// Agent-runner author identities: commits these land are the USER's output
+// (they drive the agents), distinct from a human teammate's commits, which a
+// shared repo must never credit to this user's day.
+const AGENT_AUTHOR_RE = /\b(?:claude|cursor agent|codex|devin|copilot|windsurf|traycer|jules|aider|openhands)\b|\[bot\]/i
+
 async function repoActivityForDate(repo: string, date: string): Promise<GitRepoActivity | null> {
-  // Filter to the repo's own configured author when present, so a shared repo
-  // never credits teammates' commits to this user's day.
+  // No --author filter: the user's agent-era output lands under agent author
+  // identities too. Author names come back per commit; the user's own email
+  // counts as hands-on, known agent identities count as agent-driven, and
+  // anything else (a human teammate in a shared repo) is dropped.
   const email = (await exec('git', ['-C', repo, 'config', 'user.email'], GIT_TIMEOUT_MS))?.trim()
   const args = [
     '-C', repo, 'log', '--all', '--no-merges',
     `--since=${date} 00:00`, `--until=${date} 23:59:59`,
-    '--pretty=%ct%x09%s',
+    '--pretty=%ct%x09%ae%x09%an%x09%s',
   ]
-  if (email) args.push(`--author=${email}`)
   const output = await exec('git', args, GIT_TIMEOUT_MS)
   if (!output) return null
-  const commits = output.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
-    const tab = line.indexOf('\t')
-    return { ts: Number(line.slice(0, tab)) * 1000, subject: cleanSubject(line.slice(tab + 1)) }
+  let agentCommits = 0
+  const commits = output.split('\n').map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+    const [ts, authorEmail, authorName, ...rest] = line.split('\t')
+    const subject = rest.join('\t')
+    const own = !email || authorEmail?.trim().toLowerCase() === email.toLowerCase()
+    const agent = !own && AGENT_AUTHOR_RE.test(`${authorName ?? ''} ${authorEmail ?? ''}`)
+    if (!own && !agent) return []
+    if (agent) agentCommits += 1
+    return [{ ts: Number(ts) * 1000, subject: cleanSubject(subject) }]
   }).filter((c) => Number.isFinite(c.ts))
   if (commits.length === 0) return null
   const times = commits.map((c) => c.ts).sort((a, b) => a - b)
@@ -198,6 +210,7 @@ async function repoActivityForDate(repo: string, date: string): Promise<GitRepoA
     firstCommitClock: clock(times[0]),
     lastCommitClock: clock(times[times.length - 1]),
     commitHourBuckets: buckets,
+    ...(agentCommits > 0 ? { agentCommitCount: agentCommits } : {}),
   }
 }
 

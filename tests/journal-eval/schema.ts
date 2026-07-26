@@ -74,8 +74,9 @@ export interface DayScore {
   /** No block spans a declared gap; no narrative papers over one. */
   gapHonesty: DimensionScore
   /** LLM judge: does the story match the day's real shape? 0–10. Absent in
-   *  --fast runs. */
-  shapeJudge?: DimensionScore & { reasoning: string }
+   *  --fast runs. `score: null` means the judge call itself failed (transport
+   *  or parse) — such a day is excluded from the mean, never scored 0. */
+  shapeJudge?: Omit<DimensionScore, 'score'> & { score: number | null; reasoning: string }
   /** What the scorer actually looked at, for debugging. */
   observed: {
     blockLabels: string[]

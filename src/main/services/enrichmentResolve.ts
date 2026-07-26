@@ -87,7 +87,12 @@ function resolveShipped(git: GitActivitySignal | null): DayEnrichment['shipped']
   }
   const commitsByProject = repos
     .filter((r) => r && typeof r.commitCount === 'number' && r.commitCount > 0 && typeof r.repo === 'string')
-    .map((r) => ({ project: humanizeProject(r.repo), commits: r.commitCount, spread: spreadFor(r) }))
+    .map((r) => ({
+      project: humanizeProject(r.repo),
+      commits: r.commitCount,
+      spread: spreadFor(r),
+      viaAgents: typeof r.agentCommitCount === 'number' && r.agentCommitCount > 0 ? r.agentCommitCount : null,
+    }))
     .sort((a, b) => b.commits - a.commits)
     .slice(0, MAX_PROJECTS)
 

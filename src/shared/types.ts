@@ -1785,6 +1785,10 @@ export interface GitRepoActivity {
   /** How the commits spread across the day, by local part-of-day. Absent on
    *  rows stored before the field existed. */
   commitHourBuckets?: { overnight: number; morning: number; afternoon: number; evening: number }
+  /** Of commitCount, how many landed under an agent-runner author identity
+   *  (Claude, Cursor Agent, …) — the user's output via agents, never a
+   *  teammate's (unknown human authors are excluded entirely). */
+  agentCommitCount?: number
 }
 
 export interface GitPRActivity {
@@ -1957,7 +1961,7 @@ export interface DayEnrichment {
     /** Commits per repo, humanized folder name, biggest first. `spread` is a
      *  pre-formatted part-of-day telling ("14 overnight, 21 through the
      *  morning") — null when the stored row predates commit-hour buckets. */
-    commitsByProject: Array<{ project: string; commits: number; spread?: string | null }>
+    commitsByProject: Array<{ project: string; commits: number; spread?: string | null; viaAgents?: number | null }>
     /** Sanitized, humanized commit subjects / PR titles worth naming — never a
      *  raw path or branch (already stripped). Deduped, capped. */
     highlights: string[]
