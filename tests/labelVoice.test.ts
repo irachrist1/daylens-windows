@@ -154,6 +154,8 @@ test('concrete-over-generic fires only when subject evidence exists', () => {
 test('labelCandidateViolation rejects a tool surface behind a verb lead at generation time', () => {
   assert.ok(labelCandidateViolation('Working on Cursor Agents'))
   assert.ok(labelCandidateViolation('Working on Cursor Agents in Daylens'))
+  // A tool-surface phrase mixed into a list reached a real day's wrap.
+  assert.ok(labelCandidateViolation('Reviewing Cursor Agents and Daylens issues'))
   assert.ok(labelCandidateViolation('Microsoft Teams'))
   assert.ok(labelCandidateViolation('Inbox (1)'))
   assert.ok(labelCandidateViolation('Irachrist1/daylens-v1: Daylens'))

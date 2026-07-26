@@ -118,6 +118,33 @@ test('storedLabelViolatesWorkNameGuards names the shapes the repair scans for', 
     'work ABOUT a leisure service is not a leisure headline')
 })
 
+// The stored predicate runs the SAME label-shape gate the generation
+// validators enforce (workNameGuardLabelViolation, storedLabel mode), so a
+// label blocked at generation time is also healed when found persisted —
+// minus two deliberate asymmetries: the shouting heuristic and the
+// digit-gated comma rule never delete, because deletion has no undo.
+test('the stored predicate matches the generation gate, minus deletion-unsafe heuristics', () => {
+  const dev = { dominantCategory: 'development' as const }
+  assert.ok(storedLabelViolatesWorkNameGuards('Reviewing Cursor Agents and Daylens issues', dev),
+    'the tool surface mixed into a list is healed (real observed label)')
+  assert.ok(storedLabelViolatesWorkNameGuards('Reviewing Copilot Chat', dev))
+  assert.ok(storedLabelViolatesWorkNameGuards('Catching up on Slack', dev),
+    'a brand with no other work object is healed')
+  assert.ok(storedLabelViolatesWorkNameGuards('Microsoft Teams calls', dev))
+  // Deliberately NOT healed: deletion-unsafe heuristics and honest prose.
+  assert.ok(!storedLabelViolatesWorkNameGuards('DAYLENS V2 LAUNCH CHECKLIST', dev),
+    'an all-caps real name is never repair-deleted over a style hunch')
+  assert.ok(!storedLabelViolatesWorkNameGuards('LENOVO T14S 2-IN-1 LAPTOP INTEL CORE ULTRA7-255U', dev),
+    'shouting alone never deletes a stored label')
+  assert.ok(!storedLabelViolatesWorkNameGuards('Emails, invoices, planning, and admin', dev),
+    'an Oxford list is prose, not a spec list')
+  assert.ok(!storedLabelViolatesWorkNameGuards('Go over the Design/Eng handoff', dev),
+    'capitalized prose with a Word/Word pair is not a command (the v3 lesson)')
+  assert.ok(!storedLabelViolatesWorkNameGuards('Sprint planning in Slack', dev),
+    'a tool as the PLACE of the work survives')
+  assert.ok(!storedLabelViolatesWorkNameGuards('Zoom call with Jamie', dev))
+})
+
 test('the repair heals ai-labeled blocks, never user overrides, and stamps the guard version', async () => {
   const db = createProductionTestDatabase()
 

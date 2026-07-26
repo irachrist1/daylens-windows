@@ -11,7 +11,7 @@ import type {
 
 import { effectiveBlockKind } from './workKind'
 import { humanizeTitle } from './humanize'
-import { isDisqualifiedWorkSubject } from './workNameGuards'
+import { isDisqualifiedWorkSubject, looksLikeShoutingTitle } from './workNameGuards'
 
 type BlockLike = Pick<
   WorkContextBlock,
@@ -711,6 +711,9 @@ export function workSubjectCandidates(block: BlockLike): string[] {
   const add = (label: string | null | undefined) => {
     const text = usefulText(label)
     if (!text || looksGenericSubject(text) || isDisqualifiedWorkSubject(text)) return
+    // Shouting gates subject inference only (never stored-label deletion) —
+    // a long all-caps capture title can't join a day thread.
+    if (looksLikeShoutingTitle(text)) return
     // A breadcrumb or joined tab title ("Daylens v2 › Issues") is raw page
     // evidence, not a subject a person would name the work by.
     if (/[›»|]/.test(text)) return

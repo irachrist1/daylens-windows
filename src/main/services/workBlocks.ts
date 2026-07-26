@@ -59,7 +59,7 @@ import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@sh
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
-import { isDisqualifiedWorkSubject } from '@shared/workNameGuards'
+import { isDisqualifiedWorkSubject, workNameGuardLabelViolation } from '@shared/workNameGuards'
 import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForCategory, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
@@ -5537,8 +5537,13 @@ export interface StoredBlockLabelContext {
 /**
  * True when a STORED block label would be rejected by today's work-name
  * guards. Covers the shapes the guards reject at build time:
- *  - the label itself is a disqualified work subject (a tool brand, a tool's
- *    own UI surface like "Cursor Agents", a command line, a joined tab title);
+ *  - the label fails the shared label-shape gate — the SAME
+ *    workNameGuardLabelViolation the generation validators enforce, in
+ *    storedLabel mode (disqualified subject, a tool-surface phrase anywhere
+ *    in the label, a tool brand with no other work object). storedLabel mode
+ *    skips the shouting heuristic: generation has a corrective retry while
+ *    this path DELETES, and an all-caps real name must never die over a
+ *    style hunch (same reasoning keeps the comma rule digit-gated);
  *  - a "Working on <subject>[ in <project>]" wrapper whose subject is
  *    disqualified — the ladder builds these and now guards the subject
  *    (isDisqualifiedWorkSubject) before wrapping it;
@@ -5552,7 +5557,7 @@ export function storedLabelViolatesWorkNameGuards(
 ): boolean {
   const trimmed = label?.trim()
   if (!trimmed) return false
-  if (isDisqualifiedWorkSubject(trimmed)) return true
+  if (workNameGuardLabelViolation(trimmed, { storedLabel: true }) !== null) return true
   const wrapped = /^working on (.+)$/i.exec(trimmed)
   if (wrapped) {
     const subject = wrapped[1]
