@@ -1,4 +1,4 @@
-// Tier-3 context escalation (docs/north-star/context-agent.md): the agent may
+// Tier-3 context escalation (docs/specs/agent-runtime-and-context.md): the agent may
 // look at the user's live screen — one still, on demand, never stored.
 //
 // The contract, in order:

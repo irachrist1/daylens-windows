@@ -1,0 +1,73 @@
+{
+  "summary": {
+    "primaryWorkRate": 0.5,
+    "toolSurfaceCleanRate": 1,
+    "gapHonestyRate": 1,
+    "shapeJudgeMean": 0
+  },
+  "thresholds": {
+    "primaryWorkRate": 0.6,
+    "toolSurfaceCleanRate": 0.9,
+    "gapHonestyRate": 0.8,
+    "shapeJudgeMean": 6
+  },
+  "results": [
+    {
+      "date": "2026-07-22",
+      "confidence": "journal",
+      "primaryWork": {
+        "score": 1,
+        "max": 2,
+        "violations": [
+          "primary work never named anywhere visible: ML study (Coursera) (aliases: coursera, machine learning, cost function, linear regression, ml study, ai/ml)"
+        ]
+      },
+      "toolSurfaces": {
+        "score": 4,
+        "max": 4,
+        "violations": []
+      },
+      "gapHonesty": {
+        "score": 1,
+        "max": 1,
+        "violations": []
+      },
+      "observed": {
+        "blockLabels": [
+          "Morning",
+          "Afternoon",
+          "Night",
+          "Late night"
+        ],
+        "wrappedLead": null,
+        "wrappedLines": [
+          "A long, full day.",
+          "Your day ran from 11:19am to 1:36am.",
+          "Built from 10h 40m of tracked activity, 11:19am to 1:36am on this computer. Time Daylens didn't observe isn't in the story.",
+          "Morning went to writing Oauth development.",
+          "Afternoon went to building ✳ Debug Daylens freezing and sleep tracking issues and building ✳ Digitize daily journal entries.",
+          "Evening went to building & Testing and building ✳ Timeline page AI analysis and data correctness.",
+          "Windsurf quietly took 1h 5m today.",
+          "3h 19m straight on building & Testing, 6:18pm to 10:01pm. Nothing broke it.",
+          "9, separate times you came back to Warp.",
+          "The last activity landed at 1:36am.",
+          "Warp led the day.",
+          "Warp held 2h 42m, more than anything else.",
+          "What was the best part of the day, the part the numbers can't see?",
+          "You put in 10h 40m today, most of it building & Testing. That is the day, plainly told.",
+          "That's the day."
+        ],
+        "blockCount": 4,
+        "trackedSeconds": 38409
+      },
+      "shapeJudge": {
+        "score": 0,
+        "max": 10,
+        "violations": [
+          "judge error: SyntaxError: Unexpected end of JSON input"
+        ],
+        "reasoning": "judge call failed"
+      }
+    }
+  ]
+}

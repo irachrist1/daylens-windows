@@ -35,14 +35,11 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 
 | Document                                           | Purpose                                                          |
 | -------------------------------------------------- | ---------------------------------------------------------------- |
-| [North star](docs/north-star/codebase.md)          | Verified codebase map, invariants, and recorded decisions (start here) |
-| [Gap analysis 2026-07-20](docs/north-star/gap-analysis-2026-07-20.md) | The reference day: journal ground truth vs Daylens output |
-| [Activity understanding](docs/north-star/activity-understanding.md) | The inference model: attention budget, naming ladder, threads, gaps |
-| [Context agent](docs/north-star/context-agent.md)  | The tiered agent design: decides what context it needs, goes and gets it |
 | [Product direction](docs/product/product.md)       | The product promise, problem, principles, and boundaries         |
 | [V2 direction](docs/product/v2.md)                 | Accepted V2 scope, sequencing, and technical boundaries          |
 | [Vocabulary](docs/product/vocabulary.md)           | Shared meanings for product and architecture terms               |
-| [Architecture](docs/codebase/architecture.md)      | How the current application works and how data flows             |
+| [Architecture](docs/codebase/architecture.md)      | Verified codebase map, invariants, and recorded decisions (start here) |
+| [Gap analysis 2026-07-20](docs/reviews/gap-analysis-2026-07-20.md) | The reference day: journal ground truth vs Daylens output |
 | [Repository structure](docs/codebase/structure.md) | Where the major parts of the codebase live                       |
 | [Development](docs/development.md)                 | How specifications, tickets, implementation, and acceptance work |
 | [Testing](docs/hygiene/testing.md)                 | Normal verification and release confidence                       |
@@ -62,7 +59,8 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Onboarding and consent](docs/specs/onboarding-and-consent.md)           | First run, capture consent, platform permissions, and the proof step            |
 | [Screen context](docs/specs/screen-context.md)                           | Opt-in sampled-frame experiment, extraction, deletion, and evaluation           |
 | [Memory and entities](docs/specs/memory-and-entities.md)                 | Search, memory types, entity identity, relationships, and conversational memory |
-| [Timeline](docs/specs/timeline.md)                                       | Calendar-like day reconstruction, meetings, evidence, and corrections           |
+| [Timeline](docs/specs/timeline.md)                                       | Calendar-like day reconstruction, attention accounting, labels, and corrections |
+| [Day recap and analysis](docs/specs/day-recap-and-analysis.md)           | The grounded day account: gaps, threads, freshness, and clarification           |
 | [Label voice](docs/specs/label-voice.md)                                 | The recorded, evaluatable rubric block labels are scored against                |
 | [Apps](docs/specs/apps.md)                                               | Day, week, and month application explanations and canonical totals              |
 | [AI agent](docs/specs/ai-agent.md)                                       | Voice, retrieval tools, sources, model choice, and Daylens actions              |

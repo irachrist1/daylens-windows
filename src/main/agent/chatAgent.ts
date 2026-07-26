@@ -238,7 +238,7 @@ export async function runChatAgentTurn(
       }),
       ...buildInteractionTools(interactionDeps),
       // Tier-3 live-screen escalation; consent-gated in Settings, refuses
-      // honestly when off (docs/north-star/context-agent.md).
+      // honestly when off (docs/specs/agent-runtime-and-context.md).
       ...buildScreenTools(),
       ...buildExportTools(deps.db, interactionDeps),
       // The confirmed-memory proposal card (DEV-185): a durable personal fact
