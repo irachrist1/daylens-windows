@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeWebsiteTitleForDisplay, resolveCanonicalApp, websiteDisplayLabel } from '../src/main/lib/appIdentity.ts'
+import {
+  normalizeWebsiteTitleForDisplay,
+  resolveCanonicalApp,
+  titleLooksLikeKeyboardMash,
+  websiteDisplayLabel,
+} from '../src/main/lib/appIdentity.ts'
 import { brandedAppIconSpec, formatDisplayAppName } from '../src/renderer/lib/apps.ts'
 
 test('mac-specific app aliases resolve to the right canonical app identities', () => {
@@ -84,6 +89,39 @@ test('renderer has branded Microsoft 365 fallback icon specs', () => {
   assert.equal(brandedAppIconSpec('Microsoft PowerPoint')?.label, 'P')
   assert.equal(brandedAppIconSpec('Microsoft Outlook')?.label, 'O')
   assert.equal(brandedAppIconSpec('Microsoft Teams')?.label, 'T')
+})
+
+// DEV-239: keyboard-mash garbage typed into a search box lands verbatim in
+// the captured page title and used to display as a real 14-minute "page".
+// The detector is structural (consonant runs, letter/digit alternation,
+// row-of-keys punctuation), never a blocklist of observed strings.
+test('keyboard-mash page titles are junk; real titles survive', () => {
+  // The observed garbage string (dossier row A4) and structural siblings.
+  assert.equal(titleLooksLikeKeyboardMash('wwwtrttgbgggbsvcvgbjmk,l.;uk7u7i880p9o8i7u654321` - Google Search'), true)
+  assert.equal(titleLooksLikeKeyboardMash('asdfghjkl qwertyuiop - Google Search'), true)
+  assert.equal(titleLooksLikeKeyboardMash('xjkvbnmzxcvbnm'), true)
+  assert.equal(titleLooksLikeKeyboardMash('a1b2c3d4e5f6'), true)
+
+  // Real subjects, including hard cases the heuristics must not eat.
+  assert.equal(titleLooksLikeKeyboardMash('Naomie Nishimwe - Google Search'), false)
+  assert.equal(titleLooksLikeKeyboardMash('state-of-the-art performance review'), false)
+  assert.equal(titleLooksLikeKeyboardMash('Schwartz Lecture Notes'), false)
+  assert.equal(titleLooksLikeKeyboardMash('win32api documentation'), false)
+  assert.equal(titleLooksLikeKeyboardMash('TypeScript 5.4 release notes'), false)
+  assert.equal(titleLooksLikeKeyboardMash('rhythms and strengths'), false)
+  assert.equal(titleLooksLikeKeyboardMash(''), false)
+  assert.equal(titleLooksLikeKeyboardMash(null), false)
+})
+
+test('a mashed title falls back to the site name instead of displaying garbage', () => {
+  assert.equal(
+    normalizeWebsiteTitleForDisplay('google.com', 'wwwtrttgbgggbsvcvgbjmk,l.;uk7u7i880p9o8i7u654321` - Google Search'),
+    null,
+  )
+  assert.equal(
+    normalizeWebsiteTitleForDisplay('google.com', 'Naomie Nishimwe - Google Search'),
+    'Naomie Nishimwe - Google Search',
+  )
 })
 
 test('website labels normalize X and strip generic badge-count titles', () => {

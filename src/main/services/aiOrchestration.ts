@@ -117,6 +117,20 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     cachePolicy: 'stable_prefix',
     modelStrategy: 'balanced',
   },
+  // The interpretation-agent relabel (agent-runtime-and-context.md §Agent
+  // roles): the relabel family's tool-loop lane. Same tier and background
+  // posture as block_cleanup_relabel — it replaces one relabel call with a
+  // small tool loop, not a new billing surface. The loop runs through the AI
+  // SDK (like chat_answer), so its usage is reported per turn via
+  // recordInterpretationAgentUsage rather than executeTextAIJob.
+  interpretation_agent: {
+    jobType: 'interpretation_agent',
+    screen: 'background',
+    foreground: false,
+    timeoutMs: 45_000,
+    cachePolicy: 'off',
+    modelStrategy: 'balanced',
+  },
   day_summary: {
     jobType: 'day_summary',
     screen: 'timeline_day',
@@ -197,10 +211,12 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     foreground: true,
     // The deck rewrite made the response a full slide deck (one line per
     // slide + question + reflection), so the call needs more room than the
-    // old five-field arc did. A 16-slide Sonnet deck runs ~15-25s. Overridable
-    // for the offline benchmark, which tolerates a longer wait to measure
-    // content rather than latency.
-    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 40_000,
+    // old five-field arc did. A full day with git enrichment measured 54s on
+    // the quality model, and a 40s budget silently served the fallback deck
+    // on exactly the days most worth telling — this must stay aligned with
+    // NARRATIVE_TIMEOUT_MS (90s) in wrappedNarrative.ts. Overridable for the
+    // offline benchmark.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 90_000,
     cachePolicy: 'off',
     // The wrap is the showcase surface — "the most crafted
     // surface" — so it rides the QUALITY tier (Sonnet, not Haiku). On the
@@ -217,8 +233,9 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'wrapped_period_narrative',
     screen: 'timeline_week',
     foreground: true,
-    // A weekly deck is 20+ slides of prose; give it real time.
-    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 45_000,
+    // A weekly deck is 20+ slides of prose; give it real time. Aligned with
+    // the daily budget above for the same silent-fallback reason.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 100_000,
     cachePolicy: 'off',
     modelStrategy: 'quality',
   },
@@ -810,6 +827,77 @@ export function recordChatAgentUsage(input: {
   captureAIGeneration({
     traceId: eventId,
     jobType: 'chat_answer',
+    provider: input.config.provider,
+    model: input.config.model,
+    latencyMs,
+    inputTokens: input.usage?.inputTokens ?? null,
+    outputTokens: input.usage?.outputTokens ?? null,
+    cacheReadTokens: input.usage?.cacheReadTokens ?? null,
+    cacheWriteTokens: input.usage?.cacheWriteTokens ?? null,
+    daylensCostUsd: input.usage?.costUsd
+      ?? estimateUsageCostUsd(input.config.model, input.usage?.inputTokens, input.usage?.outputTokens, input.usage?.cacheReadTokens, input.usage?.cacheWriteTokens),
+    daylensCostSource: input.usage?.costUsd != null ? 'provider' : 'estimated',
+    isError: !input.success,
+  })
+}
+
+// Usage accounting for one interpretation-agent relabel turn. Same shape as
+// recordChatAgentUsage: the agent loop makes its provider calls through the
+// AI SDK, not executeTextAIJob, so it reports its summed per-turn usage here —
+// one ai_usage_events row + the same analytics pair. The job_type is its own
+// lane ('interpretation_agent', grouped under Timeline labeling in
+// aiFeatures.ts) so Usage never hides the tool loop inside plain relabels.
+export function recordInterpretationAgentUsage(input: {
+  config: ResolvedProviderConfig
+  usage: AIProviderUsage | null
+  startedAt: number
+  success: boolean
+  failureReason?: string | null
+  triggerSource: AIInvocationSource
+}): void {
+  const eventId = randomUUID()
+  const completedAt = Date.now()
+  const latencyMs = completedAt - input.startedAt
+  startAIUsageEvent(getDb(), {
+    id: eventId,
+    jobType: 'interpretation_agent',
+    screen: 'background',
+    triggerSource: input.triggerSource,
+    provider: input.config.provider,
+    model: input.config.model,
+    startedAt: input.startedAt,
+  })
+  finishAIUsageEvent(getDb(), {
+    id: eventId,
+    provider: input.config.provider,
+    model: input.config.model,
+    success: input.success,
+    failureReason: input.success ? undefined : (input.failureReason ?? 'interpretation agent turn failed'),
+    completedAt,
+    latencyMs,
+    inputTokens: input.usage?.inputTokens ?? null,
+    outputTokens: input.usage?.outputTokens ?? null,
+    cacheReadTokens: input.usage?.cacheReadTokens ?? null,
+    cacheWriteTokens: input.usage?.cacheWriteTokens ?? null,
+    cacheHit: Boolean((input.usage?.cacheReadTokens ?? 0) > 0),
+    costUsd: input.usage?.costUsd ?? null,
+    billingMode: input.config.billingMode ?? 'own_key',
+  })
+  capture(input.success ? ANALYTICS_EVENT.AI_JOB_COMPLETED : ANALYTICS_EVENT.AI_JOB_FAILED, {
+    job_type: 'interpretation_agent',
+    screen: 'background',
+    provider: input.config.provider,
+    model: input.config.model,
+    trigger_source: input.triggerSource,
+    latency_ms: latencyMs,
+    input_tokens: input.usage?.inputTokens ?? null,
+    output_tokens: input.usage?.outputTokens ?? null,
+    cache_hit: Boolean((input.usage?.cacheReadTokens ?? 0) > 0),
+    cache_policy: 'off',
+  })
+  captureAIGeneration({
+    traceId: eventId,
+    jobType: 'interpretation_agent',
     provider: input.config.provider,
     model: input.config.model,
     latencyMs,

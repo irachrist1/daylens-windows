@@ -255,3 +255,49 @@ test('without a model, every planned scene renders its deterministic line', () =
     assert.equal(line, spec.fallbackLine, `slide "${spec.id}" shows its deterministic line`)
   }
 })
+
+// ─── A settled completed day regenerates once instead of reconciling forever ─
+// Registers a provider stub, so it must stay the LAST test in this file.
+
+test('an in-app open of a drifted wrap for a COMPLETED day regenerates from full facts', async () => {
+  const { registerWrappedNarrativeProvider } = await import('../src/main/services/wrappedNarrative.ts')
+  const settingsStub = await import('./support/settings-stub.mjs')
+  await settingsStub.setApiKey('anthropic', 'test-key')
+  const db = createProductionTestDatabase()
+  setTestDb(db)
+  try {
+    const payload = workingDayPayload() // TEST_DATE is in the past
+    putStoredWrappedNarrative(db, 'day', TEST_DATE, storedNarrative(), 'stale-hash', Date.parse('2026-04-22T10:38:00'))
+
+    let providerCalls = 0
+    registerWrappedNarrativeProvider(async () => {
+      providerCalls += 1
+      const facts = buildDayWrapFacts(payload)
+      const lines: Record<string, string> = {}
+      for (const spec of planDayWrapSlides(facts)) {
+        if (spec.ask) lines[spec.id] = `The ${spec.id.replace(/[^a-z]/gi, ' ')} beat of the day held steady and real.`
+      }
+      return {
+        text: JSON.stringify({ lines, question: null, reflection: null }),
+        config: { model: 'test-model' },
+      } as never
+    })
+
+    const narrative = await getWrappedNarrative(payload)
+    assert.ok(providerCalls >= 1, 'a completed drifted day regenerates instead of reconciling')
+    assert.notEqual(narrative.lead, STORED_LEAD, 'the mid-day snapshot is replaced, not re-grounded')
+    const callsAfterFirstOpen = providerCalls
+
+    const stored = getStoredWrappedNarrative<AIWrappedNarrative>(db, 'day', TEST_DATE)
+    const currentHash = computeFactsHash(buildDayWrapFacts(payload), resolveDayEnrichment(db, TEST_DATE))
+    assert.equal(stored?.factsHash, currentHash, 'the regenerated wrap is persisted under the current facts hash')
+
+    const second = await getWrappedNarrative(payload)
+    assert.equal(providerCalls, callsAfterFirstOpen, 'the regenerated wrap is served from the store afterwards')
+    assert.equal(second.lead, narrative.lead)
+  } finally {
+    await settingsStub.clearApiKey('anthropic')
+    clearTestDb()
+    db.close()
+  }
+})

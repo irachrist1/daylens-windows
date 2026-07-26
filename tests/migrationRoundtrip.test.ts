@@ -66,6 +66,22 @@ test('fresh install: SCHEMA_SQL boots + runMigrations advances schema_version', 
     for (const required of REQUIRED_TABLES) {
       assert.ok(tables.has(required), `missing required table: ${required}`)
     }
+
+    // The migration ladder must be strictly increasing in array order:
+    // runMigrations() filters on version > MAX(applied), so a migration added
+    // below the current tip would never run on upgraded databases (this is why
+    // the twin dedupe was renumbered v57 -> v59 and v57 stays a documented
+    // gap). On a fresh install rows land in array order, so rowid order
+    // reveals the array order.
+    const applied = db
+      .prepare('SELECT version FROM schema_version ORDER BY rowid')
+      .all() as { version: number }[]
+    for (let i = 1; i < applied.length; i++) {
+      assert.ok(
+        applied[i].version > applied[i - 1].version,
+        `migration ladder not strictly increasing: v${applied[i].version} follows v${applied[i - 1].version}`,
+      )
+    }
   } finally {
     clearTestDb()
     db.close()

@@ -1,0 +1,39 @@
+# Ground truth from the owner's Obsidian journal (planning-scaffolding day).
+date: "2026-06-17"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-06-17 (Daylens v2 planning + Linear sections)"
+summary: >
+  The whole day went to building Daylens v2 planning scaffolding. Reframed
+  the v2 effort into a handoff document that makes an AI agent audit the
+  running app (screenshots and real use, not trusting the code) against
+  the vision in daylens-PMF.md, then designed a four-agent model council
+  (Claude, Cursor, Codex, Factory Droid) that plans independently,
+  cross-judges, and assembles a single DAYLENS-V2-PLAN.md. Getting the
+  docs to stay substantive took roughly a dozen correction rounds with the
+  agent. Also set up a fresh personal Linear workspace: a Daylens v2
+  project with 18 labels (Surface + Severity groups), pipeline mapped so
+  In Review means ready to test, board intentionally left unseeded until
+  the council plan lands. The method was saved as a reusable playbook and
+  fill-in template in the vault.
+primaryWork:
+  - name: Daylens v2 planning (handoff + model council)
+    aliases: [daylens, v2 plan, model council, handoff, pmf, feature registry]
+  - name: Linear workspace setup
+    aliases: [linear]
+secondary:
+  - name: Vault playbooks (agent-council method)
+    aliases: [playbook, vault, agent council]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "08:11", desc: "morning into afternoon: reframing Daylens v2 — writing the audit handoff (HANDOFF-PMF-PLAN, FEATURE-REGISTRY) through many correction rounds with the agent" }
+  - { desc: "designing the model council flow and the Linear seed prompt (LINEAR-SETUP)" }
+  - { until: "23:26", desc: "Linear: fresh personal workspace, Daylens v2 project, 18 labels, pipeline mapping; playbook + template saved to the vault; evening journaling" }
+notes: >
+  The journal gives no clock times — it is one planning/scaffolding arc
+  from ~08:11 to late evening, so score the day's story, not exact segment
+  boundaries. The work is documents, prompts, and Linear configuration,
+  not app code: a day labeled as heavy Daylens *coding* would be wrong,
+  a day labeled as Daylens planning/system design is right.

@@ -18,13 +18,21 @@ function applyPatterns(input: string, replacement: string | ((name: string) => s
   let redactionCount = 0
   const patternsHit: string[] = []
 
-  for (const { name, regex } of CREDENTIAL_PATTERNS) {
+  for (const { name, regex, exempt } of CREDENTIAL_PATTERNS) {
     // Reset in case any caller passed a stateful regex by accident; ours are
     // module-local so this is defensive.
     regex.lastIndex = 0
     text = text.replace(regex, (match, ...args) => {
       // For url_query the first capture group is the URL prefix we want to keep.
       const groupOne = typeof args[0] === 'string' ? args[0] : null
+      if (exempt) {
+        // replace() callback args: capture groups, then offset, then the whole
+        // string — none of our patterns use named groups.
+        const offsetIndex = args.findIndex((arg) => typeof arg === 'number')
+        const offset = args[offsetIndex] as number
+        const whole = args[offsetIndex + 1] as string
+        if (exempt(match, offset, whole)) return match
+      }
       redactionCount++
       patternsHit.push(name)
       const value = typeof replacement === 'function' ? replacement(name) : replacement

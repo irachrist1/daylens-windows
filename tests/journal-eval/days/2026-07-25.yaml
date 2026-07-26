@@ -1,0 +1,63 @@
+# Machine-reconstructed: no journal entry. A genuine rest Saturday: zero
+# commits in any tracked repo, no agent lanes, and a screen that is mostly
+# Netflix. The canonical focus_events capture degraded to a titleless Dia
+# sampler loop and died at 03:18; the rest of the day is reconstructed from
+# legacy app sessions, browser history, and machine power/idle events. The
+# weekly plan said Saturday = SPCS + study; capture does not corroborate
+# either. The DEV-287-290 Linear issues often associated with this date were
+# created 22:48Z = 00:48 Jul 26 LOCAL — the next day's session, not this one.
+date: "2026-07-25"
+confidence: machine
+sources:
+  - "git: zero commits on 2026-07-25 in daylens, tars-private, tars, portfolio, Dayflow, daylens-swift"
+  - "app_sessions + browser history: Netflix in Dia 00:00-03:18 (playback pings 00:00/00:40/01:17/01:57/02:42 with matching input-idle cycles); browsing burst 03:19-03:58 (Lenny's Product Pass, GitHub Student Developer Pack, Coursera 'Supervised Machine Learning', DataCamp ML Fundamentals, roadmap.sh Python, Gumloop, Framer, Gemini 3.5 page, YouTube, X); Safari 11:24-12:11 (~47min, no history rows — content unrecorded); Netflix again ~12:40-14:58 with an X peek 13:42; evening 19:33-22:42: Netflix 'The Accountant', X + Matt Shumer newsletter 19:58-20:00, Netflix 'Emily in Paris' 21:21-22:42"
+  - "machine events: suspend 03:59, resume + unlock 11:24; suspend 12:11, resume 12:20; input idle from 13:40 (no idle_end), last Netflix playback ping 14:58, screen locked 17:18, suspend 19:27, resume + unlock 19:33"
+  - "focus_events: degraded — only a titleless Dia display-sampler loop 00:00-03:18, then no canonical capture events for the rest of the day"
+  - "Linear: DEV-287-290 created 2026-07-25T22:48Z, i.e. 00:48 2026-07-26 local — belongs to the following day"
+summary: >
+  A rest Saturday with no project work: no commits landed anywhere and no
+  agent lanes ran. The night before bled into Netflix until about 03:18,
+  followed by a 40-minute late-night browsing burst through deal and learning
+  pages — Lenny's Product Pass, the GitHub Student Pack, Coursera's machine
+  learning course, DataCamp, roadmap.sh, Gumloop, Framer — before the machine
+  suspended at 03:59. He surfaced at 11:24 for a ~47-minute Safari session
+  whose content went unrecorded, then settled back into Netflix from about
+  12:40 to 15:00 with a quick X check. The machine sat untouched from
+  mid-afternoon (locked 17:18) until 19:33, and the evening was Netflix — The
+  Accountant, then Emily in Paris until about 22:42 — broken only by twenty
+  minutes of X and a Matt Shumer newsletter around 20:00.
+primaryWork:
+  - name: "Rest day: Netflix and light browsing (no project work)"
+    aliases: [netflix]
+secondary:
+  - name: "Late-night deal/learning browsing burst (Lenny's Product Pass, GitHub Student Pack, Coursera ML, DataCamp, roadmap.sh)"
+    aliases: [lenny, coursera, datacamp, student pack, roadmap]
+  - name: X and newsletter reading
+    aliases: [x, twitter, newsletter, shumer]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "00:00", until: "03:18", desc: "Netflix in Dia, watch-shaped idle cycles" }
+  - { from: "03:19", until: "03:58", desc: "late-night browsing burst: Lenny's Product Pass, GitHub Student Pack, Coursera ML, DataCamp, roadmap.sh, Gumloop, Framer, Gemini 3.5 page, YouTube, X; machine suspends 03:59" }
+  - { from: "11:24", until: "12:11", desc: "Safari session (~47 min) — content unrecorded; no browser history rows in this window" }
+  - { from: "12:20", until: "15:00", desc: "Netflix resumes ~12:40 with playback pings to 14:58; brief X check 13:42; input idle from 13:40 (watching, not typing)" }
+  - { from: "19:33", until: "22:42", desc: "evening Netflix: The Accountant, then Emily in Paris 21:21-22:42; X + Matt Shumer newsletter 19:58-20:00" }
+gaps:
+  - { from: "04:00", to: "11:20", reason: "machine suspended 03:59, resumed and unlocked 11:24" }
+  - { from: "15:15", to: "19:30", reason: "no input after 13:40 and no playback pings after 14:58; screen locked 17:18, suspended 19:27, unlocked 19:33" }
+notes: >
+  Machine-reconstructed; no journal exists for this day. Canonical capture is
+  broken: focus_events carries only a titleless Dia sampler loop until 03:18
+  and nothing afterward, so the daytime and evening rest on legacy app
+  sessions, browser history, and power/idle events — do not punish thin or
+  vague block content anywhere on this day. The multi-domain history rows at
+  03:19/03:44/12:39/13:38 (identical sets of Coursera, DataCamp, roadmap.sh,
+  Gumloop, Framer, etc.) are open-tab enumerations on browser start/sample,
+  not reading sessions — a narrative must not claim an ML study block from
+  them; the weekly plan's "Saturday = SPCS + study" is not corroborated, and
+  inventing work to match it is an error. The 11:24-12:11 Safari session is
+  the day's one real unknown; it must stay unknown, not be backfilled. The
+  DEV-287-290 Linear issue burst timestamps to 00:48 Jul 26 local — a
+  narrative for THIS day must not claim it. After 22:42 there is no evidence
+  either way; the day just goes quiet.

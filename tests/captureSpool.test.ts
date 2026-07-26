@@ -11,8 +11,10 @@ import { fork } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { app } from 'electron'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { ingestSpool } from '../src/main/services/captureSpool.ts'
+import { captureSpoolDir, purgeFocusCaptureSpool } from '../src/main/services/focusCapture.ts'
 
 const projectRoot = path.resolve(__dirname, '..')
 
@@ -180,5 +182,47 @@ test('ingestion is durable and exactly-once: a dead app catches up from the curs
   } finally {
     db.close()
     fs.rmSync(spoolDir, { recursive: true, force: true })
+  }
+})
+
+test('consent revocation purges spooled-but-uningested events: nothing observed outlives the decision', () => {
+  // DEV-262: the SET_CAPTURE_CONSENT decline path calls purgeFocusCaptureSpool()
+  // (via stopCaptureServices({ purgeSpool: true })) instead of draining the
+  // spool into the database. This exercises exactly that purge against the
+  // real spool location the running app uses.
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-userdata-'))
+  app.setPath('userData', userData)
+  const db = createProductionTestDatabase()
+  try {
+    const spoolDir = captureSpoolDir()
+    fs.mkdirSync(spoolDir, { recursive: true })
+    const spoolFile = path.join(spoolDir, 'spool-2026-07-25.ndjson')
+    fs.writeFileSync(spoolFile, JSON.stringify({
+      ts_ms: Date.now(),
+      mono_ns: 1,
+      event_type: 'app_activated',
+      app_bundle_id: 'dev.warp.Warp-Stable',
+      app_name: 'Warp',
+      pid: 42,
+      window_title: 'daylens — build',
+      source: 'nsworkspace_event',
+      confidence: 'observed',
+      platform: 'darwin',
+      schema_ver: 1,
+    }) + '\n')
+    fs.writeFileSync(`${spoolFile}.cursor`, '0')
+
+    purgeFocusCaptureSpool()
+
+    const leftovers = fs.readdirSync(spoolDir)
+      .filter((name) => name.endsWith('.ndjson') || name.endsWith('.cursor'))
+    assert.deepEqual(leftovers, [], 'spool files and cursors must be deleted on revocation')
+    const ingested = ingestSpool(db, spoolDir)
+    assert.equal(ingested.events, 0, 'nothing purged may reach the database afterwards')
+    const count = (db.prepare('SELECT COUNT(*) AS c FROM focus_events').get() as { c: number }).c
+    assert.equal(count, 0)
+  } finally {
+    db.close()
+    fs.rmSync(userData, { recursive: true, force: true })
   }
 })

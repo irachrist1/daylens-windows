@@ -11,6 +11,7 @@
 import type { WrappedPeriodFacts } from '@shared/types'
 import {
   formatHm,
+  gapKindPhrase,
   lowerName,
   seedFromDate,
   workActionPhrase,
@@ -183,8 +184,8 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
     fallbackLine: facts.isLeisureDay
       ? 'Mostly off the clock today.'
       : facts.activeSeconds >= 6 * 3600 ? 'A long, full day.' : facts.activeSeconds >= 3 * 3600 ? 'A solid working day.' : 'A lighter one.',
-    ask: 'One punchy opening sentence on what kind of day this was. Name the one real thing that defined it (the actual work or the true shape of the day), concretely, in plain words. No numbers, and no stack of hyphenated adjectives; a friend naming the day, not a label.',
-    factsNote: `total ${hm(facts.activeSeconds)}, work ${hm(facts.workSeconds)}, leisure ${hm(facts.leisureSeconds)}${facts.isLeisureDay ? ', mostly a rest day' : ''}${facts.workActivities[0] ? `, the day was mostly ${workActionPhrase(facts.workActivities[0].name, facts.workActivities[0].category)}` : ''}`,
+    ask: 'One punchy opening sentence on what kind of day this was. Name the one real thing that defined it, concretely, in plain words. The defining thing is the day\'s biggest TRUE thing: confirmed shipped output when the facts include it, else the day\'s through-line (the work it kept returning to), else the largest work chunk. Never crown a side activity because its name is more colorful. No numbers, and no stack of hyphenated adjectives; a friend naming the day, not a label.',
+    factsNote: `total ${hm(facts.activeSeconds)}, work ${hm(facts.workSeconds)}, leisure ${hm(facts.leisureSeconds)}${facts.isLeisureDay ? ', mostly a rest day' : ''}${(facts.threads?.length ?? 0) > 0 ? `, the day's through-line was ${facts.threads![0].name} (returned to in ${facts.threads![0].blockCount} separate blocks)` : ''}${facts.workActivities[0] ? `, the largest single chunk was ${workActionPhrase(facts.workActivities[0].name, facts.workActivities[0].category)}` : ''}`,
   })
 
   // 2 · Headline number. The stat itself IS the number; the line must ADD
@@ -201,7 +202,7 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
     ask: 'One short line under the day-total number that ADDS a real read the number does not already say. It MUST name a concrete anchor: the real work that filled the day AND where in the day its weight sat (a part of day, or this slide\'s own start/end clocks). On a rest day the concrete anchor is the real downtime: name the actual leisure surface from the facts, not a shrug; "mid-morning" or "the screen time that showed up" is not an anchor. Do not restate the total, do not write "tracked across the day" or "start to finish", do not lean on vague adjectives, and do not imply the day ran to midnight.',
     factsNote: `total ${hm(facts.activeSeconds)}, the day proper began ${startClock ?? 'unknown'}, last activity ${facts.ribbonEndClock ?? 'unknown'}${facts.isLeisureDay
       ? `. This was MOSTLY A REST DAY, so lead the read with the downtime, not the work${facts.workActivities[0] ? ` (the only real work was ${workActionPhrase(facts.workActivities[0].name, facts.workActivities[0].category)}, a small part of the day)` : ''}`
-      : facts.workActivities[0] ? `, the day's main work was ${workActionPhrase(facts.workActivities[0].name, facts.workActivities[0].category)}` : ''}${spilloverBeat ? `. (A short ${hm(spilloverBeat.seconds)} pre-dawn tail belongs to LAST night, not this day's start, so do not frame the day as running late into the night on the strength of it.)` : ''}`,
+      : (facts.threads?.length ?? 0) > 0 ? `, the day's main work was ${facts.threads![0].name}, its through-line across ${facts.threads![0].blockCount} blocks` : facts.workActivities[0] ? `, the day's main work was ${workActionPhrase(facts.workActivities[0].name, facts.workActivities[0].category)}` : ''}${spilloverBeat ? `. (A short ${hm(spilloverBeat.seconds)} pre-dawn tail belongs to LAST night, not this day's start, so do not frame the day as running late into the night on the strength of it.)` : ''}`,
   })
 
   // 2b · Coverage — what this wrap saw and what it didn't. Deterministic and
@@ -249,13 +250,16 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
   const middle: WrapSlideSpec[] = []
   const pushMiddle = (spec: WrapSlideSpec) => middle.push(spec)
 
-  // 6 · The longest unbroken stretch — the focus reveal.
+  // 6 · The longest stretch — the focus reveal. "Unbroken" and "nothing broke
+  // it" are banned vocabulary (OVERCLAIM_PATTERNS): the run is measured with
+  // small tolerances, so continuity absolutes routinely contradict the
+  // timeline's own record of peeks.
   if (facts.standout) {
     pushMiddle({
-      id: 'focus', kind: 'stat', kicker: 'Your longest unbroken stretch',
+      id: 'focus', kind: 'stat', kicker: 'Your longest stretch',
       stat: { value: hm(facts.standout.seconds), seconds: facts.standout.seconds, sublabel: `${facts.standout.name} · ${facts.standout.startClock} to ${facts.standout.endClock}` },
-      fallbackLine: `${hm(facts.standout.seconds)} straight on ${lowerName(facts.standout.name)}, ${facts.standout.startClock} to ${facts.standout.endClock}. Nothing broke it.`,
-      ask: 'The longest unbroken stretch of the day. Do not just state the duration (it is on the card); lead with what that run MEANT: the deepest unbroken run of the day, the one thing nothing interrupted, or when in the day that kind of depth landed. Name the real work being done. Never write "focus" or "focused"; the unbroken time is the fact, attention is not observable.',
+      fallbackLine: `${hm(facts.standout.seconds)} on ${lowerName(facts.standout.name)}, ${facts.standout.startClock} to ${facts.standout.endClock}, the longest single run of the day.`,
+      ask: 'The day\'s longest single run on one thing. Do not just state the duration (it is on the card); lead with what that run MEANT: the day\'s deepest stretch, the real work being done in it, or when in the day that kind of depth landed. Brief detours may sit inside the run, so never claim it was unbroken, uninterrupted, or that nothing broke it. Never write "focus" or "focused"; the stretch is the fact, attention is not observable.',
       factsNote: `${hm(facts.standout.seconds)} on ${facts.standout.name}, ${facts.standout.startClock} to ${facts.standout.endClock}`,
     })
   }
@@ -279,7 +283,10 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
       bars: facts.appSites.map((s) => ({ name: s.name, seconds: s.seconds })),
       fallbackLine: `${facts.appSites[0].name} led the day.`,
       ask: 'One short caption for the app and site chart, a read on its SHAPE (concentrated in one or two tools, or spread thin), and NAME at least one real app or site from the chart. Never add up or compare the bar values numerically and never claim one nearly matched another; the chart already shows the sizes.',
-      factsNote: facts.appSites.map((s) => `${s.name} ${hm(s.seconds)}`).join(', '),
+      // The remainder bucket stays on the rendered bars (the chart must sum to
+      // the headline) but never reaches the writer — "Other" is chart
+      // plumbing, not a nameable surface of the day.
+      factsNote: facts.appSites.filter((s) => s.kind !== 'other').map((s) => `${s.name} ${hm(s.seconds)}`).join(', '),
     })
   }
 
@@ -338,6 +345,60 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
       fallbackLine: `${hm(facts.meetingsSeconds)} went to meetings and calls.`,
       ask: 'One line on the meeting time, plain and factual.',
       factsNote: `meetings ${hm(facts.meetingsSeconds)} of ${hm(facts.workSeconds)} work`,
+    })
+  }
+
+  // 12b · The day's real holes — gaps are facts (day-recap-and-analysis.md).
+  // The biggest untracked stretch gets the card; every 45m+ gap rides in the
+  // facts so the prose can tell the truth instead of implying a continuous
+  // grind. Deterministic fallback says it plainly, with the calendar match
+  // when the day's schedule explains the hole.
+  const gapFacts = facts.gaps ?? []
+  if (gapFacts.length > 0) {
+    // A 'passive' gap is screen ON, hands off — headlining it "Off the
+    // screen" contradicts its own phrase. The card prefers the biggest gap
+    // that really was time away; only a day whose every gap is passive gets
+    // the passive card, honestly titled.
+    const awayGaps = gapFacts.filter((gap) => gap.kind !== 'passive')
+    const biggest = (awayGaps.length > 0 ? awayGaps : gapFacts)
+      .reduce((a, b) => (b.minutes > a.minutes ? b : a))
+    const passive = biggest.kind === 'passive'
+    const gapSeconds = Math.round((biggest.toMs - biggest.fromMs) / 1000)
+    const phrase = gapKindPhrase(biggest.kind)
+    pushMiddle({
+      id: 'away', kind: 'stat', kicker: passive ? 'Screen on, hands off' : 'Off the screen',
+      stat: {
+        value: hm(gapSeconds),
+        seconds: gapSeconds,
+        sublabel: `${biggest.fromClock} to ${biggest.toClock}${biggest.matchesEvent ? ` · ${biggest.matchesEvent}` : ''}`,
+      },
+      fallbackLine: `${biggest.fromClock} to ${biggest.toClock} ${phrase}${biggest.matchesEvent ? `, matching "${biggest.matchesEvent}" on your calendar` : ''}.`,
+      ask: `The day had a real hole: ${biggest.fromClock} to ${biggest.toClock} ${phrase}. One plain line that owns it as part of the day's shape${biggest.matchesEvent ? `, naming the calendar event it matches ("${biggest.matchesEvent}")` : '. Daylens does not know what happened during it, so never guess an activity for it'}; time away needs no defense and no apology.`,
+      factsNote: gapFacts.map((gap) =>
+        `${gap.fromClock} to ${gap.toClock} (${hm(Math.round((gap.toMs - gap.fromMs) / 1000))}) ${gapKindPhrase(gap.kind)}${gap.matchesEvent ? `, matches calendar event "${gap.matchesEvent}"` : ''}`,
+      ).join('; '),
+    })
+  }
+
+  // 12c · The through-line — a subject that recurred across 3+ blocks over 3+
+  // hours is the day's real shape (day-recap-and-analysis.md "Day threads").
+  const threadFacts = facts.threads ?? []
+  const thread = threadFacts[0]
+  if (thread) {
+    // The stat is the RETURN COUNT, not a duration: a thread's membership
+    // includes blocks where the subject was secondary evidence, and those
+    // blocks' time belongs to their own headline work.
+    pushMiddle({
+      id: 'daythread', kind: 'stat', kicker: 'The through-line',
+      stat: {
+        value: String(thread.blockCount),
+        sublabel: `separate blocks of ${thread.name} · ${thread.fromClock} to ${thread.toClock}`,
+      },
+      fallbackLine: `${thread.name} ran through the day: ${thread.blockCount} separate blocks between ${thread.fromClock} and ${thread.toClock}.`,
+      ask: `${lowerName(thread.name)} was not one sitting: it came back in ${thread.blockCount} separate blocks between ${thread.fromClock} and ${thread.toClock}. One line on that shape — the thing the day kept returning to — without judging the interleaving as good or bad.`,
+      factsNote: threadFacts.map((t) =>
+        `${t.name}: ${t.blockCount} blocks, ${t.fromClock} to ${t.toClock}${t.seconds >= 5 * 60 ? `, ${hm(t.seconds)} where it was the main work` : ''}`,
+      ).join('; '),
     })
   }
 
@@ -494,10 +555,10 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
     const when = [facts.longestStretch.dayLabel, facts.longestStretch.startClock ? `from ${facts.longestStretch.startClock}` : null].filter(Boolean).join(', ')
     const label = looksLikeRawArtifactLabel(facts.longestStretch.label) ? null : facts.longestStretch.label
     out.push({
-      id: 'focus', kind: 'stat', kicker: 'Your longest unbroken stretch',
+      id: 'focus', kind: 'stat', kicker: 'Your longest stretch',
       stat: { value: hm(facts.longestStretch.seconds), seconds: facts.longestStretch.seconds, sublabel: [label, when].filter(Boolean).join(' · ') },
-      fallbackLine: `${hm(facts.longestStretch.seconds)} without breaking, ${when}.`,
-      ask: `The single longest unbroken stretch of the ${noun}: ${when}${label ? `, on ${label}` : ''}. Do not just state the duration (it is on the card); lead with what that run meant and the real work in it. This is the one to be a little proud of.`,
+      fallbackLine: `${hm(facts.longestStretch.seconds)} in one run, ${when}.`,
+      ask: `The single longest stretch of the ${noun}: ${when}${label ? `, on ${label}` : ''}. Do not just state the duration (it is on the card); lead with what that run meant and the real work in it. Brief detours may sit inside it, so never claim it was unbroken or uninterrupted. This is the one to be a little proud of.`,
       factsNote: `${hm(facts.longestStretch.seconds)}${label ? ` on ${label}` : ''}, ${when}`,
     })
   }

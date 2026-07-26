@@ -27,10 +27,9 @@ import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
 import { FileAccessSection } from './settings/FileAccessSection'
 import { ScreenContextSection } from './settings/ScreenContextSection'
 import { ContextPacketSection } from './settings/ContextPacketSection'
-import { ConnectionsSection } from './settings/ConnectionsSection'
 import { ExportSection } from './settings/ExportSection'
 import { track } from '../lib/analytics'
-import { setPendingChatSeed } from '../lib/aiSeed'
+import { MEMORY_CHAT_SEED_PROMPT, setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
 import type { DaylensSemanticSearchStatus, UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
@@ -1090,7 +1089,7 @@ function TrackingControlsContent({
         <SettingsRow
           first
           title="Activity capture is off"
-          description="Allow Daylens to record foreground apps, window titles, active browser pages, and machine state on this computer. Private windows, screenshots, audio, keystrokes, message bodies, and file contents are never captured."
+          description="Let Daylens record which apps, window titles, and pages you use, and when your machine is active. It never captures private windows, screenshots, audio, keystrokes, message contents, or file contents."
           control={(
             <button
               type="button"
@@ -1113,16 +1112,16 @@ function TrackingControlsContent({
       <SettingsRow
         first={consentCurrent}
         title="Pause tracking"
-        description="Temporarily stop recording all activity. Stays paused until you turn it back on, even after a restart."
+        description="Stop recording until you turn it back on, even across restarts."
         control={<Toggle checked={settings.trackingPaused ?? false} onChange={(value) => void persist({ trackingPaused: value })} />}
       />
       <SettingsRow
         title="Private / incognito windows"
-        description="Never recorded. Daylens keeps nothing from a browser's private or incognito window — no URL, page title, or session. This protection is always on and cannot be turned off."
+        description="Never recorded. This protection is always on and cannot be turned off."
       />
       <SettingsRow
         title="Limit what's tracked"
-        description="Off by default — Daylens records everything. Turn this on to keep specific apps and sites out of your history and AI answers."
+        description="Keep specific apps and sites out of your history and AI answers. Excluding one also deletes its activity history."
         control={<Toggle checked={enabled} onChange={(value) => void persist({ trackingControlsEnabled: value })} />}
       />
       {enabled && (
@@ -1157,7 +1156,7 @@ function TrackingControlsContent({
 type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory' | 'entities' | 'fileAccess'
-  | 'labels' | 'clients' | 'connections' | 'privacy' | 'screenContext' | 'export'
+  | 'labels' | 'clients' | 'privacy' | 'screenContext' | 'export'
   | 'mcp' | 'enrichment' | 'capture' | 'updates' | 'help'
 
 interface SectionDef { id: SectionId; label: string; keywords: string }
@@ -1179,7 +1178,9 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
       { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you what the ai saw context packet disclosure' },
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
-      { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed' },
+      { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed granola meeting notes terminal commands capability' },
+      { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
+      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
     ],
   },
   {
@@ -1187,19 +1188,16 @@ const SECTION_GROUPS: SectionGroup[] = [
     items: [
       { id: 'labels', label: 'Labels', keywords: 'category app override propagate zen browsing' },
       { id: 'clients', label: 'Clients', keywords: 'project attribution company work' },
-      { id: 'connections', label: 'Connections', keywords: 'connector connected sources external google calendar outlook github linear granola ics import sync disconnect scopes' },
       { id: 'privacy', label: 'Privacy & tracking', keywords: 'pause exclude excluded incognito private analytics local data' },
+      { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples diagnostics' },
       { id: 'screenContext', label: 'Screen context', keywords: 'experiment screenshot screen capture sample frame ocr consent opt-in backlog quarantine retry delete wipe' },
       { id: 'export', label: 'Export your data', keywords: 'export download backup take your data portability history json jsonl csv manifest verify complete local' },
     ],
   },
   {
-    label: 'System',
+    label: 'Application',
     items: [
-      { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
-      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
-      { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples' },
-      { id: 'updates', label: 'Updates', keywords: 'version install download release' },
+      { id: 'updates', label: 'Updates', keywords: 'version install download release changelog' },
       { id: 'help', label: 'Help & support', keywords: 'chat support contact message question bug feedback talk intercom' },
     ],
   },
@@ -1225,7 +1223,6 @@ function SectionIcon({ id }: { id: SectionId }) {
     fileAccess: <><path d="M3 2.6h6l3 3v7.8H3Z" /><path d="M9 2.6v3h3" /><rect x="6" y="8" width="4" height="3.2" rx="0.8" /><path d="M7 8V7a1 1 0 0 1 2 0v1" /></>,
     labels: <><path d="M2.6 7.4 7.2 2.8h4.2v4.2L6.8 11.6Z" /><circle cx="9.4" cy="5.6" r="0.85" fill="currentColor" stroke="none" /></>,
     clients: <><rect x="2.3" y="5" width="11.4" height="7.6" rx="1.2" /><path d="M6 5V3.6h4V5" /></>,
-    connections: <><path d="M6.8 9.2 9.2 6.8" /><path d="M7.6 4.4 9 3a2.4 2.4 0 0 1 3.4 3.4l-1.4 1.4" /><path d="M8.4 11.6 7 13a2.4 2.4 0 0 1-3.4-3.4L5 8.2" /></>,
     privacy: <path d="M8 1.9 13 3.7v4.1c0 3-2.2 5-5 6.3-2.8-1.3-5-3.3-5-6.3V3.7Z" />,
     screenContext: <><rect x="2" y="3" width="12" height="8.4" rx="1.4" /><path d="M5.6 13.4h4.8" /><circle cx="8" cy="7.2" r="1.7" /></>,
     export: <><path d="M8 9.8V2.8" /><path d="M5.2 5.4 8 2.6l2.8 2.8" /><path d="M3 9.6v3.2h10V9.6" /></>,
@@ -2275,7 +2272,10 @@ function UsagePage() {
           <tbody>
             {(report?.rows ?? []).slice(0, 200).map((row) => (
               <tr key={row.id} style={{ borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-secondary)' }}>
-                <td style={{ padding: '11px 14px' }}>{new Date(row.occurredAt).toLocaleString()}</td>
+                {/* DEV-249: the timestamp must never wrap or truncate — nowrap
+                    forces the column to its content width and the wrapper's
+                    horizontal scroll carries the overflow. */}
+                <td style={{ padding: '11px 14px', whiteSpace: 'nowrap' }}>{new Date(row.occurredAt).toLocaleString()}</td>
                 <td style={{ padding: '11px 14px' }}>{formatJobFeature(row.feature)}</td>
                 <td style={{ padding: '11px 14px' }}>{formatUsageType(row.type)}</td>
                 <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
@@ -3131,6 +3131,14 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             onConnected={() => { void refreshAIAccess() }}
             onModelChange={() => { void refreshAIAccess() }}
           />
+          <div style={{ display: 'grid', gap: 0, marginTop: 22 }}>
+            <SettingsRow
+              first
+              title="Interpretation agent"
+              description="Day analysis may pull extra context (titles, calendar, git) before naming low-confidence blocks."
+              control={<Toggle checked={settings.interpretationAgentEnabled ?? false} onChange={(value) => void persist({ interpretationAgentEnabled: value })} />}
+            />
+          </div>
         </SectionPage>
       )
       break
@@ -3142,7 +3150,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <button
                 type="button"
                 onClick={() => {
-                  setPendingChatSeed("I want to talk about my work patterns and what you know about me — let's start there.")
+                  setPendingChatSeed(MEMORY_CHAT_SEED_PROMPT)
                   navigate('/ai')
                 }}
                 style={{ ...inlineButtonStyle, background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: 'none' }}
@@ -3565,9 +3573,23 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Agent file access"
-          description="Control which files the AI may read. Observed activity is always on; contents need an explicit grant."
+          description="Choose what the AI can reach on this machine. It always sees which files were open; file contents, meeting notes, and commands each need your say-so."
           maxWidth={760}
         >
+          <div style={{ marginBottom: 22 }}>
+            <GroupLabel>Capabilities</GroupLabel>
+            <SettingsRow
+              first
+              title="Granola meeting notes"
+              description="When on, the AI can read the meeting notes stored in Granola's local cache on this machine and quote them in answers."
+              control={<Toggle checked={settings.granolaAccessEnabled !== false} onChange={(value) => void persist({ granolaAccessEnabled: value })} />}
+            />
+            <SettingsRow
+              title="Terminal access"
+              description="When on, the AI can run read-only commands from a fixed allowlist (like git log) and see their output. Off by default; the first use each session still asks you."
+              control={<Toggle checked={settings.terminalAccessEnabled ?? false} onChange={(value) => void persist({ terminalAccessEnabled: value })} />}
+            />
+          </div>
           <FileAccessSection />
         </SectionPage>
       )
@@ -3576,7 +3598,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Screen context"
-          description="An opt-in experiment: fleeting screen snapshots, read once for useful details and then destroyed — everything stays on this machine, and you can leave and wipe it all at any time."
+          description="An opt-in experiment. Screen snapshots are read once for useful details, then destroyed. Everything stays on this machine."
           maxWidth={760}
         >
           <ScreenContextSection />
@@ -3591,17 +3613,6 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           maxWidth={760}
         >
           <ExportSection />
-        </SectionPage>
-      )
-      break
-    case 'connections':
-      content = (
-        <SectionPage
-          title="Connections"
-          description="External sources that will add what this machine can't see — meetings, commits, issues. Every connection is read-only, consent-gated, and fully disconnectable; each becomes connectable here as its adapter ships."
-          maxWidth={760}
-        >
-          <ConnectionsSection />
         </SectionPage>
       )
       break
@@ -4074,7 +4085,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'privacy':
       content = (
-        <SectionPage title="Privacy & tracking" description="Decide what Daylens sees. Your history stays on this machine, and exclusions are honored everywhere — including data already captured before you excluded them.">
+        <SectionPage title="Privacy & tracking" description="Decide what Daylens records. Everything stays on this machine.">
           <div style={{ display: 'grid', gap: 24 }}>
             <div>
               <GroupLabel>Preferences</GroupLabel>
@@ -4089,7 +4100,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <SettingsRow
                 first
                 title="Analytics"
-                description="Anonymous product telemetry — event names and counts only. No titles, URLs, or file paths ever leave this machine."
+                description="Anonymous event counts only. No titles, URLs, or file paths ever leave this machine."
                 control={<StatusPill label="Anonymous" />}
               />
               <SettingsRow
@@ -4099,7 +4110,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               />
               <SettingsRow
                 title="Reset and uninstall"
-                description="Remove Daylens from this computer: the launch-at-login entry is cleared, and you choose whether your local data is deleted or kept."
+                description="Remove Daylens from this computer. You choose whether your local data is deleted or kept."
                 control={(
                   <button
                     type="button"

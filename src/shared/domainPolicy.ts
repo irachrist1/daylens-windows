@@ -33,6 +33,7 @@ const HOST_RULES: Map<string, DomainPolicyCategory> = new Map([
   ['spotify.com', 'entertainment'],
   ['soundcloud.com', 'entertainment'],
   ['vimeo.com', 'entertainment'],
+  ['goojara.to', 'entertainment'],
 ])
 
 function normalizeHost(host: string | null | undefined): string | null {
@@ -54,6 +55,12 @@ export function policyForHost(host: string | null | undefined): DomainPolicyCate
   }
 
   return null
+}
+
+/** Every host the rail/label policy knows, for guard checks that need the
+ *  brand list itself (e.g. "does this stored label name a leisure service?"). */
+export function policyBlockedHosts(): string[] {
+  return [...HOST_RULES.keys()]
 }
 
 // Kept as named policy points so call sites stay stable if categories evolve.

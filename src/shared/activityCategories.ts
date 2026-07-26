@@ -30,3 +30,23 @@ export function activityCategoryLabel(
   if (category === 'uncategorized' && options.uncategorized) return options.uncategorized
   return ACTIVITY_CATEGORY_LABELS[category] ?? String(category)
 }
+
+const CANONICAL_CATEGORY_BY_LOWER: Record<string, AppCategory> = Object.fromEntries(
+  (Object.entries(ACTIVITY_CATEGORY_LABELS) as Array<[AppCategory, string]>).flatMap(
+    ([canonical, label]) => [
+      [canonical.toLowerCase(), canonical],
+      [label.toLowerCase(), canonical],
+    ],
+  ),
+) as Record<string, AppCategory>
+
+/** Canonicalize a stored category string. Rows written before the vocabulary
+ *  settled carry display forms ("AI Tools", "Browsing", "Uncategorized"); every
+ *  kind/intent rule compares against the canonical enum, so an un-normalized
+ *  read silently demotes hours of development to "personal". Unknown strings
+ *  resolve to 'uncategorized' rather than throwing — a category is a hint,
+ *  never worth failing a read over. */
+export function canonicalAppCategory(raw: string | null | undefined): AppCategory {
+  if (!raw) return 'uncategorized'
+  return CANONICAL_CATEGORY_BY_LOWER[raw.trim().toLowerCase()] ?? 'uncategorized'
+}

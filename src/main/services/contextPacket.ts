@@ -48,12 +48,12 @@ import {
   type FileSensitivity,
 } from './fileAccess'
 import { getScopedMemoryProfile } from './workMemoryProfile'
+import { extractGranolaTranscript, getGranolaConnection } from './granolaCache'
 import {
   browserPageCoverageNoteText,
   getCorrectedPageFactsForRange,
   hasMaterialPageCoverageShortfall,
 } from './activityFacts'
-import { extractTranscriptText as extractGranolaTranscript } from '../connectors/granola/cache'
 
 /** Bump when the assembly rules change; part of every packet and fingerprint,
  *  so two packets are only comparable under the same policy. */
@@ -650,18 +650,15 @@ function granolaTranscriptItems(
   // The explicit-need gate: no transcript-shaped question, no retrieval —
   // not even a file read happens.
   if (!TRANSCRIPT_REQUEST_RE.test(question)) return []
+  // The SAME policy switch the read_meeting_notes tool enforces
+  // (contextTools.ts): Granola access off means no meeting content reaches a
+  // prompt through ANY path — the packet must not ship what the tool refuses.
+  if (getSettings().granolaAccessEnabled === false) return []
   const items: ContextPacketItem[] = []
   try {
-    const connection = db.prepare(
-      `SELECT status, config_json FROM connector_connections WHERE connector_id = 'granola'`,
-    ).get() as { status: string; config_json: string } | undefined
-    if (!connection || connection.status === 'disconnected') return []
-    let cachePath: string | null = null
-    try {
-      const config = JSON.parse(connection.config_json) as { cachePath?: unknown }
-      cachePath = typeof config.cachePath === 'string' && config.cachePath.trim() ? config.cachePath : null
-    } catch { /* no readable config */ }
-    if (!cachePath) return []
+    const connection = getGranolaConnection(db)
+    if (!connection) return []
+    const cachePath = connection.cachePath
 
     const tokens = questionTokens(question)
     const marks = dates.map(() => '?').join(', ')
@@ -934,6 +931,7 @@ export function renderContextPacketForAgent(packet: ContextPacket): string {
     sections.push(
       `Context packet ${packet.id} — assembled locally from your corrected Daylens data for ${packet.request.dates.join(', ')} before this request; every item below is recorded in the local disclosure ledger. Treat it as orienting context and verify specifics with tools.`,
       'Citing: every packet item below carries a marker like [C3]. When a claim in your answer comes from a packet item, append that item\'s marker immediately after the claim (e.g. "The morning went to the planner refactor [C1]."). Use only markers printed below — never invent one. Claims grounded in this turn\'s tool results need no marker.',
+      'Leads vs facts: items under "Moments similar by meaning" are semantic leads, NOT confirmed facts. Before asserting one as something that happened, verify it with a tool (search or moment); otherwise phrase it as a lead ("a chat that looks like…") or leave it out. The same holds for any inference the packet itself does not state: never present a guess about why something is absent as an observation.',
     )
     for (const kind of Object.keys(KIND_ORDER) as ContextItemKind[]) {
       const lines: string[] = []

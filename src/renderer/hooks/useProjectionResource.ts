@@ -60,6 +60,7 @@ export function useProjectionResource<T>({
   const serializedRef = useRef<string | null>(null)
   const inFlightRef = useRef<Promise<void> | null>(null)
   const pendingRefreshRef = useRef(false)
+  const skippedWhileHiddenRef = useRef(false)
   // Callers typically pass `load` as an inline function, so its identity changes
   // every render. Keep the latest in a ref so `refresh` stays stable — otherwise
   // the mount effect would re-fire every render, flooding IPC and leaking memory.
@@ -72,7 +73,15 @@ export function useProjectionResource<T>({
 
   const refresh = useCallback(async () => {
     if (!enabled) return
-    if (pauseWhenHidden && document.hidden) return
+    if (pauseWhenHidden && document.hidden) {
+      // Remember the skipped refresh so the visibilitychange effect below can
+      // run it when the window is shown again. Without this, a view mounted
+      // while the window was hidden/occluded kept `loading` forever — a past
+      // date has no poll interval, so nothing else would ever retry and the
+      // view sat on skeletons with its data one IPC call away.
+      skippedWhileHiddenRef.current = true
+      return
+    }
 
     if (inFlightRef.current) {
       pendingRefreshRef.current = true
@@ -137,6 +146,17 @@ export function useProjectionResource<T>({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, ...dependencies])
+
+  useEffect(() => {
+    if (!enabled || !pauseWhenHidden) return
+    const onVisibilityChange = () => {
+      if (document.hidden || !skippedWhileHiddenRef.current) return
+      skippedWhileHiddenRef.current = false
+      void refresh()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [enabled, pauseWhenHidden, refresh])
 
   useEffect(() => {
     if (!enabled) return

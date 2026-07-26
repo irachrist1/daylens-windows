@@ -13,6 +13,7 @@ import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import type { AIWrappedNarrative, DayEnrichment } from '@shared/types'
 import {
   formatHm,
+  gapKindPhrase,
   lowerName,
   workActionPhrase,
   type DayWrapFacts,
@@ -72,7 +73,16 @@ export function enrichmentAllowedCounts(enrichment: DayEnrichment | null | undef
   const counts = new Set<string>()
   if (!enrichment) return counts
   let commitTotal = 0
-  for (const c of enrichment.shipped?.commitsByProject ?? []) { counts.add(`commits:${c.commits}`); commitTotal += c.commits }
+  for (const c of enrichment.shipped?.commitsByProject ?? []) {
+    counts.add(`commits:${c.commits}`)
+    commitTotal += c.commits
+    // The agent-driven share and its complement are both citable ("24 landed
+    // via agents", "25 by hand").
+    if (typeof c.viaAgents === 'number' && c.viaAgents > 0) {
+      counts.add(`commits:${c.viaAgents}`)
+      counts.add(`commits:${c.commits - c.viaAgents}`)
+    }
+  }
   if (commitTotal > 0) counts.add(`commits:${commitTotal}`)
   let prTotal = 0
   for (const p of enrichment.shipped?.pullRequests ?? []) { counts.add(`prs:${p.count}`); prTotal += p.count }
@@ -92,7 +102,7 @@ export function enrichmentAllowedCounts(enrichment: DayEnrichment | null | undef
 /** Bumped whenever the day wrap's prompt semantics change (directives,
  *  contract, slide asks), so a stored analysis version records WHICH prompt
  *  produced it (DEV-206: reproducible, inspectable versions). */
-export const DAY_WRAP_PROMPT_VERSION = 1
+export const DAY_WRAP_PROMPT_VERSION = 2
 
 export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment | null): string {
   const bucket = (s: number) => Math.round(s / 60)
@@ -110,6 +120,19 @@ export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment
     wildcard: facts.wildcardHook ? [facts.wildcardHook.kind, facts.wildcardHook.value] : null,
     story: facts.dayStory.map((seg) => [seg.part, seg.items.map((i) => i.toLowerCase()), bucket(seg.seconds)]),
     entities: (facts.entities ?? []).map((e) => [e.type, e.name.toLowerCase(), bucket(e.seconds)]),
+    // Gap and thread facts are day facts like any other: a gap appearing (or a
+    // calendar match resolving) or a thread forming reflows the wrap. The keys
+    // enter the canonical form ONLY when non-empty — every day stored before
+    // gaps/threads existed hashed without them, and unconditional keys would
+    // silently regenerate (one AI call each) every historical day that has
+    // neither. A day genuinely gaining gap/thread facts regenerates once,
+    // which is the point.
+    ...((facts.gaps ?? []).length > 0
+      ? { gaps: facts.gaps!.map((g) => [g.kind, bucket(Math.round((g.toMs - g.fromMs) / 1000)), g.matchesEvent?.toLowerCase() ?? null]) }
+      : {}),
+    ...((facts.threads ?? []).length > 0
+      ? { threads: facts.threads!.map((t) => [t.name.toLowerCase(), t.blockCount, bucket(t.seconds)]) }
+      : {}),
     enrichment: enrichmentFingerprint(enrichment),
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 12)
@@ -178,7 +201,12 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
       mostlyRest: facts.isLeisureDay,
     },
     workedOn: facts.workActivities.map((a) => ({ what: workActionPhrase(a.name, a.category), time: formatHm(a.seconds) })),
-    whereTheTimeWent: facts.appSites.map((s) => ({ name: s.name, time: formatHm(s.seconds) })),
+    // The chart's remainder bucket is presentation plumbing, not a day fact —
+    // fed to the model it produces lines about "the catch-all of everything
+    // else" / "somewhere the chart calls Other" instead of the day.
+    whereTheTimeWent: facts.appSites
+      .filter((s) => s.name.toLowerCase() !== 'other')
+      .map((s) => ({ name: s.name, time: formatHm(s.seconds) })),
     story: storyBeats,
     longestStretch: facts.standout
       ? { time: formatHm(facts.standout.seconds), on: facts.standout.name, from: `${facts.standout.startClock} to ${facts.standout.endClock}` }
@@ -188,6 +216,36 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
     // the activity labels above.
     ...((facts.entities?.length ?? 0) > 0
       ? { dayWasAbout: facts.entities!.map((e) => ({ name: e.name, kind: e.type, time: formatHm(e.seconds) })) }
+      : {}),
+    // Gaps are facts (day-recap-and-analysis.md): real 45m+ holes in the
+    // day's span, with clock bounds and the calendar event that explains one
+    // when the schedule knows it. The prose says these plainly instead of
+    // implying a continuous grind; what happened off-screen is never guessed.
+    ...((facts.gaps?.length ?? 0) > 0
+      ? {
+          awayFromScreen: facts.gaps!.map((gap) => ({
+            from: gap.fromClock,
+            to: gap.toClock,
+            for: formatHm(Math.round((gap.toMs - gap.fromMs) / 1000)),
+            what: gapKindPhrase(gap.kind),
+            ...(gap.matchesEvent ? { matchesCalendar: gap.matchesEvent } : {}),
+          })),
+        }
+      : {}),
+    // Day threads: a subject that recurred across 3+ blocks spanning 3+
+    // hours — the day's real through-line, so interleaving is told honestly
+    // ("Daylens ran through the whole day") instead of as fragments.
+    ...((facts.threads?.length ?? 0) > 0
+      ? {
+          dayThreads: facts.threads!.map((t) => ({
+            thread: t.name,
+            returnedToIn: `${t.blockCount} separate blocks`,
+            between: `${t.fromClock} and ${t.toClock}`,
+            // Time only where the thread was the block's own headline work; a
+            // secondary appearance proves recurrence, never claims the time.
+            ...(t.seconds >= 5 * 60 ? { timeAsMainWork: formatHm(t.seconds) } : {}),
+          })),
+        }
       : {}),
     topLeisure: facts.topLeisure,
     // What the window titles say was actually being done in each app — the
@@ -242,11 +300,12 @@ function enrichmentDirectives(enrichment: DayEnrichment | null | undefined): str
     'SOME FACTS COME FROM OUTSIDE THE SCREEN TIME. The facts may include "shipped" (real git commits and pull requests, by project), "meetings" (calendar events with titles and scheduled lengths), and "focusSessions" (focus-timer runs). They are real and specific; use them to say what was PRODUCED, not only what was open. They carry no clock times, so write none for them. Copy every duration exactly and never invent a count.',
   ]
   if (enrichment.shipped) {
-    out.push('"shipped" names the work the day produced. Say what was committed and to which project using the humanized project names in shipped.commitsByProject (for example "wrote 9 commits to the billing service"), draw on shipped.highlights to describe what was actually built in plain words, and note a pull request opened, merged, closed, or left a draft from shipped.pullRequests. Use the EXACT commit and pull-request counts the facts give you, never a different number. A commit is a commit and a pull request is a pull request; do not upgrade it into a shipped feature or invent what the code did beyond what the facts say. Never print a filename, path, folder, or branch; the project name and the highlight phrasing are the only code identifiers you may write, and you must phrase highlights as human work, never paste them verbatim as a label.')
-    out.push('When "shipped" is present it is one of the day\'s headlines, not a footnote: name what actually got finished plainly in at least one prominent place (the headline read, the story beat it happened in, or the reflection). Confirmed output is the most satisfying true thing a recap can say; say it where it lands.')
+    out.push('"shipped" names the work the day produced. Say what was committed and to which project using the humanized project names in shipped.commitsByProject (for example "shipped 9 commits to the billing service"), draw on shipped.highlights to describe what was actually built in plain words, and note a pull request opened, merged, closed, or left a draft from shipped.pullRequests. Use the EXACT commit and pull-request counts the facts give you, never a different number. A commit is a commit and a pull request is a pull request; do not upgrade it into a shipped feature or invent what the code did beyond what the facts say. Never print a filename, path, folder, or branch; the project name and the highlight phrasing are the only code identifiers you may write, and you must phrase highlights as human work, never paste them verbatim as a label.')
+    out.push('ATTRIBUTION HONESTY FOR COMMITS. Commits are verified OUTPUT, not keyboard time: much of this person\'s code lands through coding agents they drive. Write "shipped", "landed", "went in", never "you wrote N commits" or "you typed" as if each was hand-typed. When an entry carries a "spread" (part-of-day words for when its commits landed), use it to tell the day\'s real story: commits landing in a part of the day whose screen time shows browsing, leisure, or nothing at all mean the work LANDED while the person was elsewhere, so say that plainly ("the release wave kept landing through the evening while the screen sat on X"), and never rewrite that stretch as heads-down coding. When an entry carries "viaAgents", that many of its commits landed through coding agents the person was driving, a real, tellable part of how they work ("24 of the 73 landed through agents").')
+    out.push('When "shipped" is present it is THE day\'s headline fact, not a footnote: confirmed output outranks every screen-time observation, because it is the one thing the day provably produced. The opening line names it or gestures at it, AND the reflection MUST state it plainly with the real commit count and project ("49 commits to Daylens, including the v1.0.37 release", using YOUR facts, never this example). A recap that buries real shipped work under browsing observations is wrong even if every other line is accurate.')
   }
   if (enrichment.meetings) {
-    out.push('"meetings" is the day\'s honest meeting report. Every item carries an "attendance" flag and you MUST respect it. "matched": the calendar event has real meeting-app evidence behind it — you may say the meeting happened and use its title naturally ("the design review ran 52m of call time"). "captured_only": real time in a meeting app with NO calendar event — a meeting that happened; name it by the app in its title ("a Zoom call") and its observed length, never invent a subject for it. "calendar_only": a calendar entry with NO evidence it happened — scheduled context ONLY, anchored to the calendar ("your calendar had the design review"), NEVER as attendance ("you attended", "you sat through", "you went to") and never as work done. meetings.count is the total across all three; meetings.matched / meetings.calendarOnly / meetings.capturedOnly are the per-bucket counts and you may cite them ("two of the three on your calendar actually happened"). Never state an attendee count. An item\'s "scheduled" length is the calendar\'s plan and its "observed" length is measured meeting-app time — different facts; copy either exactly, never add lengths together, and never claim a meeting total that disagrees with the meetings slide\'s own card.')
+    out.push('"meetings" is the day\'s honest meeting report. Every item carries an "attendance" flag and you MUST respect it. "matched": the calendar event has real meeting-app evidence behind it, so you may say the meeting happened and use its title naturally ("the design review ran 52m of call time"). "captured_only": real time in a meeting app with NO calendar event, a meeting that happened; name it by the app in its title ("a Zoom call") and its observed length, never invent a subject for it. "calendar_only": a calendar entry with NO evidence it happened, scheduled context ONLY, anchored to the calendar ("your calendar had the design review"), NEVER as attendance ("you attended", "you sat through", "you went to") and never as work done. meetings.count is the total across all three; meetings.matched / meetings.calendarOnly / meetings.capturedOnly are the per-bucket counts and you may cite them ("two of the three on your calendar actually happened"). Never state an attendee count. An item\'s "scheduled" length is the calendar\'s plan and its "observed" length is measured meeting-app time, which are different facts; copy either exactly, never add lengths together, and never claim a meeting total that disagrees with the meetings slide\'s own card.')
     // event-type inference: each item carries a `type` + `confidence` (Daylens's
     // own read of what the event was). High confidence unlocks richer phrasing;
     // low confidence or 'generic' stays literal. Never invent a type, never
@@ -280,7 +339,7 @@ export function buildWrappedPrompts(facts: DayWrapFacts, enrichment?: DayEnrichm
     'THE REGISTER, by example (never copy these, match their honesty): "Tuesday morning you went straight into the code and stayed there for two and a half hours before your first break." / "The meeting ran through lunch and you built through it anyway." / "YouTube got 44 minutes and honestly, it sat in the middle of a heavy day, so it reads like a breather, not a leak." / "That proposal did not exist this morning. By evening it did."',
     'IN A STORY BEAT, CHOOSE, DO NOT ENUMERATE. Name at most the two biggest things from that part of the day, plus at most one leisure aside. Listing three or more activities in one line reads like a report and runs too long; pick the ones that mattered and let the rest go.',
     'If the user profile gives their first name, use it naturally on one or two slides at most, like a friend would, especially when giving earned credit.',
-    'EARNED PRAISE IS ALLOWED and welcome when the facts back it: a long unbroken stretch, a full honest day, a thing shipped. Say it plainly, with their name if you have it. You may end AT MOST ONE line in the whole deck with a single celebratory emoji from this set: 🏆 🔥 🌙 🎯 ☕ ✨. Never more than one emoji total, never mid-sentence, never unearned.',
+    'EARNED PRAISE IS ALLOWED and welcome when the facts back it: a long stretch on one thing, a full honest day, a thing shipped. Say it plainly, with their name if you have it. You may end AT MOST ONE line in the whole deck with a single celebratory emoji from this set: 🏆 🔥 🌙 🎯 ☕ ✨. Never more than one emoji total, never mid-sentence, never unearned.',
     'STATE ONLY WHAT THE FACTS GIVE YOU. Do not add comparative or consistency claims the facts do not contain ("more than the rest combined", "held even all day", "every afternoon", "back to back"); if a fact does not state it, do not imply it. A smaller true detail beats a bigger claim you cannot ground.',
     'NAME THE WORK, NEVER THE FILE. Use the humanized names in the facts. Never print a filename, folder, repo, branch, tab title, or video title.',
     'WORK IS AN ACTION, NOT A PLACE. Narrate the person DOING the work; never say they were "on" a project or inside an app, except on the slides that are explicitly about an app or site. A tool (Claude Code, Cursor, Warp, Canva) is the instrument, never the thing being made.',
@@ -291,6 +350,8 @@ export function buildWrappedPrompts(facts: DayWrapFacts, enrichment?: DayEnrichm
     'Copy every DURATION exactly as the facts pre-format it (if the facts say 42m, never write "45 minutes" or "about 45m"); never round or invent a duration.',
     'The curious question must contain NO clock time and NO percentage.',
     ...(hasMeetingsEnrichment ? [] : ['Never state how MANY meetings there were; the facts only know the total meeting time.']),
+    ...((facts.gaps?.length ?? 0) > 0 ? ['"awayFromScreen" lists the day\'s real holes: stretches Daylens did not observe, with their clock bounds. Say them plainly as part of the day\'s shape ("5:14pm to 9:24pm away from the computer"); never imply the person was working through one, never guess what happened off-screen, and never apologize for the time. When an entry carries "matchesCalendar", you may name that calendar event as what the schedule says was planned there, anchored to the calendar, never as observed fact.'] : []),
+    ...((facts.threads?.length ?? 0) > 0 ? ['"dayThreads" names the work the day kept returning to: the same subject across separate blocks. Use it to tell the day\'s real shape ("Daylens ran through the whole day") instead of narrating fragments; the block count is a real count you may cite exactly, and interleaving is a shape, never a fault.'] : []),
     ...enrichmentDirectives(enrichment),
     'NEVER predict tomorrow, NEVER assign homework, NEVER tell the user to pick something up.',
     'Never use an em dash anywhere. Use a comma, a period, or "and". Use "to" for ranges, never a dash.',
@@ -462,8 +523,17 @@ export function factOnlyRecapLine(facts: DayWrapFacts): string | null {
   if (facts.isLeisureDay) {
     return `${total} on screen${span}, mostly off the clock.`
   }
+  // The one-line summary names real focused work when any exists, even when
+  // a browsing-derived activity out-seconds it — but the claim stays honest:
+  // "most of it" only when the named work IS the top activity by time.
   const top = facts.workActivities[0]
-  const work = top ? `, most of it ${lowerName(workActionPhrase(top.name, top.category))}` : ''
+  const focused = facts.workActivities.find((a) => a.category !== 'browsing')
+  const named = focused ?? top
+  const work = named
+    ? named === top
+      ? `, most of it ${lowerName(workActionPhrase(named.name, named.category))}`
+      : `, including ${lowerName(workActionPhrase(named.name, named.category))}`
+    : ''
   return `${total} on screen${span}${work}.`
 }
 

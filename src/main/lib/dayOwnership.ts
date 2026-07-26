@@ -109,6 +109,11 @@ function canonicalSpans(db: Database.Database, scanFrom: number, scanTo: number,
     if (row.event_type === 'app_activated') {
       close(row.ts_ms)
       if (row.app_name) open = { app_name: row.app_name, start_time: row.ts_ms }
+    } else if (row.event_type === 'app_deactivated') {
+      // Activation of the next app precedes deactivation of the previous one
+      // (same ts, id order): a deactivation that names a different app than
+      // the open span must not close the span that just opened.
+      if (!open || !row.app_name || row.app_name === open.app_name) close(row.ts_ms)
     } else {
       close(row.ts_ms)
     }

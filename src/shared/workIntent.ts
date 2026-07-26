@@ -11,6 +11,7 @@ import type {
 
 import { effectiveBlockKind } from './workKind'
 import { humanizeTitle } from './humanize'
+import { isDisqualifiedWorkSubject, looksLikeShoutingTitle } from './workNameGuards'
 
 type BlockLike = Pick<
   WorkContextBlock,
@@ -165,12 +166,21 @@ function looksGenericSubject(label: string | null | undefined): boolean {
   return false
 }
 
+const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/
+
 function normalizeSubjectLabel(label: string | null | undefined): string | null {
   const cleaned = usefulText(label)
   if (!cleaned) return null
 
-  const titleHead = cleaned.split(/\s+[—-]\s+/)[0]?.trim()
-  if (titleHead && !looksGenericSubject(titleHead)) {
+  // Multi-segment page/window titles ("Inbox - user@school.edu - ALU Mail"):
+  // prefer the first segment that names a real thing; when the head is
+  // generic, the LAST segment (the site/app name) beats echoing the raw
+  // title. En dash included — Apple Notes joins with " – ".
+  const segments = cleaned.split(/\s+[—–-]\s+|\s\|\s/).map((s) => s.trim()).filter(Boolean)
+  const usable = (segment: string): boolean =>
+    !looksGenericSubject(segment) && !EMAIL_RE.test(segment)
+  const titleHead = segments[0]
+  if (titleHead && usable(titleHead)) {
     return titleHead
   }
 
@@ -181,6 +191,13 @@ function normalizeSubjectLabel(label: string | null | undefined): string | null 
   }
 
   if (/\/\s*X$/i.test(cleaned) && cleaned.length > 72) return 'X (Twitter) thread'
+
+  if (segments.length > 1) {
+    const tail = segments[segments.length - 1]
+    if (tail && usable(tail)) return tail
+  }
+  // A subject must never carry an email address into prose.
+  if (EMAIL_RE.test(cleaned)) return null
   return cleaned
 }
 
@@ -228,9 +245,89 @@ function workflowLabelLooksLikeToolMix(label: string, block: BlockLike, pages: P
   return segments.length >= 2 && segments.every((segment) => appNames.has(segment) || domainLabels.has(segment))
 }
 
+// Communication apps whose window titles name the conversation PARTNER — a
+// Microsoft Teams chat window is titled with the person being talked to, so
+// a window artifact these apps produce can never name the work. This is a
+// per-app structural fact, not person-name detection: Slack and Discord are
+// deliberately absent because their titles lead with the channel/workspace,
+// a project container that legitimately names the work (the timeline eval
+// pins that behavior for Slack channel titles).
+const PERSON_TITLED_COMM_APP_NAMES = new Set([
+  'microsoft teams', 'teams', 'microsoft teams (work or school)', 'messages',
+  'whatsapp', 'telegram', 'signal', 'google chat', 'facetime',
+])
+const PERSON_TITLED_COMM_BUNDLE_RE = /^(com\.microsoft\.teams|com\.apple\.mobilesms|com\.apple\.ichat|com\.apple\.facetime|net\.whatsapp|org\.telegram|ru\.keepcoder\.telegram|org\.whispersystems)/i
+
+function artifactTitlesConversationPartner(artifact: ArtifactRef | undefined): boolean {
+  if (!artifact) return false
+  for (const key of [artifact.ownerAppName, artifact.canonicalAppId]) {
+    const cleaned = key?.trim().toLowerCase()
+    if (cleaned && PERSON_TITLED_COMM_APP_NAMES.has(cleaned)) return true
+  }
+  const bundle = artifact.ownerBundleId?.trim().toLowerCase()
+  return Boolean(bundle && PERSON_TITLED_COMM_BUNDLE_RE.test(bundle))
+}
+
+// Suffix words an app appends to its own name in a bare window title.
+const APP_OWN_NAME_SUFFIXES = new Set(['desktop', 'app', 'window', 'beta', 'pro'])
+
+/** True when the artifact's title is just the owning app's own name, alone or
+ *  with a generic suffix ("Spark Desktop" from Spark). Such a title names the
+ *  instrument, never the work — it once became "the longest thread of the
+ *  day" on a real day. */
+function artifactTitlesAppItself(title: string, appName: string): boolean {
+  const words = title.trim().toLowerCase().split(/\s+/)
+  const app = appName.trim().toLowerCase()
+  if (!app || words.length === 0) return false
+  for (let i = words.length; i >= 1; i -= 1) {
+    if (words.slice(0, i).join(' ') === app && words.slice(i).every((w) => APP_OWN_NAME_SUFFIXES.has(w))) {
+      return true
+    }
+  }
+  return false
+}
+
+function artifactTitleIsAppOwnName(artifact: ArtifactRef | undefined): boolean {
+  const title = artifact?.displayTitle?.trim()
+  if (!title) return false
+  for (const app of [artifact?.ownerAppName, artifact?.canonicalAppId]) {
+    if (app && artifactTitlesAppItself(title, app)) return true
+  }
+  return false
+}
+
 function subjectFromArtifact(artifact: ArtifactRef | undefined): SubjectCandidate | null {
+  // A Slack/Teams channel artifact names the project it hosts, not a chat
+  // surface: "daylens (Channel)" is evidence the work was about daylens. A DM
+  // or thread is different: "Sarah Chen (DM)" names the PERSON talked to, and
+  // a person is never the work's subject — drop the artifact entirely rather
+  // than falling through to the raw title.
+  const channelMatch = artifact?.displayTitle?.match(/^\s*#?([\w][\w .-]*?)\s*\((Channel|DM|Thread)\)\s*$/i)
+  if (channelMatch?.[1]) {
+    if (channelMatch[2].toLowerCase() !== 'channel') return null
+    const channel = usefulText(channelMatch[1])
+    if (channel && !looksGenericSubject(channel) && !isDisqualifiedWorkSubject(channel)) {
+      return { label: channel, source: 'artifact' }
+    }
+  }
+  // Structural rule, not name detection: a person-titled chat app names its
+  // windows with WHO is being talked to (a Teams chat window is the chat
+  // partner's name), so a window artifact it produced never names the work.
+  // "Jamie Duffy" once became a 75-minute work activity this way. Channels
+  // are already handled above — a channel names the project it hosts.
+  if (artifactTitlesConversationPartner(artifact)) return null
+  // An app whose window title is its own name ("Spark Desktop" from the
+  // Spark mail app) names the INSTRUMENT, never the work: strip generic
+  // suffix words and compare against the owning app's name.
+  if (artifactTitleIsAppOwnName(artifact)) return null
   const label = normalizeSubjectLabel(artifact?.displayTitle)
   if (!label || looksGenericSubject(label)) return null
+  // A tool's own surface ("Cursor Agents", "New chat - Claude") is the
+  // instrument of the work, never its subject — skip it so the NEXT artifact
+  // (a real document, channel, or repo) can name the block instead. This
+  // exact title once named 8 of 12 slides of a real day whose actual project
+  // never appeared.
+  if (isDisqualifiedWorkSubject(label)) return null
   return { label, source: 'artifact' }
 }
 
@@ -362,6 +459,37 @@ function pageSubjectCandidates(pages: PageSignal[]) {
       domain: string
       social: boolean
     } => Boolean(page.label) && !looksGenericSubject(page.label))
+}
+
+const SUBJECT_FLOOR_SECONDS = 15 * 60
+const SUBJECT_FLOOR_SHARE = 0.2
+
+/** Evidence seconds attributable to a chosen subject: the largest
+ *  totalSeconds among the block's refs whose (normalized) title matches the
+ *  candidate label. Null when nothing matches — attribution unknown. */
+function subjectEvidenceSeconds(block: BlockLike, candidate: SubjectCandidate): number | null {
+  const wanted = candidate.label.trim().toLowerCase()
+  let best: number | null = null
+  const consider = (title: string | null | undefined, seconds: number | undefined) => {
+    if (!title || typeof seconds !== 'number') return
+    const normalized = (normalizeSubjectLabel(title) ?? title).trim().toLowerCase()
+    if (normalized === wanted && (best === null || seconds > best)) best = seconds
+  }
+  for (const ref of block.documentRefs) consider(ref.displayTitle, ref.totalSeconds)
+  for (const ref of block.topArtifacts) consider(ref.displayTitle, ref.totalSeconds)
+  for (const ref of block.pageRefs) {
+    consider(ref.pageTitle ?? ref.displayTitle, ref.totalSeconds)
+  }
+  return best
+}
+
+function subjectClearsShareFloor(block: BlockLike, candidate: SubjectCandidate): boolean {
+  if (candidate.source === 'workflow' || candidate.source === 'domain') return true
+  const seconds = subjectEvidenceSeconds(block, candidate)
+  if (seconds === null) return true
+  if (seconds >= SUBJECT_FLOOR_SECONDS) return true
+  const blockSeconds = block.topApps.reduce((sum, app) => sum + Math.max(0, app.totalSeconds), 0)
+  return blockSeconds > 0 && seconds >= blockSeconds * SUBJECT_FLOOR_SHARE
 }
 
 function chooseSubject(block: BlockLike, role: WorkIntentRole, pages: PageSignal[]): SubjectCandidate | null {
@@ -633,6 +761,37 @@ function rationaleFor(
   return reasons.slice(0, 3)
 }
 
+/** Every clean subject this block's evidence names: the chosen intent subject
+ *  plus the secondary candidates from the same ladder (document/channel
+ *  artifacts, workflow labels). Day threads use this for MEMBERSHIP — a
+ *  subject that only headlines a few blocks can still run through others as
+ *  secondary evidence ("daylens (Channel)" inside an ML-study block). Every
+ *  candidate passes the same guards as the headline subject, so a tool
+ *  surface or raw artifact can never join a thread. */
+export function workSubjectCandidates(block: BlockLike): string[] {
+  if (effectiveBlockKind(block) !== 'work') return []
+  const out = new Map<string, string>()
+  const add = (label: string | null | undefined) => {
+    const text = usefulText(label)
+    if (!text || looksGenericSubject(text) || isDisqualifiedWorkSubject(text)) return
+    // Shouting gates subject inference only (never stored-label deletion) —
+    // a long all-caps capture title can't join a day thread.
+    if (looksLikeShoutingTitle(text)) return
+    // A breadcrumb or joined tab title ("Daylens v2 › Issues") is raw page
+    // evidence, not a subject a person would name the work by.
+    if (/[›»|]/.test(text)) return
+    const humanized = humanizeTitle(text) ?? text
+    if (!out.has(humanized.toLowerCase())) out.set(humanized.toLowerCase(), humanized)
+  }
+  add(inferWorkIntent(block).subject)
+  for (const artifact of [...block.documentRefs, ...block.topArtifacts]) {
+    const candidate = subjectFromArtifact(artifact)
+    if (candidate) add(candidate.label)
+  }
+  for (const workflow of block.workflowRefs) add(workflow.label)
+  return [...out.values()]
+}
+
 export function inferWorkIntent(block: BlockLike): WorkIntentSummary {
   // Leisure / personal / idle episodes carry no intent role and no subject —
   // watching a documentary is never "execution on Free Movies". They are named
@@ -651,7 +810,15 @@ export function inferWorkIntent(block: BlockLike): WorkIntentSummary {
 
   const pages = block.pageRefs.map((page) => classifyPage(page))
   const role = roleFromSignals(block, pages)
-  const subject = chooseSubject(block, role, pages)
+  const candidate = chooseSubject(block, role, pages)
+  // Share floor: a subject may headline a block only when its own evidence
+  // carries real weight — at least 15 minutes, or a fifth of the block's
+  // activity. Without this, a 10-minute ChatGPT thread title got funded with
+  // a 3-hour block ("Find Liwa's Odoo Email — 3h 4m") and an 8-minute Canva
+  // doc headlined a 10-hour day. Candidates whose evidence seconds cannot be
+  // attributed (workflow labels, transformed titles) pass — the floor kills
+  // provably thin subjects, never uncertain ones.
+  const subject = candidate && subjectClearsShareFloor(block, candidate) ? candidate : null
   // The subject feeds the wrap's "what mattered" and carryover lines, so it
   // must never be a raw filename/URL. Humanize it the same way every other
   // user-facing string is humanized.

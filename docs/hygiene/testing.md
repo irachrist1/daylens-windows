@@ -22,6 +22,22 @@ npm test -- timelineBlockLayout
 
 The shared test database helper in `tests/support/testDatabase.ts` creates an isolated SQLite database with the production schema, every production migration, the AI thread schema repair, and derived-state metadata. Normal tests use that helper. Raw `SCHEMA_SQL` setup is reserved for tests that specifically exercise bootstrap or migration behavior.
 
+## Headless CLI
+
+`./daylens` (source in `cli/run.ts`, also `npm run cli`) drives every product surface from the terminal through the same code paths the renderer uses over IPC. It never touches the live database: `daylens db snapshot` stages a pristine copy of the real database plus a writable work copy; `daylens db reset` restores the work copy from pristine; `daylens db info` reports the snapshot source and age.
+
+```bash
+./daylens timeline <date> [--evidence]      # day view (blocks, labels, gaps)
+./daylens timeline <date> --week            # week summary ending on date
+./daylens timeline <YYYY-MM> --month        # month grid
+./daylens apps <date> [appId]               # apps view / app detail (--ids lists app ids)
+./daylens wrapped <date> [--regen|--facts]  # wrapped narrative (AI on --regen)
+./daylens chat "question" [--thread N]      # real agent turn, streamed
+./daylens analyze <date> [--hint "…"]       # the Analyze-day pipeline (AI)
+```
+
+Global flags: `--json` (machine output), `--fresh` (reset the work DB first), `--db <path>` (explicit DB file, e.g. a fixture), `--out <file>` (tee JSON). The shim runs Electron as Node with the real TypeScript loader, so what the CLI shows is what the app computes.
+
 ## Deterministic product-path verification
 
 These commands inject data only at genuine source, provider, operating-system, or network boundaries. The code between those boundaries is production ingestion, storage, migration, projection, correction, privacy, serialization, and presentation code.
@@ -66,6 +82,24 @@ npm run real-day:accept -- --date YYYY-MM-DD --confirmed
 ```
 
 Acceptance stores the expected reconstruction beside the private snapshot. Future `verify:real-day` runs fail when missing or invented activity, boundaries, duration, grouping, labels, meetings, Apps facts, or other accepted observations change. The snapshot, titles, pages, memory, and answers remain outside Git and CI.
+
+For wrap-specific debugging, `tests/wrapped-bench/debug.ts <date>` reproduces the exact production wrap prompt for any real day, and `tests/wrapped-bench/probe-facts.ts <date>` prints the day's computed facts.
+
+## Journal-anchored day eval
+
+```bash
+npm run eval:days                    # fast: deterministic dimensions only
+npm run eval:days -- --judge         # + LLM shape judge (one call per day)
+npm run eval:days -- --strict        # non-zero exit under thresholds
+npm run eval:days -- 2026-07-22 …    # only these days
+npm run eval:days -- --fresh         # restage the work DB from pristine first
+```
+
+Ground truth lives in `tests/journal-eval/days/*.yaml`: what the owner said the day was (the Obsidian journal), or machine-verifiable sources (git, calendar, meeting notes) for days without a journal entry. The runner scores what the user actually sees — timeline block labels and narratives plus the wrapped narrative (stored if present, deterministic fallback otherwise; it never spends a wrap-generation call).
+
+Deterministic dimensions: every declared primary work is named somewhere visible; no block label is a tool surface or a day-specific banned-as-work string; no block spans a declared off-computer gap. `--judge` adds one Anthropic call per day scoring 0–10 how well the output captures the shape of the real day, with hard caps for tool surfaces treated as the work, invented continuity, and background media promoted to the activity. `--strict` thresholds start deliberately below 100% and ratchet up as fixes land, never down.
+
+Local-only: it reads the real-DB snapshot staged by `./daylens db snapshot` and journal-derived expectations, so it never runs in CI. Results land in `.journal-eval/results-<stamp>.json` plus a table on stdout.
 
 ## Contract and workspace checks
 

@@ -1,0 +1,37 @@
+# Ground truth from the owner's Obsidian journal (single-thread deep day).
+date: "2026-05-27"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-05-27 ('what actually happened' narrative)"
+summary: >
+  One deep, all-day architecture push on Daylens for the CBC hackathon —
+  active 08:42 to ~21:40, roughly 11.7h tracked. Retired the "50% shipped"
+  framing and went after the capture layer: named three concrete capture
+  failures, then built a Swift probe and ran it twice on macOS 26.5 to get
+  measured ground truth on NSWorkspace, AX window titles, and AppleScript
+  tab reads. Locked the capture architecture and wrote three specs
+  (CAPTURE-HELPER-SPEC, ARCHITECTURE-FIX-PLAN, CHUNK-2-PROJECTIONS-SPEC).
+  Ran a blind multi-model ensemble for the tab-tracking decision, with
+  Opus implementing and GPT-5.5 reviewing. Chunk 1, the capture helper,
+  was built and verified on real focus_events data; Chunks 2 (projections)
+  and 3 (AI/Apps source of truth + search) were handed to agents. Coursera
+  got only ~0.4h.
+primaryWork:
+  - name: Daylens capture architecture rebuild (CBC hackathon)
+    aliases: [daylens, capture, architecture, swift probe, focus events, hackathon]
+secondary:
+  - name: Coursera (brief)
+    aliases: [coursera, machine learning]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "08:42", desc: "morning: capture-layer audit — the three concrete capture failures named; Swift probe built and run twice on macOS 26.5 for ground truth" }
+  - { desc: "midday–afternoon: capture architecture locked, three specs written; blind multi-model ensemble for the tab-tracking decision, Opus implementing, GPT-5.5 reviewing" }
+  - { until: "21:40", desc: "evening: Chunk 1 capture helper verified on real focus_events data; Chunks 2 and 3 handed to agents and in flight" }
+notes: >
+  The journal gives no internal clock times — it is one continuous Daylens
+  thread from 08:42 to ~21:40, so judge the day as a single deep arc, not
+  exact segment boundaries. The journal itself notes the tracker
+  undercounted YouTube that day. Capture continues past the journal's
+  ~21:40 end (sessions to ~24:00); that late stretch is unnarrated.

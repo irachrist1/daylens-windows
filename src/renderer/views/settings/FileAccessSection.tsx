@@ -54,7 +54,7 @@ function stateLabel(state: Grant['state']): string {
 function friendlyError(error: unknown, fallback: string): string {
   const raw = error instanceof Error ? error.message : String(error)
   if (/No handler registered|invoking remote method/i.test(raw)) {
-    return 'Daylens needs a quick restart before this works — quit the app and open it again, then try once more.'
+    return 'Daylens needs a restart before this works. Quit the app, open it again, then try once more.'
   }
   if (/cancel/i.test(raw)) return fallback
   // Never surface IPC/channel plumbing to the person using Settings.
@@ -112,9 +112,8 @@ export function FileAccessSection() {
   return (
     <div style={{ display: 'grid', gap: 22 }}>
       <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
-        Daylens always knows which files were open. Reading contents needs a grant —
-        Indexed stays on this device; Model-readable may send an excerpt to your AI.
-        Secrets, system paths, and hidden folders stay off-limits.
+        Indexed keeps contents on this device. Model-readable can send excerpts to your AI.
+        Secrets, system paths, and hidden folders are always off limits.
       </div>
 
       {error && <div style={{ fontSize: 12.5, color: '#f87171' }}>{error}</div>}
@@ -219,7 +218,7 @@ export function FileAccessSection() {
           <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Loading…</div>
         ) : grants.length === 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
-            No grants yet. Choose a folder above, or let the AI ask in chat the first time it needs contents.
+            No grants yet. Choose a folder above, or let the AI ask in chat when it needs one.
           </div>
         ) : (
           grants.map((grant) => (
@@ -272,7 +271,7 @@ export function FileAccessSection() {
         </span>
         {disclosures.length === 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
-            Nothing opened yet. When the AI reads a file, it shows up here first.
+            Nothing read yet. Every file the AI reads shows up here.
           </div>
         ) : (
           disclosures.map((disclosure) => (

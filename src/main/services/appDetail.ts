@@ -8,6 +8,7 @@ import type {
   LiveSession,
   PageRef,
 } from '@shared/types'
+import { MIN_DOMAIN_ROW_SECONDS } from '@shared/types'
 import { appDetailRangeKey } from '@shared/appNarrativeContract'
 import {
   browserHasLiveTabSamples,
@@ -43,6 +44,7 @@ import {
   resolveCanonicalApp,
   websiteDisplayLabel,
 } from '../lib/appIdentity'
+import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
 
 const APP_DETAIL_FALLBACK_MERGE_GAP_MS = 5 * 60_000
 
@@ -125,6 +127,28 @@ function buildSessionDerivedAppDetailBlocksByDate(
   return blocksByDate
 }
 
+/**
+ * Fold domains under the minimum-row threshold into one "Everything else"
+ * aggregate (DEV-239). The folded seconds stay inside attributedSeconds, so
+ * the on-screen arithmetic still reconciles exactly:
+ * Σ rows + everythingElse = attributedSeconds.
+ */
+export function foldTinyDomains<T extends { totalSeconds: number; visitCount: number }>(
+  domains: readonly T[],
+): { rows: T[]; everythingElse?: { totalSeconds: number; domainCount: number; visitCount: number } } {
+  const rows = domains.filter((domain) => domain.totalSeconds >= MIN_DOMAIN_ROW_SECONDS)
+  const folded = domains.filter((domain) => domain.totalSeconds < MIN_DOMAIN_ROW_SECONDS)
+  if (folded.length === 0) return { rows }
+  return {
+    rows,
+    everythingElse: {
+      totalSeconds: folded.reduce((sum, domain) => sum + domain.totalSeconds, 0),
+      domainCount: folded.length,
+      visitCount: folded.reduce((sum, domain) => sum + domain.visitCount, 0),
+    },
+  }
+}
+
 /** Builds the Apps projection. Timeline formation remains in workBlocks; this
  * service owns app-range selection, app-only evidence and reconciliation. */
 export function getAppDetailPayload(
@@ -156,10 +180,16 @@ export function getAppDetailPayload(
   const allSessions = sessionFacts.evidenceSource === 'legacy'
     ? mergeLiveSession(rawSessions, effectiveLiveSession)
     : rawSessions
-  const sessions = allSessions.filter((session) => {
-    const identity = resolveCanonicalApp(session.bundleId, session.appName)
-    return (session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId) === canonicalAppId
-  })
+  // Stored registry links (path/bundle → canonical) keep twin identities of
+  // one install together, so the detail shows the merged app's whole range.
+  const canonicalLinks = getStoredCanonicalAppLinks(db)
+  const sessionKey = (bundleId: string, appName: string, sessionCanonicalId: string | null | undefined): string => {
+    const identity = resolveCanonicalApp(bundleId, appName)
+    const derivedKey = sessionCanonicalId ?? identity.canonicalAppId ?? bundleId
+    return canonicalLinks.get(derivedKey) ?? derivedKey
+  }
+  const sessions = allSessions.filter((session) =>
+    sessionKey(session.bundleId, session.appName, session.canonicalAppId) === canonicalAppId)
 
   const relevantDates = Array.from(new Set(sessions.map((session) => localDateKeyForTimestamp(session.startTime))))
   const historicalDates = relevantDates.filter((date) => !(date === today && effectiveLiveSession))
@@ -172,17 +202,13 @@ export function getAppDetailPayload(
     if (date === today && effectiveLiveSession && fallbackBlocks.length > 0) blocksByDate.set(date, fallbackBlocks)
   }
 
-  const relatedBlocks = Array.from(blocksByDate.values()).flat().filter((block) => block.topApps.some((app) => {
-    const identity = resolveCanonicalApp(app.bundleId, app.appName)
-    return (identity.canonicalAppId ?? app.bundleId) === canonicalAppId
-  }))
+  const relatedBlocks = Array.from(blocksByDate.values()).flat().filter((block) => block.topApps.some((app) =>
+    sessionKey(app.bundleId, app.appName, app.canonicalAppId) === canonicalAppId))
 
   const artifactTotals = new Map<string, ArtifactRef>()
   for (const block of relatedBlocks) {
-    const blockContainsOnlySelectedApp = block.topApps.every((app) => {
-      const identity = resolveCanonicalApp(app.bundleId, app.appName)
-      return (identity.canonicalAppId ?? app.bundleId) === canonicalAppId
-    })
+    const blockContainsOnlySelectedApp = block.topApps.every((app) =>
+      sessionKey(app.bundleId, app.appName, app.canonicalAppId) === canonicalAppId)
     for (const artifact of block.topArtifacts) {
       let belongsToSelectedApp: boolean
       if (artifact.canonicalAppId) {
@@ -245,7 +271,7 @@ export function getAppDetailPayload(
   // Aggregate the sessions already fetched above — allSessions is exactly
   // what getCorrectedAppSummariesForRange would re-derive, and re-running the
   // shared query would repeat a full-history scan on the all-time range.
-  const summariesForRange = aggregateAppSummaries(allSessions)
+  const summariesForRange = aggregateAppSummaries(allSessions, canonicalLinks)
   const canonicalSummary = summariesForRange.find((row) => row.canonicalAppId === canonicalAppId)
     ?? summariesForRange.find((row) => row.bundleId === canonicalAppId)
     ?? null
@@ -274,12 +300,14 @@ export function getAppDetailPayload(
           hasUsefulWindowTitles: sessions.some((session) => usefulWindowTitle(session) != null),
         })
       : undefined
+    const { rows: rowDomains, everythingElse } = foldTinyDomains(breakdown.domains)
     browserActivity = {
       totalSeconds,
       attributedSeconds: breakdown.attributedSeconds,
       unattributedSeconds,
       coverageNote,
-      domains: breakdown.domains.map((domain) => ({
+      ...(everythingElse ? { everythingElse } : {}),
+      domains: rowDomains.map((domain) => ({
         domain: domain.domain,
         totalSeconds: domain.totalSeconds,
         visitCount: domain.visitCount,

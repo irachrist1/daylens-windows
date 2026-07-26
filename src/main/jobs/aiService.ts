@@ -34,7 +34,7 @@ import {
 } from '../lib/followUpSuggestions'
 import { transformInstruction } from '@shared/answerTransforms'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
-import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import { labelCandidateViolation, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
@@ -132,7 +132,7 @@ import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
 import { registerWrappedQuestionProvider } from '../services/wrappedQuestion'
-import { VOICE_SYSTEM_PROMPT, findBannedVocab } from '../ai/voiceContract'
+import { VOICE_SYSTEM_PROMPT, containsEmDash, findBannedVocab, findPlumbingVocab } from '../ai/voiceContract'
 import { parseDayRegroupGroups } from '../ai/dayRegroup'
 import { maybeStartTrace, setCurrentTrace } from '../ai/trace'
 import { runChatAgentTurn } from '../agent/chatAgent'
@@ -1990,7 +1990,7 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     'Prefer the structured workIntent signal over raw homepage, feed, or generic tab labels when they conflict.',
     'Treat generic feed/home usage as context unless the evidence clearly says it was the main task.',
     'Name the actual work and the entities involved (the projects, clients, people, and repositories in "entities"), not the tools that hosted it.',
-    'The "meetings" list is scheduled calendar context. A scheduled time proves only what was planned. Say a meeting happened only when its "presence" field confirms it (you attended, or tracked activity overlaps it) — never assert attendance from a calendar row alone, and respect a meeting marked skipped/moved/unrelated.',
+    'The "meetings" list is scheduled calendar context. A scheduled time proves only what was planned. Say a meeting happened only when its "presence" field confirms it (you attended, or tracked activity overlaps it). Never assert attendance from a calendar row alone, and respect a meeting marked skipped/moved/unrelated.',
     'Follow the evidence authority order: the person’s own confirmations and corrections outrank device observation, which outranks a connector/calendar fact, which outranks inference. State uncertainty plainly rather than guessing.',
     'Never use raw app names as the subject of a sentence. Instead, describe what the app is used for: Warp or Terminal → "your terminal", a browser (Chrome, Safari, Arc, Firefox) → "your browser", VS Code or Cursor → "your editor", Figma → "your design tool", Slack or Teams → "your messaging app", X.com or Twitter → "social browsing" or a specific activity from the page title. Use the specific app name only when a more descriptive phrase would be unclear.',
     'Use window titles and page titles as evidence for what the user was doing. Do not use the app name as a proxy for the activity. When a page or thread title is available, prefer describing the specific content over naming the platform.',
@@ -2830,7 +2830,10 @@ function parseWorkBlockInsight(raw: string): WorkContextInsight | null {
   }
 }
 
-function workBlockPrompt(block: WorkContextBlock): string {
+// Exported for the interpretation-agent relabel (services/interpretationAgent.ts),
+// which grounds its tool loop in the SAME per-block evidence prompt the direct
+// relabel uses — one evidence contract, two execution modes.
+export function workBlockPrompt(block: WorkContextBlock): string {
   const durationMinutes = Math.max(1, Math.round(blockActiveSeconds(block) / 60))
 
   // Top websites with duration — highest-signal evidence (browser/AI work)
@@ -2885,16 +2888,19 @@ function workBlockPrompt(block: WorkContextBlock): string {
   const lines = [
     'Analyze this Daylens work block.',
     'Return strict JSON: {"label":"...","narrative":"..."}',
-    'label: a 2-7 word phrase naming what they were DOING — usually verb + object ("Configuring the work network", "Refactoring the timeline engine"). NEVER a raw app name, browser name, page/video title, or bare category ("Chrome", "Cursor", "Watching Netflix", "Browsing", "Development"). NEVER the literal "Computer activity", "Uncategorized", or "Untitled".',
+    'label: a 2-7 word phrase naming what they were DOING, usually verb + object ("Configuring the work network", "Refactoring the timeline engine"). NEVER a raw app name, browser name, page/video title, or bare category ("Chrome", "Cursor", "Watching Netflix", "Browsing", "Development"). NEVER the literal "Computer activity", "Uncategorized", or "Untitled". Never put an em dash in a label; use a comma or the word "and".',
     'narrative: 1-2 plain sentences. Evidence-led, no hype, no "the user" prefix.',
     'Priority rules:',
     '  - Window titles and page titles > artifact names > category descriptions > app names only as last-resort context, never as the label.',
     '  - Browser+AI only ≠ Development → call it Research or Planning.',
     '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
     '  - This block may already combine several stretches of one activity. Name the WHOLE thing in one coherent title that covers all the evidence (e.g. "Setting up the work network with the Ubiquiti dashboard and Terminal"), not just the first app.',
-    '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek — people multi-task with media on the side while actually working.',
+    '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek, since people multi-task with media on the side while actually working.',
+    '  - When a terminal, editor, or agent runner (Ghostty, Warp, Codex, cmux, Claude Code) holds a substantial share of the block alongside media, the WORK is the headline and the media is at most an aside. Media titles are more descriptive than terminal windows, never more important: two hours of terminal time next to browser videos is a work block with videos on the side, not "watching videos".',
+    '  - An AI-chat conversation title (ChatGPT, Claude, Gemini) names a TOPIC DISCUSSED, never a thing accomplished. Label the block as working through or exploring that topic; NEVER use completion or deployment verbs (deployed, shipped, launched, released, fixed, built) on chat or browser evidence alone, because those verbs need a code editor or terminal in this block actually doing it.',
+    '  - Never invent a project, product, or deliverable name. Every proper noun in your label must appear in the evidence above; a plausible-sounding name the evidence does not contain is a fabrication.',
     '  - Name the site or tool where the work happened ("in Notion", "in Google Docs", "in Linear"), not the browser it was rendered in. Mention the browser only as secondary context ("in the Dia browser"), never as the headline location.',
-    '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Cursor, Warp, and Terminal — focused work"). Never announce failure, never say "Computer activity" or "Uncategorized".',
+    '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Focused work in Cursor, Warp, and Terminal"). Never announce failure, never say "Computer activity" or "Uncategorized".',
     '',
     `Duration: ${durationMinutes} minutes`,
     `Dominant category: ${block.dominantCategory}`,
@@ -3045,27 +3051,19 @@ export async function generateWorkBlockInsight(
   ].join(' ')
 
   // The label-voice contract (label-voice.md, DEV-276): the model's label must
-  // clear the invariant rules and must not echo a captured title or a bare app
-  // name — a raw window title, filename, ticket description, or JSON string is
-  // never a label. A rejected label gets exactly one corrective retry with the
-  // violation named; if that also fails, the deterministic evidence name (voice
-  // gated itself) stands and the block stays a re-analysis target.
+  // clear the invariant rules, must not echo a captured title or a bare app
+  // name, and must not present a tool brand/surface, command line, joined tab
+  // title, or site surface as the work — even behind a verb lead ("Working on
+  // Cursor Agents"). One shared gate (labelCandidateViolation) holds this path
+  // and the interpretation agent to the same standard. A rejected label gets
+  // exactly one corrective retry with the violation named; if that also fails,
+  // the deterministic evidence name (voice gated itself) stands and the block
+  // stays a re-analysis target.
   // The block kind matters: without it the leisure-shape rule is inert here
   // and a bare video title would only be caught later by the label chooser.
   const voiceContext = labelVoiceContextForBlock(block, effectiveBlockKind(block))
-  const labelRejection = (candidate: string | null | undefined): string | null => {
-    const label = candidate?.trim()
-    if (!label) return 'the label was empty'
-    for (const finding of evaluateLabelVoice(label, voiceContext)) {
-      if (finding.passed) continue
-      if (finding.tier === 'invariant'
-        || finding.rule === 'no-verbatim-window-title'
-        || finding.rule === 'activity-not-software') {
-        return finding.detail ?? finding.rule
-      }
-    }
-    return null
-  }
+  const labelRejection = (candidate: string | null | undefined): string | null =>
+    labelCandidateViolation(candidate, voiceContext)
 
   try {
     const requestInsight = async (voiceFeedback?: string) => {
@@ -3170,14 +3168,14 @@ function dayRegroupPrompt(blocks: WorkContextBlock[], userHint?: string): string
   })
 
   const lines = [
-    'Here are today\'s timeline blocks, in order. They were cut by simple rules and tend to be SPLIT TOO FINELY — one real activity is often broken across several adjacent blocks.',
+    'Here are today\'s timeline blocks, in order. They were cut by simple rules and tend to be SPLIT TOO FINELY: one real activity is often broken across several adjacent blocks.',
     'Your job: group the blocks that are the SAME continued activity into one block. Return strict JSON: {"groups": [[0,1,2],[3],[4,5]]}.',
     'Rules:',
     '  - Each inner array is a run of CONSECUTIVE block indices that are one continued intent/goal/project and should become a single block.',
     '  - Every index 0..N-1 appears exactly once, in order. A block that stands on its own is its own one-element group.',
-    '  - Merge ONLY genuinely-same work: the same task or project continued (e.g. setting up the work network across Terminal, the Ubiquiti dashboard, and diagnostics is ONE thing). A short peek at streaming/social between two stretches of the same work does not break the run — keep merging across it.',
+    '  - Merge ONLY genuinely-same work: the same task or project continued (e.g. setting up the work network across Terminal, the Ubiquiti dashboard, and diagnostics is ONE thing). A short peek at streaming/social between two stretches of the same work does not break the run, so keep merging across it.',
     '  - Keep genuinely DIFFERENT goals separate: coding a feature, a meeting, and unrelated admin are different blocks even when back-to-back. When unsure, keep them separate.',
-    '  - Never group to just shrink the count, and never invent a connection the evidence does not show. You may only GROUP existing blocks — never split one.',
+    '  - Never group to just shrink the count, and never invent a connection the evidence does not show. You may only GROUP existing blocks, never split one.',
     '',
     `Blocks (${blocks.length}):`,
     blockLines.join('\n'),
@@ -3207,7 +3205,7 @@ export async function generateDayRegroupPlan(
     VOICE_SYSTEM_PROMPT,
     'You are Daylens.',
     'You decide which adjacent timeline blocks are the same continued activity and should be one block.',
-    'You only group blocks that are already there — you never split, rename, or invent activity.',
+    'You only group blocks that are already there, and you never split, rename, or invent activity.',
     'Return only valid JSON.',
   ].join(' ')
 
@@ -3257,10 +3255,10 @@ export async function interpretSearchIntent(query: string): Promise<{ terms: str
   if (!trimmed) return null
   const systemPrompt = [
     "You turn a user's natural-language search into keywords for a LOCAL full-text search over their tracked activity (app + window titles, web page titles and domains, timeline block labels, saved AI artifacts).",
-    'Return STRICT JSON only — no prose, no code fence:',
+    'Return STRICT JSON only, no prose, no code fence:',
     '{"terms":["..."],"intent":"<one short clause>"}',
     'Rules:',
-    '- terms: 1-6 short lowercase keywords/phrases — the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
+    '- terms: 1-6 short lowercase keywords/phrases: the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
     '- Never invent specific names the query does not imply.',
     '- intent: a short human clause like "the autoencoders project" or "anything about the migration".',
   ].join('\n')
@@ -3317,6 +3315,9 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     if (answerText) {
       const banned = findBannedVocab(answerText)
       if (banned) console.warn(`[ai:voice] banned vocabulary in chat answer: "${banned}"`)
+      if (containsEmDash(answerText)) console.warn('[ai:voice] em dash in chat answer')
+      const plumbing = findPlumbingVocab(answerText)
+      if (plumbing) console.warn(`[ai:voice] plumbing vocabulary in chat answer: "${plumbing}"`)
     }
     if (recorder) {
       recorder.finish(result.assistantMessage?.content)

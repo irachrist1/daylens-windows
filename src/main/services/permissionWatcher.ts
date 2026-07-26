@@ -20,6 +20,7 @@ import { deliverNotification } from './notificationDelivery'
 import { isRealDayHarness } from '../lib/realDayHarness'
 import { getSettings } from './settings'
 import { shouldStartTrackingForSettings } from '../lib/onboardingState'
+import { getRecorderStallBannerState } from './stallWatchdog'
 
 const CHECK_INTERVAL_MS = 5_000
 const SAMPLE_WINDOW_MS = 15 * 60_000
@@ -101,15 +102,24 @@ function checkOnce(): void {
   }
 
   const status = deriveCaptureVerificationStatus({ axTrusted, recentSamples, recentSamplesWithTitle })
+  // DEV-261: the stall watchdog's banner verdict rides this channel so the
+  // renderer has one source for "capture is compromised" banners. Read every
+  // tick — the banner appears within one check of the threshold being crossed
+  // and clears within one check of the quiet period ending.
+  const recorderStall = getRecorderStallBannerState()
   const next: CaptureVerificationState = {
     status,
     axTrusted,
     recentSamples,
     recentSamplesWithTitle,
+    recorderStall,
     checkedAt: Date.now(),
   }
 
-  const changed = !lastState || lastState.status !== status || lastState.axTrusted !== axTrusted
+  const changed = !lastState
+    || lastState.status !== status
+    || lastState.axTrusted !== axTrusted
+    || (lastState.recorderStall?.stallCount ?? null) !== (recorderStall?.stallCount ?? null)
   lastState = next
   if (!changed) return
 

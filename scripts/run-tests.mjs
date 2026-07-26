@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// Hermetic test runner for the whole `tests/**/*.test.ts` suite.
+// Hermetic test runner for the whole `tests/**/*.test.{ts,mjs}` suite.
 //
-// Why this exists: before this script there was no `npm test`. Only ~24 of the
-// 91 test files were referenced by any npm script, so 74% of the suite never
+// Why this exists: before this script there was no `npm test`. Only a quarter
+// of the test files (~24 of the 91 that existed then) were referenced by any
+// npm script, so most of the suite never
 // ran and could not catch a regression. Worse, when the files were run together
 // in one process, module-level singletons (e.g. the PostHog/Sentry clients in
 // services/analytics.ts) leaked across files and made results depend on run
 // order — analytics.test.ts passed alone but failed in-suite.
 //
-// The fix is structural: discover every *.test.ts and run EACH FILE IN ITS OWN
+// The fix is structural: discover every *.test.ts / *.test.mjs and run EACH FILE IN ITS OWN
 // electron process via node:test. Per-file process isolation makes module state
 // impossible to leak, so the suite is deterministic regardless of order.
 //
@@ -51,7 +52,8 @@ function walk(dir) {
     if (entry.name === 'node_modules' || entry.name === 'support') continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) out.push(...walk(full))
-    else if (entry.isFile() && entry.name.endsWith('.test.ts')) out.push(full)
+    else if (entry.isFile() && (entry.name.endsWith('.test.ts') || entry.name.endsWith('.test.mjs')))
+      out.push(full)
   }
   return out
 }

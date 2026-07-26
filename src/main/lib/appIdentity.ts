@@ -260,6 +260,106 @@ function looksLikeRawUrlParams(value: string): boolean {
   return false
 }
 
+// ─── Keyboard-mash detection ─────────────────────────────────────────────────
+// A captured page title can carry a garbage string the person never meant to
+// keep: a keyboard mash typed into a search box ("wwwtrttgbgggbsvcvgbjmk,l.;
+// uk7u7i880p9o8i7u654321` - Google Search") lands verbatim in the title and
+// then displays as a real page. These are structural, not dictionary, checks:
+// no real word or name has a 7+ letter run without a vowel, four alternations
+// between letter and digit runs, or punctuation sprinkled through its middle.
+
+// Only tokens at least this long are judged at all; short tokens (acronyms,
+// ticker symbols, model numbers) never trip the detector.
+const MASH_MIN_TOKEN_LENGTH = 8
+// Longest consonant run in ordinary language stays under 7 ("latchstring"
+// reaches 6); treat "y" as a vowel so "rhythms" stays clean.
+const MASH_MAX_CONSONANT_RUN = 6
+// Letter→digit/digit→letter alternations: identifiers like "win32api" have 2;
+// mashed rows of the number line produce many more.
+const MASH_MAX_ALTERNATIONS = 3
+// A run of 6+ characters that are horizontal neighbors on one QWERTY row
+// ("qwertyuiop", "asdfgh") is a hand dragged across the keyboard; real words
+// top out around 3 ("were", "tree").
+const MASH_MAX_KEYBOARD_ROW_RUN = 5
+const QWERTY_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm', '1234567890']
+
+function longestKeyboardRowRun(token: string): number {
+  let longest = 0
+  for (const row of QWERTY_ROWS) {
+    let run = 0
+    let previousIndex = Number.NaN
+    for (const char of token.toLowerCase()) {
+      const index = row.indexOf(char)
+      if (index < 0) {
+        run = 0
+        previousIndex = Number.NaN
+        continue
+      }
+      run = Math.abs(index - previousIndex) === 1 ? Math.max(run, 1) + 1 : 1
+      previousIndex = index
+      longest = Math.max(longest, run)
+    }
+  }
+  return longest
+}
+
+function tokenLooksMashed(token: string): boolean {
+  const trimmed = token.replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, '')
+  if (trimmed.length < MASH_MIN_TOKEN_LENGTH) return false
+
+  let consonantRun = 0
+  let maxConsonantRun = 0
+  let alternations = 0
+  let mashPunctuation = 0
+  let previousKind: 'letter' | 'digit' | 'other' | null = null
+  for (const char of trimmed) {
+    const isLetter = /[a-z]/i.test(char)
+    const isDigit = /[0-9]/.test(char)
+    const kind = isLetter ? 'letter' : isDigit ? 'digit' : 'other'
+    if (isLetter && !/[aeiouy]/i.test(char)) {
+      consonantRun += 1
+      maxConsonantRun = Math.max(maxConsonantRun, consonantRun)
+    } else {
+      consonantRun = 0
+    }
+    if (previousKind && kind !== previousKind && kind !== 'other' && previousKind !== 'other') {
+      alternations += 1
+    }
+    // Dots, hyphens, apostrophes, slashes and similar live inside real words
+    // ("state-of-the-art", "node.js", "don't"); only row-of-keys punctuation
+    // counts toward the mash signal.
+    if (/[,;:`~^\\]/.test(char)) mashPunctuation += 1
+    previousKind = kind
+  }
+
+  return maxConsonantRun > MASH_MAX_CONSONANT_RUN
+    || alternations > MASH_MAX_ALTERNATIONS
+    || mashPunctuation >= 2
+    || longestKeyboardRowRun(trimmed) > MASH_MAX_KEYBOARD_ROW_RUN
+}
+
+/**
+ * True when a title's subject reads as keyboard-mash garbage. The subject is
+ * the first separator-delimited segment (search pages append the site name:
+ * "<query> - Google Search"), and the segment counts as mash when mashed
+ * tokens own at least half of its alphanumeric characters — so one stray
+ * identifier inside a real sentence never hides the title.
+ */
+export function titleLooksLikeKeyboardMash(rawTitle: string | null | undefined): boolean {
+  if (!rawTitle) return false
+  const subject = compactWhitespace(rawTitle).split(/\s+[-–—|·]\s+/)[0] ?? ''
+  if (!subject) return false
+  const tokens = subject.split(/\s+/)
+  let mashedChars = 0
+  let totalChars = 0
+  for (const token of tokens) {
+    const alphanumeric = token.replace(/[^a-z0-9]/gi, '').length
+    totalChars += alphanumeric
+    if (tokenLooksMashed(token)) mashedChars += alphanumeric
+  }
+  return totalChars > 0 && mashedChars * 2 >= totalChars
+}
+
 export function normalizeWebsiteTitleForDisplay(
   domain: string,
   rawTitle: string | null | undefined,
@@ -271,6 +371,9 @@ export function normalizeWebsiteTitleForDisplay(
   const cleaned = stripNotificationBadgePrefix(rawTitle)
   if (!cleaned) return null
   if (looksLikeRawUrlParams(cleaned)) return null
+  // A mashed subject is not a human title; fall back to the site name so the
+  // row still carries its real time without displaying garbage (DEV-239).
+  if (titleLooksLikeKeyboardMash(cleaned)) return null
 
   const lower = cleaned.toLowerCase()
   const simplifiedDomain = normalizedDomain.replace(/\.(com|org|io|net|ai|dev|app|so)$/g, '')

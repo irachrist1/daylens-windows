@@ -1,4 +1,5 @@
 import { looksLikeRawArtifactLabel } from './blockLabel'
+import { workNameGuardLabelViolation } from './workNameGuards'
 
 // The executable label-voice rubric (label-voice.md). A block label describes
 // what the person was doing in their own everyday words; this module turns that
@@ -362,6 +363,33 @@ export function evaluateLabelVoice(
     passed: details[rule.id] === null,
     detail: details[rule.id],
   }))
+}
+
+/**
+ * The ONE relabel-time rejection both AI label paths enforce — the direct
+ * relabel (generateWorkBlockInsight's labelRejection in jobs/aiService.ts)
+ * and the interpretation agent (agentLabelViolation): every invariant rule,
+ * the two target rules that catch echoed window titles and bare app names,
+ * and the shared work-name-guard vocabulary (tool brands/surfaces, command
+ * lines, joined tab titles, site surfaces — including a disqualified subject
+ * hiding behind a verb lead, "Working on Cursor Agents"). Returns the
+ * violation to feed the one corrective retry, or null when the label passes.
+ */
+export function labelCandidateViolation(
+  label: string | null | undefined,
+  context: LabelVoiceContext = {},
+): string | null {
+  const candidate = label?.trim()
+  if (!candidate) return 'the label was empty'
+  for (const finding of evaluateLabelVoice(candidate, context)) {
+    if (finding.passed) continue
+    if (finding.tier === 'invariant'
+      || finding.rule === 'no-verbatim-window-title'
+      || finding.rule === 'activity-not-software') {
+      return finding.detail ?? finding.rule
+    }
+  }
+  return workNameGuardLabelViolation(candidate)
 }
 
 /**

@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 .vite/
 out/
 dist/
@@ -35,3 +35,4 @@ artifacts/
 
 # ShipStudio metadata
 .shipstudio/
+.journal-eval/

@@ -34,6 +34,7 @@ import {
   queryCorrectedActivityFactsForRange,
   type CorrectedActivityRangeFacts,
 } from '../core/query/activityFactsQuery'
+import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
 
 export type { CorrectionSpan }
 
@@ -285,8 +286,17 @@ export function applyTimelineCorrectionsToSessions(
 
 /** Aggregate corrected sessions into per-app usage summaries. Also feeds the
  *  Timeline-day aggregation, which rolls block-partitioned sessions through
- *  the same rollup. */
-export function aggregateAppSummaries(sessions: readonly AppSession[]): AppUsageSummary[] {
+ *  the same rollup.
+ *
+ *  `canonicalLinks` is the identity registry's stored bundle/path → canonical
+ *  mapping (see getStoredCanonicalAppLinks): a session captured under a
+ *  path-style key whose bundle resolution failed at write time still groups
+ *  with its bundle-keyed twin, so one installed app can never appear as two
+ *  rows. */
+export function aggregateAppSummaries(
+  sessions: readonly AppSession[],
+  canonicalLinks?: ReadonlyMap<string, string>,
+): AppUsageSummary[] {
   const totals = new Map<string, {
     bundleId: string
     appName: string
@@ -301,11 +311,15 @@ export function aggregateAppSummaries(sessions: readonly AppSession[]): AppUsage
   const ordered = [...sessions].sort((a, b) => a.startTime - b.startTime)
   for (const session of ordered) {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
-    const key = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
+    // The stored registry link remaps a twin's derived key onto its canonical
+    // counterpart — applied AFTER the per-session derivation because the
+    // canonical projection stamps a catalog miss with the raw bundle/path id.
+    const derivedKey = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
+    const key = canonicalLinks?.get(derivedKey) ?? derivedKey
     const entry = totals.get(key) ?? {
       bundleId: session.bundleId,
       appName: identity.displayName || session.appName,
-      canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId ?? null,
+      canonicalAppId: key,
       seconds: 0,
       categorySeconds: new Map<AppCategory, number>(),
       sessionCount: 0,
@@ -346,7 +360,7 @@ export function getCorrectedAppSummariesForRange(
   const sessions = facts.evidenceSource === 'legacy' && liveSession
     ? withClippedLiveSession(facts.sessions, liveSession, fromMs, toMs)
     : facts.sessions
-  return aggregateAppSummaries(sessions)
+  return aggregateAppSummaries(sessions, getStoredCanonicalAppLinks(db))
 }
 
 function withClippedLiveSession(
@@ -463,7 +477,7 @@ export function getCorrectedWebsiteSummariesForRange(
     domain: string
     browserBundleId: string | null
     canonicalBrowserId: string | null
-    milliseconds: number
+    intervals: Array<{ start: number; end: number }>
     visitIds: Set<number>
     titleMs: Map<string, number>
   }>()
@@ -474,23 +488,37 @@ export function getCorrectedWebsiteSummariesForRange(
       domain: interval.domain,
       browserBundleId: visit?.browserBundleId ?? null,
       canonicalBrowserId: visit?.canonicalBrowserId ?? null,
-      milliseconds: 0,
+      intervals: [],
       visitIds: new Set<number>(),
       titleMs: new Map<string, number>(),
     }
     const milliseconds = interval.end - interval.start
-    entry.milliseconds += milliseconds
+    entry.intervals.push({ start: interval.start, end: interval.end })
     entry.visitIds.add(interval.visitId)
     const title = visitsById.get(interval.visitId)?.pageTitle?.trim()
     if (title) entry.titleMs.set(title, (entry.titleMs.get(title) ?? 0) + milliseconds)
     grouped.set(key, entry)
+  }
+  // Id-less visits bypass the shared per-browser claim pool upstream, so two
+  // orphan history rows can hold overlapping credited intervals — union per
+  // group before summing so a duplicate row can never double a domain's time.
+  const unionMs = (intervals: Array<{ start: number; end: number }>): number => {
+    const sorted = intervals.slice().sort((a, b) => a.start - b.start)
+    let total = 0
+    let cursor = Number.NEGATIVE_INFINITY
+    for (const piece of sorted) {
+      const start = Math.max(piece.start, cursor)
+      if (piece.end > start) total += piece.end - start
+      cursor = Math.max(cursor, piece.end)
+    }
+    return total
   }
   return [...grouped.entries()].map(([key, entry]) => {
     const raw = rawByDomainAndBrowser.get(key)
     const topTitle = [...entry.titleMs.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
     return {
       domain: entry.domain,
-      totalSeconds: Math.round(entry.milliseconds / 1000),
+      totalSeconds: Math.round(unionMs(entry.intervals) / 1000),
       visitCount: entry.visitIds.size,
       topTitle,
       browserBundleId: raw?.browserBundleId ?? entry.browserBundleId,
@@ -648,10 +676,15 @@ export function hasMaterialPageCoverageShortfall(entry: BrowserPageCoverage): bo
   return entry.pageCoveredSeconds * 2 < entry.foregroundSeconds
 }
 
+// Worded the way the answer should read, not the way the plumbing works: the
+// model copies this note's vocabulary and punctuation straight into prose, so
+// it carries no em dash and none of the terms the voice contract bans
+// ("foreground", "page-level detail").
 export function browserPageCoverageNoteText(entry: BrowserPageCoverage): string {
-  return `${entry.appName} was foreground ${formatHoursMinutes(entry.foregroundSeconds)}; `
-    + `page-level detail covers ${formatHoursMinutes(entry.pageCoveredSeconds)} — `
-    + `page tracking for this browser is limited, so app time is the trustworthy total.`
+  return `${entry.appName} was in front for ${formatHoursMinutes(entry.foregroundSeconds)}, `
+    + `and specific pages are recorded for ${formatHoursMinutes(entry.pageCoveredSeconds)} of that, `
+    + `because Daylens can only read some of this browser's tabs. `
+    + `Treat ${formatHoursMinutes(entry.foregroundSeconds)} as the real total and the page list as partial.`
 }
 
 /** Honest reconciliation notes for browsers with a material page-coverage

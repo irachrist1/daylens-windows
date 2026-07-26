@@ -22,7 +22,10 @@ import { generateWorkBlockInsight, generateDayRegroupPlan } from './ai'
 import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '../lib/absenceGuard'
 import { buildDaySnapshot } from '../lib/daySnapshot'
 import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
-import { interpretationAgentEnabled } from '../lib/interpretationEval'
+import { evaluateInterpretationRun, interpretationAgentEnabled } from '../lib/interpretationEval'
+import { findRawArtifactLeak } from '../lib/wrapNarrativeShared'
+import { runInterpretationAgentRelabel, type InterpretationAgentInsight } from './interpretationAgent'
+import { runExternalSignalBackfill } from './externalSignals'
 import { getSettings } from './settings'
 
 export type BlockInsightTrigger = 'user' | 'background' | 'system'
@@ -57,6 +60,13 @@ export interface AnalyzeTimelineDayDeps {
     block: WorkContextBlock,
     opts: { jobType: 'block_cleanup_relabel'; triggerSource: BlockInsightTrigger; throwOnError: boolean; userHint?: string },
   ) => Promise<WorkContextInsight>
+  // The interpretation-agent turn for one low-confidence block (only consulted
+  // when interpretationAgentEnabled is on). Real by default, mocked in tests.
+  // Any throw falls back to the direct blockInsight path for that block.
+  agentBlockInsight?: (
+    block: WorkContextBlock,
+    opts: { triggerSource: BlockInsightTrigger; userHint?: string },
+  ) => Promise<InterpretationAgentInsight>
   // Streams what the pipeline is actually doing (DEV-270), so the Analyze UI can
   // show real progress instead of a blank spinner. Absent in the automatic path.
   onProgress?: (update: TimelineAnalyzeProgress) => void
@@ -191,14 +201,23 @@ export async function analyzeTimelineDay(
   const resolveLiveSession = deps.resolveLiveSession ?? (() => null)
   const triggerSource = deps.triggerSource ?? 'user'
 
-  // The interpretation-agent live switch (DEV-206): OFF by default, and gated
-  // on the offline fixture eval (lib/interpretationEval). The packet-based
-  // runtime is not wired yet, so an early flip is honored honestly: say so
-  // and run the direct pipeline — never silently pretend the agent ran.
+  // An analyzed day is about to be wrapped: make sure its external signals
+  // (git commits, calendar) exist first — a historical day was never touched
+  // by the today/yesterday background collector. Bounded and best-effort
+  // inside; a no-op until production wiring registers the backfill, so the
+  // hermetic suite never reaches real connectors.
+  await runExternalSignalBackfill(dateStr)
+
+  // The interpretation-agent live switch (DEV-206): OFF by default. When on,
+  // the per-block relabel of LOW-CONFIDENCE blocks becomes an agent turn (a
+  // small Tier-1 tool loop, services/interpretationAgent.ts) instead of the
+  // single direct provider call. The deterministic pipeline stays the floor:
+  // any agent failure falls back per block to the exact direct behavior, and
+  // the whole agent pass is gated on evaluateInterpretationRun before one
+  // label persists. Flag off → this function is byte-identical to before.
+  let agentEnabled = false
   try {
-    if (interpretationAgentEnabled(getSettings())) {
-      console.warn('[timeline] interpretationAgentEnabled is set, but the packet-based interpretation runtime is not wired yet; running the direct regroup/relabel pipeline')
-    }
+    agentEnabled = interpretationAgentEnabled(getSettings())
   } catch { /* settings unavailable in some harnesses — the direct pipeline is the default either way */ }
   // The models that actually wrote this run's regroup plan and relabels —
   // recorded on the analysis version row (DEV-206) so an old analysis stays
@@ -207,6 +226,9 @@ export async function analyzeTimelineDay(
   const onModel = (model: string) => { if (model) modelsUsed.add(model) }
   const regroupPlan = deps.regroupPlan ?? ((blocks, opts) => generateDayRegroupPlan(blocks, { ...opts, onModel }))
   const blockInsight = deps.blockInsight ?? ((block, opts) => generateWorkBlockInsight(block, { ...opts, onModel }))
+  const agentBlockInsight = deps.agentBlockInsight
+    ?? ((block: WorkContextBlock, opts: { triggerSource: BlockInsightTrigger; userHint?: string }) =>
+      runInterpretationAgentRelabel(db, block, { ...opts, onModel }))
 
   const materialize = (): DayTimelinePayload =>
     materializeTimelineDayProjection(db, dateStr, resolveLiveSession(dateStr))
@@ -385,9 +407,103 @@ export async function analyzeTimelineDay(
   // it is done here, after the call resolves, so the writes never race.
   const relabelTargets = payload.blocks.filter((block) => shouldReanalyzeBlockWithAI(block))
   attempted += relabelTargets.length
-  if (relabelTargets.length > 0) {
+
+  // Agent-assisted relabel pass (flag-gated, DEV-206): LOW-CONFIDENCE blocks
+  // only — where the direct namer is most likely guessing — get one agent
+  // turn each. High-confidence blocks keep the direct path (no cost increase
+  // where confidence is fine). The pass is speculative until the eval gate
+  // approves it: agent labels are simulated onto the day and scored with
+  // evaluateInterpretationRun BEFORE anything persists; a violation discards
+  // the whole agent pass and the affected blocks fall back to the direct
+  // relabel below, exactly as if the flag were off.
+  const agentHandled = new Set<string>()
+  if (agentEnabled && relabelTargets.length > 0) {
+    const isLowConfidence = (block: WorkContextBlock): boolean =>
+      block.confidence === 'low' || block.label.confidence < 0.58
+    const agentTargets = relabelTargets.filter(isLowConfidence)
+    const agentResults: Array<{ block: WorkContextBlock; insight: InterpretationAgentInsight }> = []
+    if (agentTargets.length > 0) {
+      emitProgress({ stage: 'naming', done: 0, total: relabelTargets.length })
+      await mapWithConcurrency(agentTargets, RELABEL_CONCURRENCY, async (block) => {
+        try {
+          const insight = await agentBlockInsight(
+            { ...block, label: { ...block.label, override: null } },
+            { triggerSource, userHint },
+          )
+          agentResults.push({ block, insight })
+        } catch (error) {
+          // Per-block floor: the direct relabel below picks this block up.
+          console.warn(
+            `[timeline] interpretation agent failed for block ${block.id}; falling back to the direct relabel:`,
+            error instanceof Error ? error.message : error,
+          )
+        }
+      })
+    }
+    // Per-block label gate: a label that leaks raw technical text discards
+    // THAT block's agent result (it falls back to the direct relabel below),
+    // not the whole pass — one bad name must not throw away every good one.
+    const cleanResults = agentResults.filter(({ block, insight }) => {
+      const label = insight.label?.trim() ?? ''
+      const leak = label ? findRawArtifactLeak(label) : 'the label was empty'
+      if (!leak) return true
+      console.warn(
+        `[timeline] interpretation agent label for block ${block.id} discarded (${leak}); falling back to the direct relabel`,
+      )
+      return false
+    })
+    if (cleanResults.length > 0) {
+      // The eval gate (lib/interpretationEval): score the proposed day against
+      // the interpretation invariants before any write. A remaining violation
+      // here — a person's correction overwritten, evidence created or
+      // destroyed, an absence spanned — indicates SYSTEMIC misbehavior, so it
+      // still discards the whole agent pass and the deterministic pipeline
+      // result stands.
+      const proposedById = new Map(cleanResults.map((entry) => [entry.block.id, entry.insight]))
+      const simulatedAfter: DayTimelinePayload = {
+        ...payload,
+        blocks: payload.blocks.map((block) => {
+          const proposed = proposedById.get(block.id)
+          return proposed
+            ? { ...block, label: { ...block.label, current: proposed.label, source: 'ai' as const } }
+            : block
+        }),
+      }
+      const report = evaluateInterpretationRun({
+        before: payload,
+        after: simulatedAfter,
+        expectations: {
+          correctedLabels: payload.blocks
+            .filter((block) => !block.isLive && (block.label.override?.trim() || block.review.state === 'corrected'))
+            .map((block) => block.label.current.trim())
+            .filter(Boolean),
+        },
+      })
+      if (report.pass) {
+        for (const { block, insight } of cleanResults) {
+          try {
+            const wrote = applyAIInsightToTimelineBlock(db, block, insight)
+            if (wrote) relabeled++
+            changed = wrote || changed
+            agentHandled.add(block.id)
+          } catch (error) {
+            // Persist failure is a per-block failure: leave it to the direct
+            // relabel below rather than losing the block's attempt entirely.
+            console.warn(`[timeline] interpretation agent label could not persist for block ${block.id}:`, error)
+          }
+        }
+      } else {
+        for (const violation of report.violations) {
+          console.warn(`[timeline] interpretation agent pass discarded (${violation.rule}): ${violation.detail}`)
+        }
+      }
+    }
+  }
+
+  const directTargets = relabelTargets.filter((block) => !agentHandled.has(block.id))
+  if (directTargets.length > 0) {
     let named = 0
-    emitProgress({ stage: 'naming', done: 0, total: relabelTargets.length })
+    emitProgress({ stage: 'naming', done: 0, total: directTargets.length })
     type RelabelOutcome =
       | { block: WorkContextBlock; insight: WorkContextInsight }
       | { block: WorkContextBlock; error: string }
@@ -401,10 +517,10 @@ export async function analyzeTimelineDay(
       } catch (error) {
         return { block, error: error instanceof Error ? error.message : String(error) }
       } finally {
-        emitProgress({ stage: 'naming', done: ++named, total: relabelTargets.length })
+        emitProgress({ stage: 'naming', done: ++named, total: directTargets.length })
       }
     }
-    let insights = await mapWithConcurrency(relabelTargets, RELABEL_CONCURRENCY, nameBlock)
+    let insights = await mapWithConcurrency(directTargets, RELABEL_CONCURRENCY, nameBlock)
 
     // Provider failures under concurrency are usually transient (a 429, one
     // slow call hitting the timeout). A run must not give up on a block after
@@ -414,7 +530,7 @@ export async function analyzeTimelineDay(
     // "Everything failed" only signals an outage when there was more than one
     // call to corroborate it — a day with a single relabel target must still
     // get its retry (DEV-278).
-    const looksLikeOutage = firstPassFailed.length === relabelTargets.length && relabelTargets.length > 1
+    const looksLikeOutage = firstPassFailed.length === directTargets.length && directTargets.length > 1
     if (firstPassFailed.length > 0 && !looksLikeOutage) {
       named -= firstPassFailed.length
       const retried = await mapWithConcurrency(firstPassFailed.map((entry) => entry.block), 1, nameBlock)

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { AppDetailPayload, PageRef } from '@shared/types'
+import { MIN_DOMAIN_ROW_SECONDS } from '@shared/types'
 import { partitionDomainsWorkFirst } from '@shared/workKind'
 import EntityIcon from '../../components/EntityIcon'
 import EvidenceIdentity from '../../components/EvidenceIdentity'
@@ -60,8 +61,11 @@ export default function BrowserActivityBreakdown({
   // them all at once stutters the panel. Render a page window per domain and
   // grow it on demand.
   const [pageLimits, setPageLimits] = useState<Record<string, number>>({})
+  // The seconds accessor keeps a leisure domain with real hours (YouTube on a
+  // heavy week) in the main list; only incidental leisure folds off to the
+  // side (DEV-240).
   const domainSplit = useMemo(
-    () => partitionDomainsWorkFirst(activity.domains, (entry) => entry.domain),
+    () => partitionDomainsWorkFirst(activity.domains, (entry) => entry.domain, (entry) => entry.totalSeconds),
     [activity.domains],
   )
 
@@ -178,7 +182,10 @@ export default function BrowserActivityBreakdown({
     )
   }
 
-  if (domainSplit.work.length === 0 && domainSplit.leisure.length === 0 && activity.unattributedSeconds <= 0) return null
+  const everythingElse = activity.everythingElse
+
+  if (domainSplit.work.length === 0 && domainSplit.leisure.length === 0
+    && !everythingElse && activity.unattributedSeconds <= 0) return null
 
   return (
     <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
@@ -197,6 +204,21 @@ export default function BrowserActivityBreakdown({
           )}
           <div style={{ display: 'grid', gap: 10 }}>{domainSplit.leisure.map(renderDomainGroup)}</div>
         </>
+      )}
+      {everythingElse && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: (domainSplit.work.length > 0 || domainSplit.leisure.length > 0) ? 12 : 0 }}>
+          <span aria-hidden="true" style={{ width: 10 }} />
+          <span aria-hidden="true" style={{ width: 26, height: 26, borderRadius: 7, background: 'var(--color-surface-high)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>+</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-secondary)' }}>Everything else</div>
+            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+              {everythingElse.domainCount} site{everythingElse.domainCount === 1 ? '' : 's'} under {MIN_DOMAIN_ROW_SECONDS} seconds each
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+            {formatDuration(everythingElse.totalSeconds)}
+          </div>
+        </div>
       )}
       {activity.unattributedSeconds > 0 && (
         <div style={{ marginTop: (domainSplit.work.length > 0 || domainSplit.leisure.length > 0) ? 12 : 0, opacity: 0.75 }}>

@@ -2,9 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildWrapExportModels,
-  exportGrid,
-  renderWrapExport,
-  saveWrapExport,
+  exportWrapDeck,
+  renderWrapSlide,
+  saveWrapSlide,
+  wrapSlideFilename,
   EXPORT_PANEL_H,
   EXPORT_PANEL_W,
   type WrapExportCanvas,
@@ -14,11 +15,12 @@ import {
 import { planPeriodWrapSlides, periodWrapDeckMeta } from '../src/renderer/lib/wrapDeck.ts'
 import type { WrappedPeriodFacts } from '../src/shared/types.ts'
 
-// The finale's Export button renders EVERY slide into one tall shareable image.
-// The model builder is pure and pinned here with real facts; the canvas layer
-// runs against a recording stub, so "export produces a file" is proven without
-// a DOM: the pipeline must hand a real PNG-bound Blob to the save sink with
-// the right dimensions and the story's actual content drawn in.
+// DEV-248: export follows Spotify Wrapped — every slide is its own shareable
+// 1080×1350 PNG. The glued mega-image path is gone. The model builder is pure
+// and pinned here with real facts; the canvas layer runs against a recording
+// stub, so "export produces one file per slide" is proven without a DOM, and
+// the two failure guarantees are pinned: a render failure saves NOTHING (no
+// partial share on disk), and a save failure rejects so the deck can say so.
 
 function weekFacts(): WrappedPeriodFacts {
   return {
@@ -83,7 +85,7 @@ function deckAndMeta() {
 
 // ─── The pure model builder ───────────────────────────────────────────────────
 
-test('export models: one panel per slide, in deck order', () => {
+test('export models: one model per slide, in deck order', () => {
   const { slides, meta } = deckAndMeta()
   const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
   assert.equal(models.length, slides.length)
@@ -121,13 +123,35 @@ test('export models: a missing AI line falls back to the deterministic line, nev
   }
 })
 
+// ─── Filenames ────────────────────────────────────────────────────────────────
+
+test('filenames: story-ordered, zero-padded, carry the scene id, unique', () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const names = models.map((m, i) => wrapSlideFilename('daylens-week-2026-06-24', i, m))
+  assert.equal(names[0], 'daylens-week-2026-06-24-slide-01-opening.png')
+  assert.equal(new Set(names).size, names.length, 'filenames must be unique')
+  for (const [i, name] of names.entries()) {
+    assert.match(name, /-slide-\d{2}-[\w.-]+\.png$/)
+    assert.ok(name.includes(models[i].id), `${name} must carry its scene id`)
+  }
+  // Zero padding keeps lexicographic order equal to story order.
+  assert.deepEqual([...names].sort(), names)
+})
+
 // ─── The canvas layer, against a recording stub ───────────────────────────────
 
 interface RecordedCanvas extends WrapExportCanvas { texts: string[] }
 
-function stubCanvasDeps(): { deps: WrapExportDeps; created: RecordedCanvas[]; saved: Array<{ blob: Blob; filename: string }> } {
+function stubCanvasDeps(): {
+  deps: WrapExportDeps
+  created: RecordedCanvas[]
+  saved: Array<{ blob: Blob; filename: string }>
+  savedAll: Array<{ stem: string; files: Array<{ filename: string; blob: Blob }> }>
+} {
   const created: RecordedCanvas[] = []
   const saved: Array<{ blob: Blob; filename: string }> = []
+  const savedAll: Array<{ stem: string; files: Array<{ filename: string; blob: Blob }> }> = []
   const deps: WrapExportDeps = {
     createCanvas: (width, height) => {
       const texts: string[] = []
@@ -145,104 +169,169 @@ function stubCanvasDeps(): { deps: WrapExportDeps; created: RecordedCanvas[]; sa
     },
     toBlob: async (canvas) => new Blob([`png:${canvas.width}x${canvas.height}`], { type: 'image/png' }),
     save: async (blob, filename) => { saved.push({ blob, filename }) },
+    saveAll: async (stem, files) => { savedAll.push({ stem, files }); return { canceled: false } },
   }
-  return { deps, created, saved }
+  return { deps, created, saved, savedAll }
 }
 
-test('renderWrapExport: renders one canvas, every slide drawn, grid sized to the deck', async () => {
+test('renderWrapSlide: one slide renders into its own 1080×1350 canvas with its content drawn', async () => {
   const { slides, meta } = deckAndMeta()
   const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
   const { deps, created } = stubCanvasDeps()
-  const blob = await renderWrapExport(models, meta.footer, deps)
+  const blob = await renderWrapSlide(models.find((m) => m.id === 'opening')!, meta.footer, deps)
   assert.ok(blob, 'expected a rendered blob')
   assert.equal(blob!.type, 'image/png')
   assert.equal(created.length, 1)
-  const { cols, rows } = exportGrid(models.length)
-  assert.equal(created[0].width, EXPORT_PANEL_W * cols)
-  assert.equal(created[0].height, EXPORT_PANEL_H * rows, 'one 1080×1350 panel per slide, grid-packed')
+  assert.equal(created[0].width, EXPORT_PANEL_W)
+  assert.equal(created[0].height, EXPORT_PANEL_H, 'a slide is exactly one shareable panel')
   const drawn = created[0].texts.join('\n')
   assert.match(drawn, /DAYLENS/, 'watermark brand missing')
-  assert.match(drawn, /Cursor/, 'chart content missing')
   assert.match(drawn, /week that belonged to the rework/, 'opening line missing')
-  assert.match(drawn, /back\?/, 'question panel missing')
 })
 
-test('renderWrapExport: a 30-slide month deck stays inside browser canvas limits', async () => {
-  // The real export bug: one column of 1350px panels blows past the ~32k px
-  // canvas cap at ~24 slides, toBlob returns null, and the export silently
-  // fails. A big deck must lay out in two columns and still produce a file.
+test('exportWrapDeck: one PNG per slide reaches the save-all sink, named in story order', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps, created, savedAll } = stubCanvasDeps()
+  const outcome = await exportWrapDeck(models, 'daylens-week-2026-06-24', meta.footer, deps)
+  assert.deepEqual(outcome, { kind: 'saved', count: models.length })
+  assert.equal(created.length, models.length, 'every slide gets its own canvas')
+  for (const canvas of created) {
+    assert.equal(canvas.width, EXPORT_PANEL_W)
+    assert.equal(canvas.height, EXPORT_PANEL_H, 'no glued strip: each canvas is one panel')
+  }
+  assert.equal(savedAll.length, 1, 'one folder pick, one batch')
+  assert.equal(savedAll[0].files.length, models.length)
+  assert.equal(savedAll[0].files[0].filename, 'daylens-week-2026-06-24-slide-01-opening.png')
+  const drawnEverything = created.map((c) => c.texts.join('\n')).join('\n')
+  assert.match(drawnEverything, /Cursor/, 'chart content missing')
+  assert.match(drawnEverything, /back\?/, 'question panel missing')
+})
+
+test('exportWrapDeck: a 30-slide month deck exports 30 individual files, no canvas-cap risk', async () => {
+  // The old glued image blew past the ~32k px browser canvas cap at ~24
+  // slides. Per-slide export makes deck size irrelevant: every canvas is
+  // 1080×1350 no matter how long the story runs.
   const { slides, meta } = deckAndMeta()
   const base = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
   const models = Array.from({ length: 30 }, (_, i) => ({ ...base[i % base.length], id: `panel-${i}` }))
-  const { deps, created } = stubCanvasDeps()
-  const blob = await renderWrapExport(models, meta.footer, deps)
-  assert.ok(blob, 'a 30-slide deck must still export')
-  assert.equal(created[0].width, EXPORT_PANEL_W * 2, 'big decks pack two columns')
-  assert.equal(created[0].height, EXPORT_PANEL_H * 15)
-  assert.ok(created[0].height <= 32_000, `canvas height ${created[0].height} exceeds browser limits`)
+  const { deps, created, savedAll } = stubCanvasDeps()
+  const outcome = await exportWrapDeck(models, 'daylens-month-2026-06', meta.footer, deps)
+  assert.deepEqual(outcome, { kind: 'saved', count: 30 })
+  assert.equal(created.length, 30)
+  assert.ok(created.every((c) => c.width === EXPORT_PANEL_W && c.height === EXPORT_PANEL_H))
+  assert.equal(savedAll[0].files.length, 30)
 })
 
-test('saveWrapExport: produces a file — the blob reaches the save sink with the filename', async () => {
-  const { slides, meta } = deckAndMeta()
-  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
-  const { deps, saved } = stubCanvasDeps()
-  const ok = await saveWrapExport(models, 'daylens-week-2026-06-24.png', meta.footer, deps)
-  assert.equal(ok, true)
-  assert.equal(saved.length, 1)
-  assert.equal(saved[0].filename, 'daylens-week-2026-06-24.png')
-  assert.ok(saved[0].blob.size > 0, 'the exported file must not be empty')
-})
-
-test('saveWrapExport: a single slide exports as one panel', async () => {
+test('saveWrapSlide: a single slide save produces one file with the given name', async () => {
   const { slides, meta } = deckAndMeta()
   const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
   const { deps, created, saved } = stubCanvasDeps()
-  const ok = await saveWrapExport([models[0]], 'daylens-week-opening.png', meta.footer, deps)
+  const ok = await saveWrapSlide(models[0], 'daylens-week-opening.png', meta.footer, deps)
   assert.equal(ok, true)
+  assert.equal(created.length, 1)
   assert.equal(created[0].height, EXPORT_PANEL_H)
   assert.equal(saved[0].filename, 'daylens-week-opening.png')
+  assert.ok(saved[0].blob.size > 0, 'the exported file must not be empty')
 })
 
-// ─── Failures are visible, never swallowed ───────────────────────────────────
-// The old UI mapped every failure back to the idle button label, so a null
-// toBlob (the canvas-cap symptom) or a throwing save sink looked like nothing
-// happened. The pipeline must report failure, and the labels must say it.
+// ─── Failures are visible, never swallowed, never partial ────────────────────
 
-import { exportButtonLabel, saveSlideButtonLabel } from '../src/renderer/components/wrap/wrapExport.ts'
+import { exportButtonLabel, saveSlideButtonLabel, wrapExportFailureDetail } from '../src/renderer/components/wrap/wrapExport.ts'
 
-test('failure: a null blob reports false and nothing reaches the save sink', async () => {
+test('failure: a slide that renders to null aborts the export, saves NOTHING, and names the scene', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps, savedAll } = stubCanvasDeps()
+  let call = 0
+  deps.toBlob = async (canvas) => (++call === 3 ? null : new Blob([`png:${canvas.width}x${canvas.height}`], { type: 'image/png' }))
+  const outcome = await exportWrapDeck(models, 'daylens-week', meta.footer, deps)
+  assert.equal(outcome.kind, 'failed')
+  if (outcome.kind === 'failed') {
+    assert.equal(outcome.total, models.length)
+    assert.equal(outcome.rendered, models.length - 1, 'the outcome reports how many scenes rendered')
+    assert.deepEqual(outcome.failedIds, [models[2].id], 'the outcome names the scene that did not render')
+  }
+  assert.equal(savedAll.length, 0, 'no partial share reaches the sink')
+})
+
+test('failure: single-slide null blob reports false and nothing reaches the save sink', async () => {
   const { slides, meta } = deckAndMeta()
   const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
   const { deps, saved } = stubCanvasDeps()
-  deps.toBlob = async () => null // encoder/canvas produced nothing
-  const ok = await saveWrapExport(models, 'daylens-week.png', meta.footer, deps)
-  assert.equal(ok, false, 'a produced-nothing export must report failure')
-  assert.equal(saved.length, 0, 'no phantom file reaches the sink')
+  deps.toBlob = async () => null
+  const ok = await saveWrapSlide(models[0], 'daylens-week-opening.png', meta.footer, deps)
+  assert.equal(ok, false, 'a produced-nothing save must report failure')
+  assert.equal(saved.length, 0)
 })
 
-test('failure: a throwing save sink rejects so the caller can surface it', async () => {
+test('failure: a throwing save-all sink rejects so the caller can surface it', async () => {
   const { slides, meta } = deckAndMeta()
   const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
   const { deps } = stubCanvasDeps()
-  deps.save = async () => { throw new Error('disk full') }
+  deps.saveAll = async () => { throw new Error('disk full') }
   await assert.rejects(
-    () => saveWrapExport(models, 'daylens-week.png', meta.footer, deps),
+    () => exportWrapDeck(models, 'daylens-week', meta.footer, deps),
     /disk full/,
     'a failed write must reject, never resolve as success',
   )
 })
 
-test('failure labels: the failed state is said honestly, one calm line, no sorry', () => {
-  assert.equal(exportButtonLabel('idle'), 'Export wrap')
-  assert.equal(exportButtonLabel('working'), 'Exporting…')
-  assert.equal(exportButtonLabel('done'), 'Exported ✓')
-  assert.equal(exportButtonLabel('failed'), "Export didn't finish. Try again")
+test('canceled: dismissing the folder picker is a calm no-op outcome, not a failure', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps } = stubCanvasDeps()
+  deps.saveAll = async () => ({ canceled: true })
+  const outcome = await exportWrapDeck(models, 'daylens-week', meta.footer, deps)
+  assert.deepEqual(outcome, { kind: 'canceled' })
+})
+
+test('failure labels: states are said honestly, one calm line, no sorry, no em dash', () => {
+  assert.equal(exportButtonLabel({ kind: 'idle' }), 'Export all slides')
+  assert.equal(exportButtonLabel({ kind: 'working' }), 'Exporting…')
+  assert.equal(exportButtonLabel({ kind: 'done', count: 12 }), 'Saved 12 slides ✓')
+  assert.equal(exportButtonLabel({ kind: 'done', count: 1 }), 'Saved 1 slide ✓')
+  assert.equal(exportButtonLabel({ kind: 'failed' }), "Export didn't finish. Try again")
+  assert.equal(
+    exportButtonLabel({ kind: 'failed', rendered: 9, total: 12 }),
+    'Only 9 of 12 slides rendered. Nothing was saved. Try again',
+    'a render failure reports which scenes rendered',
+  )
+  assert.equal(
+    exportButtonLabel({ kind: 'failed', rendered: 10, total: 12, failedIds: ['shape', 'apps'] }),
+    'Only 10 of 12 slides rendered (missing: shape, apps). Nothing was saved. Try again',
+    'a render failure names the missing scenes',
+  )
+  assert.equal(
+    exportButtonLabel({ kind: 'failed', detail: 'Writing x.png failed after 2 of 4 slides: disk full' }),
+    'Writing x.png failed after 2 of 4 slides: disk full. Try again',
+    'a write failure surfaces the real story, not a generic line',
+  )
   assert.equal(saveSlideButtonLabel('failed'), "Save didn't finish. Try again")
   assert.equal(saveSlideButtonLabel('saved'), 'Saved ✓')
   assert.equal(saveSlideButtonLabel('idle'), 'Save slide')
-  // voice.md errors: never apologize, never spiral.
-  for (const label of [exportButtonLabel('failed'), saveSlideButtonLabel('failed')]) {
+  // voice.md errors: never apologize, never spiral. And no em dashes anywhere.
+  const allLabels = [
+    exportButtonLabel({ kind: 'idle' }), exportButtonLabel({ kind: 'working' }),
+    exportButtonLabel({ kind: 'done', count: 3 }), exportButtonLabel({ kind: 'failed' }),
+    exportButtonLabel({ kind: 'failed', rendered: 1, total: 2 }),
+    saveSlideButtonLabel('idle'), saveSlideButtonLabel('saved'), saveSlideButtonLabel('failed'),
+  ]
+  for (const label of allLabels) {
     assert.doesNotMatch(label, /sorry|unfortunately|error code/i)
-    assert.notEqual(label, 'Export wrap', 'a failure must be distinguishable from idle')
+    assert.doesNotMatch(label, /—/, 'no em dashes in product strings')
   }
+  assert.notEqual(exportButtonLabel({ kind: 'failed' }), exportButtonLabel({ kind: 'idle' }), 'a failure must be distinguishable from idle')
+})
+
+test('wrapExportFailureDetail: strips the Electron invoke machinery so the person reads the message', () => {
+  assert.equal(
+    wrapExportFailureDetail(new Error("Error invoking remote method 'export:wrap-slides': Error: Writing w-slide-03.png failed after 2 of 4 slides: EDQUOT: quota exceeded")),
+    'Writing w-slide-03.png failed after 2 of 4 slides: EDQUOT: quota exceeded',
+  )
+  assert.equal(wrapExportFailureDetail(new Error('disk full.')), 'disk full')
+  assert.equal(wrapExportFailureDetail(new Error('')), null)
+  assert.equal(wrapExportFailureDetail(42), null)
+  const long = wrapExportFailureDetail(new Error('x'.repeat(500)))
+  assert.ok(long && long.length <= 140, 'a runaway message is capped for the button')
 })

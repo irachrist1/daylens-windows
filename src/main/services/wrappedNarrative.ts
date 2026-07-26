@@ -31,7 +31,9 @@ import {
 } from '../lib/wrappedNarrative'
 import { buildDayFactTable } from '../lib/wrapFactTable'
 import { getDb } from './database'
+import { localDateString } from '../lib/localDate'
 import { resolveDayEnrichment } from './enrichmentResolve'
+import { runExternalSignalBackfill } from './externalSignals'
 import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
 import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 
@@ -58,7 +60,9 @@ export function registerWrappedNarrativeProvider(runner: ProviderRunner): void {
 // Belt over the per-job timeout (JOB_DEFINITIONS.wrapped_narrative = 40s); sits
 // just above it so the job timeout governs. A full Sonnet deck runs ~15-25s.
 // Overridable for the offline benchmark on slower days.
-const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 45_000
+// 90s: a full day with git enrichment measured 54s on the quality model —
+// 45s silently served the fallback deck on exactly the days most worth telling.
+const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 90_000
 
 /** A stored narrative from before the deck rewrite has no `lines` object; it
  *  cannot drive the new deck, so treat it as absent and generate once. */
@@ -86,6 +90,13 @@ export async function getWrappedNarrative(
 ): Promise<AIWrappedNarrative> {
   const facts = buildDayWrapFacts(payload)
   const db = getDb()
+  // A historical day opened for the first time has no external_signals rows —
+  // the background collector only walks today and yesterday. Backfill once
+  // through the production connectors, bounded; a scanned-empty day is
+  // remembered and never re-collected, and any failure or timeout degrades to
+  // no enrichment, never a blocked wrap. (No-op until index.ts registers it,
+  // so hermetic tests never touch real git/calendar.)
+  await runExternalSignalBackfill(facts.date)
   // Resolve the day's external signals (git / calendar / focus) deterministically
   // from stored rows — no tool loop, never blocks. Absent → null, never invented.
   const enrichment = resolveDayEnrichment(db, facts.date)
@@ -102,13 +113,21 @@ export async function getWrappedNarrative(
   // (corrections invalidate the stored row at write time, so in practice this
   // is today accruing activity), the stored prose is re-grounded rather than
   // trusted — a line that would contradict the current cards cannot render.
+  let regeneratingStale = false
   if (!options.force) {
     const stored = getStoredWrappedNarrative<AIWrappedNarrative>(db, 'day', periodKey)
     if (stored && isDeckNarrative(stored.narrative)) {
       if (stored.factsHash === factsHash) {
         return { ...stored.narrative, generatedAt: stored.generatedAt }
       }
-      if (options.onStale !== 'regenerate') {
+      // A COMPLETED day whose stored wrap no longer matches its facts was
+      // generated mid-day and frozen — a full day permanently described by
+      // its first morning. Its facts can only have settled, so regenerate
+      // once; after that the hash matches and the stored wrap is served
+      // forever. Same-day opens keep reconciling so today's wrap stays
+      // stable while activity accrues.
+      const dayCompleted = facts.date < localDateString()
+      if (options.onStale !== 'regenerate' && !(dayCompleted && providerRunner)) {
         const reconciled = reconcileStoredNarrative(stored.narrative, facts, factsHash, enrichment, factTable)
         if (reconciled) return { ...reconciled, generatedAt: stored.generatedAt }
         // Nothing of the stored prose grounds anymore: show the honest
@@ -116,7 +135,9 @@ export async function getWrappedNarrative(
         // or notification delivery produces a fresh one.
         return buildFallbackNarrative(facts, factsHash)
       }
-      // onStale 'regenerate': fall through and generate from the current facts.
+      // onStale 'regenerate' or a settled completed day: fall through and
+      // generate from the current facts.
+      regeneratingStale = true
     }
   }
 
@@ -142,7 +163,7 @@ export async function getWrappedNarrative(
           question: result.question,
           reflection: result.reflection,
         },
-        reason: options.force ? 'manual-regenerate' : undefined,
+        reason: options.force ? 'manual-regenerate' : regeneratingStale ? 'facts-changed' : undefined,
         now: generatedAt,
       })
     } catch (versionError) {
@@ -152,6 +173,15 @@ export async function getWrappedNarrative(
   }
 
   const fallback = buildFallbackNarrative(facts, factsHash)
+
+  // Unusable model output. On a first generation the fallback is persisted
+  // (the day has an honest wrap, Regenerate can replace it). But when this
+  // call was a regeneration of a DRIFTED stored wrap, persisting the fallback
+  // would mark the cache fresh under the new hash — clobbering the stored
+  // wrap and freezing the deterministic floor in forever. Return the floor
+  // WITHOUT persisting so the stored wrap survives and a later open retries.
+  const settleUnusable = (): AIWrappedNarrative =>
+    regeneratingStale ? fallback : persist(fallback)
 
   // Quality gates: no AI for empty/tooEarly days — the fallback is honest enough
   // and we don't want to spend tokens on "not enough data yet".
@@ -192,7 +222,7 @@ export async function getWrappedNarrative(
     const model = config.model
 
     const parsed = parseWrapResponse(text)
-    if (!parsed) return persist(fallback)
+    if (!parsed) return settleUnusable()
     let { narrative, rejections } = validateWrappedNarrativeObject(parsed, facts, factsHash, enrichment, factTable)
 
     // ONE repair round (wrapped-agent-plan: verify + at most one repair call).
@@ -234,7 +264,7 @@ export async function getWrappedNarrative(
       }
     }
 
-    return persist(narrative ?? fallback, narrative ? model : null)
+    return narrative ? persist(narrative, model) : settleUnusable()
   } catch (error) {
     console.warn(`[ai] wrapped_narrative failed for ${facts.date}:`, error)
     // A transient failure is not a generated wrap — return the floor without

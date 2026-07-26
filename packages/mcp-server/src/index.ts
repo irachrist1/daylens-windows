@@ -2,27 +2,21 @@
 // Spawned by Claude Desktop (or another MCP client) via the config snippet
 // shown in Daylens Settings.
 //
-// Required env: DAYLENS_DB_PATH (absolute path to daylens.sqlite)
+// Env: DAYLENS_DB_PATH (absolute path to daylens.sqlite) overrides discovery;
+// without it the server resolves the same userData directory the app uses.
 // Set env ELECTRON_RUN_AS_NODE=1 when launching via the Daylens binary.
 import Database from 'better-sqlite3'
 import { Server } from '@modelcontextprotocol/sdk/server'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import os from 'node:os'
-import path from 'node:path'
 import fs from 'node:fs'
 import { executeTool } from '../../../src/main/services/aiTools'
 import { executeWrappedTool, isWrappedToolName } from '../../../src/main/services/wrappedTools'
 import type { TrackingControlsState } from '../../../src/shared/trackingControls'
 import { anthropicTools, wrappedTools } from './tools'
+import { resolveDefaultDbPath } from './dbPath'
 
-const dbPath =
-  process.env.DAYLENS_DB_PATH ??
-  (process.platform === 'win32'
-    ? path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'Daylens', 'daylens.sqlite')
-    : process.platform === 'darwin'
-      ? path.join(os.homedir(), 'Library', 'Application Support', 'Daylens', 'daylens.sqlite')
-      : path.join(os.homedir(), '.config', 'Daylens', 'daylens.sqlite'))
+const dbPath = process.env.DAYLENS_DB_PATH ?? resolveDefaultDbPath()
 
 if (!fs.existsSync(dbPath)) {
   console.error(`[daylens-mcp] Database not found at ${dbPath}. Set DAYLENS_DB_PATH to the correct location.`)

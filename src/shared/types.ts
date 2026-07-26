@@ -1539,6 +1539,13 @@ export interface WorkflowPattern {
   lastSeenAt: number
 }
 
+// Product decision (DEV-239): a domain needs at least this much credited
+// foreground time in the selected range to earn its own row in the browser
+// breakdown. Anything under it is a drive-by (a redirect hop, a 1-2 second
+// glance) and folds into one "Everything else" line, keeping its seconds in
+// the reconciled total without cluttering the list. Default: 10 seconds.
+export const MIN_DOMAIN_ROW_SECONDS = 10
+
 export interface AppDetailPayload {
   canonicalAppId: string
   displayName: string
@@ -1576,6 +1583,17 @@ export interface AppDetailPayload {
       visitCount: number
       pages: PageRef[]
     }>
+    /**
+     * Domains whose credited time fell under the minimum-row threshold,
+     * folded into one line so drive-by 1-2 second visits never earn their
+     * own rows. Included in attributedSeconds; the reconciliation is now
+     * Σ domain.totalSeconds + everythingElse.totalSeconds = attributedSeconds.
+     */
+    everythingElse?: {
+      totalSeconds: number
+      domainCount: number
+      visitCount: number
+    }
   }
   blockAppearances: Array<{
     blockId: string
@@ -1635,6 +1653,7 @@ export type AIJobType =
   | 'search_intent'
   | 'memory_write'
   | 'weekly_brief'
+  | 'interpretation_agent'
 
 export interface AIWrappedNarrative {
   /** The hook: a one-line read on the shape of the day. Always present, and
@@ -1788,6 +1807,13 @@ export interface GitRepoActivity {
   messages: string[]
   firstCommitClock: string | null
   lastCommitClock: string | null
+  /** How the commits spread across the day, by local part-of-day. Absent on
+   *  rows stored before the field existed. */
+  commitHourBuckets?: { overnight: number; morning: number; afternoon: number; evening: number }
+  /** Of commitCount, how many landed under an agent-runner author identity
+   *  (Claude, Cursor Agent, …) — the user's output via agents, never a
+   *  teammate's (unknown human authors are excluded entirely). */
+  agentCommitCount?: number
 }
 
 export interface GitPRActivity {
@@ -1866,62 +1892,6 @@ export interface MeetingNotesSignal {
   /** The source the notes came from ("Granola", "Notion"). */
   app: string
   notes: MeetingNoteSignal[]
-}
-
-// ─── Connectors (connectors.md, DEV-186) ────────────────────────────────────
-// The connected-sources foundation. Every provider registers a manifest; the
-// contract is proven by a fake provider in the test suite (the ticket's
-// deliverable) and real adapters arrive with DEV-188+, flipping `available`.
-// The renderer sees ONLY this listing shape — credentials, cursors, and raw
-// provider errors never cross the IPC boundary (spec: "The interface does not
-// display raw tokens, internal cursors, or provider errors that reveal
-// secrets").
-
-export type ConnectorId =
-  | 'google_calendar'
-  | 'outlook_calendar'
-  | 'github'
-  | 'linear'
-  | 'granola'
-
-export type ConnectorAuthState = 'disconnected' | 'connected' | 'needs_attention'
-
-/** One connector as Settings → Connections shows it. */
-export interface ConnectorListing {
-  id: ConnectorId
-  displayName: string
-  providerKind: 'calendar' | 'code' | 'issues' | 'meetings'
-  /** direct = Daylens-owned adapter; brokered = via an intermediary;
-   *  local = reads a file/store on this machine, no account at all. */
-  integration: 'direct' | 'brokered' | 'local'
-  authKind: 'oauth' | 'token' | 'local_file'
-  /** Plain-language "what data this brings" copy shown before connecting. */
-  whatItBrings: string
-  /** Exact read-only scopes, each with plain-language meaning. */
-  scopes: Array<{ scope: string; grants: string }>
-  /** Bounded initial-sync lookback, for honest progress copy. */
-  lookbackDays: number
-  /** True when a working adapter ships today; false = listed for the wave. */
-  available: boolean
-  authState: ConnectorAuthState
-  /** Human account/source label ("work.ics", "you@example.com"). Never a path, token, or cursor. */
-  accountLabel: string | null
-  connectedAt: number | null
-  lastSyncAt: number | null
-  /** Sanitized error summary — never a provider body that could carry secrets. */
-  lastSyncError: string | null
-  nextRetryAt: number | null
-  itemsIngested: number
-}
-
-/** What a connect/sync action reports back to Settings. `error` is always a
- *  sanitized summary — never a provider body that could carry secrets. */
-export interface ConnectorSyncSummary {
-  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
-  ingested: number
-  quarantined: number
-  tombstoned: number
-  error?: string
 }
 
 // ─── Full-history export (privacy-retention-and-sync.md §Export, DEV-196) ────
@@ -2005,6 +1975,13 @@ export type HistoryExportRunResult =
       incompleteSections: string[]
     }
 
+/** DEV-248: result of the per-slide wrap export. `canceled` means the person
+ *  dismissed the folder picker; otherwise every requested slide was written
+ *  (a partial write cleans up after itself and rejects instead). */
+export type WrapSlidesExportResult =
+  | { canceled: true }
+  | { canceled: false; dir: string; files: string[] }
+
 /** The day's external signals, RESOLVED for the wrap writer: sanitized,
  *  humanized, pre-formatted, and stripped of anything the model must never
  *  echo (raw paths, branches, clock times it can't ground). Each block is
@@ -2013,8 +1990,10 @@ export type HistoryExportRunResult =
 export interface DayEnrichment {
   /** What the day PRODUCED, from git + gh. */
   shipped: {
-    /** Commits per repo, humanized folder name, biggest first. */
-    commitsByProject: Array<{ project: string; commits: number }>
+    /** Commits per repo, humanized folder name, biggest first. `spread` is a
+     *  pre-formatted part-of-day telling ("14 overnight, 21 through the
+     *  morning") — null when the stored row predates commit-hour buckets. */
+    commitsByProject: Array<{ project: string; commits: number; spread?: string | null; viaAgents?: number | null }>
     /** Sanitized, humanized commit subjects / PR titles worth naming — never a
      *  raw path or branch (already stripped). Deduped, capped. */
     highlights: string[]
@@ -2421,11 +2400,6 @@ export interface AppSettings {
   // MCP servers ("mcp:notion") and focus apps ("focus:Session"). Discovery
   // is free; nothing is called until enabled AND the enrichment is wired up.
   enrichmentSources?: Record<string, boolean>
-  // Connected sources master switch (DEV-186). Default ON, but it only opens
-  // the gate together with current capture consent — turning it OFF stops
-  // every connector sync and ingest immediately, same shape as the capture
-  // consent gate. Per-connector connect/disconnect lives on the connection.
-  connectedSourcesEnabled?: boolean
   // Screen-context experiment (DEV-197). Consent is separate from capture,
   // sync, browser, and connector consent, and is offered ONLY from the
   // experiment setup — enabling normal tracking never sets it. Absent means
@@ -2437,6 +2411,14 @@ export interface AppSettings {
   // experiment status so the person can see exactly when they agreed.
   // Cleared on revoke.
   screenContextConsentAt?: number
+  // Tier-2 agent capability (docs/north-star/context-agent.md): may the chat
+  // agent read Granola meeting notes from the local cache? On by default —
+  // turning it off makes read_meeting_notes refuse honestly.
+  granolaAccessEnabled?: boolean
+  // Consent-gated agent capability: may the chat agent run allowlisted
+  // read-only terminal commands (run_command)? OFF by default; first use in a
+  // session additionally raises the in-chat permission card.
+  terminalAccessEnabled?: boolean
 }
 
 // ─── Screen-context experiment surface (DEV-198) ─────────────────────────────
@@ -2742,6 +2724,14 @@ interface LinuxDesktopDiagnostics {
   secretServiceReachable: boolean | null
 }
 
+/** DEV-261: present while the recorder has stalled enough this session that
+ *  the day probably has holes — drives the persistent in-app banner. Null or
+ *  absent once stalls have stopped long enough to trust recording again. */
+export interface RecorderStallBannerState {
+  stallCount: number
+  longestStallSeconds: number
+}
+
 /** DEV-229: the permission watcher's live verdict on whether capture can
  *  actually read window titles — the OS grant flag AND a real-read proxy
  *  (titled share of recently persisted samples). 'blind' = flag revoked or
@@ -2752,6 +2742,8 @@ export interface CaptureVerificationState {
   axTrusted: boolean
   recentSamples: number
   recentSamplesWithTitle: number
+  /** DEV-261: repeated main-thread stalls ride the same banner channel. */
+  recorderStall?: RecorderStallBannerState | null
   checkedAt: number
 }
 
@@ -3014,7 +3006,6 @@ export const IPC = {
     APPLY_CORRECTION: 'db:apply-correction',
     UNDO_CORRECTION: 'db:undo-correction',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
-    GET_RECAP_RANGE: 'db:get-recap-range',
     GET_TIMELINE_RANGE_BLOCKS: 'db:get-timeline-range-blocks',
   },
   DEBUG: {
@@ -3159,6 +3150,7 @@ export const IPC = {
     LIST: 'entities:list',
     DETAIL: 'entities:detail',
     SUGGESTED_MERGES: 'entities:suggested-merges',
+    MERGE_ALL_DUPLICATES: 'entities:merge-all-duplicates',
     PREVIEW_CORRECTION: 'entities:preview-correction',
     APPLY_CORRECTION: 'entities:apply-correction',
     UNDO_CORRECTION: 'entities:undo-correction',
@@ -3187,17 +3179,6 @@ export const IPC = {
     LIST_DISCLOSURES: 'file-access:list-disclosures',
     PICK_PATH: 'file-access:pick-path',
   },
-  CONNECTORS: {
-    LIST: 'connectors:list',
-    // Lifecycle IPC (DEV-188, with the first connectable provider). CONNECT
-    // runs the provider's authorization flow and first sync; DISCONNECT
-    // carries the person's explicit keep-or-delete choice for imported data.
-    CONNECT: 'connectors:connect',
-    SYNC: 'connectors:sync',
-    DISCONNECT: 'connectors:disconnect',
-    /** Main → renderer: connect-phase progress ({ connectorId, phase }). */
-    PROGRESS: 'connectors:progress',
-  },
   EXPORT: {
     // Full-history export (DEV-196). PLAN previews what an export would
     // contain; RUN streams the database into a folder the person chose and
@@ -3207,6 +3188,9 @@ export const IPC = {
     RUN: 'export:run',
     VERIFY: 'export:verify',
     PROGRESS: 'export:progress',
+    // DEV-248: the wrap deck exports one PNG per slide into a folder the
+    // person picks once. One dialog, many files, never a glued mega-image.
+    WRAP_SLIDES: 'export:wrap-slides',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',

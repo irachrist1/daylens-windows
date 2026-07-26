@@ -11,7 +11,10 @@
 // are written into the evidence stream as capture_failed → capture_recovered
 // spanning the hole, which the gap projection already renders as "capture
 // unavailable" — the stall becomes part of the day's honest record, never
-// silent. Repeated or long stalls surface one native notification.
+// silent. Repeated or long stalls surface one native notification and a
+// persistent in-app banner (via the capture-verification channel) that stays
+// until stalls stop.
+import type { RecorderStallBannerState } from '@shared/types'
 import { recordSupervisorEvent } from './captureEvidence'
 import { deliverNotification } from './notificationDelivery'
 import { capture } from './analytics'
@@ -22,10 +25,18 @@ const HEARTBEAT_INTERVAL_MS = 1_000
 /** Holes shorter than this are ordinary hiccups (GC, a heavy query) — logged
  *  by nothing, recorded by nothing. */
 const STALL_MIN_MS = 10_000
-/** A single stall this long, or several stalls in one session, is worth one
- *  native notification — the user deserves to know the app froze. */
-const NOTIFY_SINGLE_STALL_MS = 60_000
-const NOTIFY_REPEAT_COUNT = 3
+/** Product decision (DEV-261): freezing crosses from incident to pattern at
+ *  three stalls in one session, or a single stall of a minute or more. That
+ *  bar earns both the one-shot native notification and the persistent in-app
+ *  banner, because past it the day probably has holes and the person should
+ *  hear that from the app, not discover it on the timeline. */
+export const REPEATED_STALL_COUNT = 3
+export const SEVERE_STALL_MS = 60_000
+/** Product decision: the banner clears after ten minutes without a stall —
+ *  recording has demonstrably resumed and a warning that never leaves would
+ *  train people to ignore it. A later stall brings it straight back, since
+ *  the session's counters never reset while the app runs. */
+export const STALL_BANNER_CLEAR_AFTER_QUIET_MS = 10 * 60_000
 /** Below this share of the hole spent on CPU, the machine was asleep or
  *  suspended, not wedged — sleep is owned by the poll gap detector and the
  *  suspend/resume events, not by this watchdog. */
@@ -57,7 +68,38 @@ function realClock(): WatchdogClock {
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let stallsThisSession = 0
+let longestStallMs = 0
+let lastStallEndMs: number | null = null
 let notifiedThisSession = false
+
+/** Everything the banner verdict needs, exposed for the pure derivation. */
+export interface RecorderStallSnapshot {
+  stallCount: number
+  longestStallMs: number
+  lastStallEndMs: number | null
+}
+
+/** Pure banner verdict over the watchdog's counters. Exported for tests. */
+export function deriveRecorderStallBanner(
+  snapshot: RecorderStallSnapshot,
+  nowMs: number,
+): RecorderStallBannerState | null {
+  if (snapshot.lastStallEndMs === null) return null
+  const crossed = snapshot.stallCount >= REPEATED_STALL_COUNT
+    || snapshot.longestStallMs >= SEVERE_STALL_MS
+  if (!crossed) return null
+  if (nowMs - snapshot.lastStallEndMs >= STALL_BANNER_CLEAR_AFTER_QUIET_MS) return null
+  return {
+    stallCount: snapshot.stallCount,
+    longestStallSeconds: Math.round(snapshot.longestStallMs / 1000),
+  }
+}
+
+/** The live banner verdict for this session, read by the permission watcher
+ *  and pushed to the renderer on the capture-verification channel. */
+export function getRecorderStallBannerState(nowMs: number = Date.now()): RecorderStallBannerState | null {
+  return deriveRecorderStallBanner({ stallCount: stallsThisSession, longestStallMs, lastStallEndMs }, nowMs)
+}
 
 export interface StallObservation {
   startMs: number
@@ -81,6 +123,8 @@ function handleHole(observation: StallObservation): void {
   }
 
   stallsThisSession += 1
+  longestStallMs = Math.max(longestStallMs, observation.durationMs)
+  lastStallEndMs = observation.endMs
   console.warn(`[stall-watchdog] main thread was blocked for ${Math.round(observation.durationMs / 1000)}s (stall #${stallsThisSession} this session) — recording the hole as capture unavailable`)
   try {
     recordSupervisorEvent('capture_failed', observation.startMs)
@@ -94,8 +138,8 @@ function handleHole(observation: StallObservation): void {
     surface: 'stall-watchdog',
   })
 
-  const worthNotifying = observation.durationMs >= NOTIFY_SINGLE_STALL_MS
-    || stallsThisSession >= NOTIFY_REPEAT_COUNT
+  const worthNotifying = observation.durationMs >= SEVERE_STALL_MS
+    || stallsThisSession >= REPEATED_STALL_COUNT
   if (worthNotifying && !notifiedThisSession) {
     notifiedThisSession = true
     try {
@@ -134,5 +178,7 @@ export function stopStallWatchdog(): void {
     heartbeatTimer = null
   }
   stallsThisSession = 0
+  longestStallMs = 0
+  lastStallEndMs = null
   notifiedThisSession = false
 }
