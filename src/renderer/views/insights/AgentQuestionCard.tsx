@@ -31,22 +31,32 @@ export function AgentQuestionCard({ question, onAnswer, onDismiss }: AgentQuesti
       <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', whiteSpace: 'pre-line', lineHeight: 1.5 }}>
         {question.question}
       </p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-        {question.options.map((option) => (
+      {/* Numbered, stacked options — reads like Claude's Ask Question card:
+          scan the list, tap one. Same answer path as before. */}
+      <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+        {question.options.map((option, index) => (
           <button
             key={option}
             type="button"
             onClick={() => onAnswer(option)}
             style={{
-              padding: '6px 12px',
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              textAlign: 'left',
+              padding: '7px 12px',
               borderRadius: 8,
               border: '1px solid var(--color-border-ghost)',
               background: 'var(--color-surface)',
               color: 'var(--color-text-primary)',
               fontSize: 12.5,
+              lineHeight: 1.45,
               cursor: 'pointer',
             }}
           >
+            <span aria-hidden="true" style={{ color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+              {index + 1}.
+            </span>
             {option}
           </button>
         ))}
