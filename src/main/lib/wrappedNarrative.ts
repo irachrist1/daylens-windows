@@ -112,9 +112,18 @@ export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment
     story: facts.dayStory.map((seg) => [seg.part, seg.items.map((i) => i.toLowerCase()), bucket(seg.seconds)]),
     entities: (facts.entities ?? []).map((e) => [e.type, e.name.toLowerCase(), bucket(e.seconds)]),
     // Gap and thread facts are day facts like any other: a gap appearing (or a
-    // calendar match resolving) or a thread forming reflows the wrap.
-    gaps: (facts.gaps ?? []).map((g) => [g.kind, bucket(Math.round((g.toMs - g.fromMs) / 1000)), g.matchesEvent?.toLowerCase() ?? null]),
-    threads: (facts.threads ?? []).map((t) => [t.name.toLowerCase(), t.blockCount, bucket(t.seconds)]),
+    // calendar match resolving) or a thread forming reflows the wrap. The keys
+    // enter the canonical form ONLY when non-empty — every day stored before
+    // gaps/threads existed hashed without them, and unconditional keys would
+    // silently regenerate (one AI call each) every historical day that has
+    // neither. A day genuinely gaining gap/thread facts regenerates once,
+    // which is the point.
+    ...((facts.gaps ?? []).length > 0
+      ? { gaps: facts.gaps!.map((g) => [g.kind, bucket(Math.round((g.toMs - g.fromMs) / 1000)), g.matchesEvent?.toLowerCase() ?? null]) }
+      : {}),
+    ...((facts.threads ?? []).length > 0
+      ? { threads: facts.threads!.map((t) => [t.name.toLowerCase(), t.blockCount, bucket(t.seconds)]) }
+      : {}),
     enrichment: enrichmentFingerprint(enrichment),
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 12)
