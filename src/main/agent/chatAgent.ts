@@ -23,6 +23,7 @@ import { recordProviderCall } from '../services/aiRateLimiter'
 import { verifyTimestamps, verifyCitedEntities } from '../ai/citations'
 import { languageModelFor } from './providerModel'
 import { buildDaylensTools } from './daylensTools'
+import { buildContextTools } from './contextTools'
 import { buildScreenTools } from './screenTools'
 import { buildSystemTools, type FileAccessAnswer } from './systemTools'
 import type { FileDisclosureRow } from '../services/fileAccess'
@@ -226,6 +227,9 @@ export async function runChatAgentTurn(
     }
     const tools: ToolSet = {
       ...buildDaylensTools(deps.db),
+      // Calendar, git-signal, and meeting-notes context: same executors as
+      // the wrap/MCP surface, policy-gated in the tools themselves.
+      ...buildContextTools(deps.db),
       ...buildSystemTools({
         db: deps.db,
         fileAccess: {
