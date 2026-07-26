@@ -66,21 +66,32 @@ export async function judgeDayShape(
     ...observed.wrappedLines.map((line) => `- ${line}`),
   ].join('\n')
 
-  const response = await client.messages.create({
-    model: process.env.DAYLENS_EVAL_JUDGE_MODEL ?? 'claude-sonnet-5',
-    max_tokens: 2000,
-    system: SHAPE_JUDGE_SYSTEM,
-    messages: [{
-      role: 'user',
-      content: `GROUND TRUTH:\n${groundTruth}\n\nDATA CAVEATS: ${day.notes ?? 'none'}\n\nDAYLENS OUTPUT:\n${output}`,
-    }],
-  })
-  const text = response.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('')
-  const jsonStart = text.indexOf('{')
-  const parsed = JSON.parse(text.slice(jsonStart)) as ShapeVerdict
-  return {
-    score: Math.max(0, Math.min(10, Number(parsed.score))),
-    reasoning: String(parsed.reasoning ?? ''),
-    violations: Array.isArray(parsed.violations) ? parsed.violations.map(String) : [],
+  // One retry on unparseable output only — a judge that returned JSON is
+  // never re-rolled for a different grade.
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await client.messages.create({
+      model: process.env.DAYLENS_EVAL_JUDGE_MODEL ?? 'claude-sonnet-5',
+      max_tokens: 2000,
+      system: SHAPE_JUDGE_SYSTEM,
+      messages: [{
+        role: 'user',
+        content: `GROUND TRUTH:\n${groundTruth}\n\nDATA CAVEATS: ${day.notes ?? 'none'}\n\nDAYLENS OUTPUT:\n${output}`
+          + (attempt > 0 ? '\n\nYour previous response was not parseable JSON. Respond with ONLY the JSON object, nothing before it.' : ''),
+      }],
+    })
+    const text = response.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('')
+    const jsonStart = text.indexOf('{')
+    try {
+      const parsed = JSON.parse(text.slice(jsonStart)) as ShapeVerdict
+      return {
+        score: Math.max(0, Math.min(10, Number(parsed.score))),
+        reasoning: String(parsed.reasoning ?? ''),
+        violations: Array.isArray(parsed.violations) ? parsed.violations.map(String) : [],
+      }
+    } catch (error) {
+      lastError = error
+    }
   }
+  throw lastError
 }
