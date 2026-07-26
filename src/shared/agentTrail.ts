@@ -33,12 +33,30 @@ export function statusForTool(tool: string, input: unknown): string {
     case 'list_page_visits': return 'Going through your page visits'
     case 'get_app_usage': return `Checking time in ${params.appName ?? 'that app'}`
     case 'get_week_summary': return 'Reading the week'
+    case 'get_calendar_events': return `Checking your calendar for ${params.date ?? 'the day'}`
+    case 'get_git_activity': return `Checking your commits for ${params.date ?? 'the day'}`
+    case 'read_meeting_notes': return params.meetingId ? 'Reading meeting notes' : 'Looking through your meetings'
+    case 'get_attribution': return 'Checking attributed work'
+    case 'list_clients': return 'Reading your client roster'
     case 'discover_repositories': return 'Finding active repositories'
     case 'search_files': return `Searching files for "${params.query ?? ''}"`
     case 'git': return 'Reading git history'
     case 'read_file': return 'Reading a file'
     case 'list_dir': return 'Listing a folder'
     case 'create_artifact': return 'Building your file'
+    case 'export_week_excel': return 'Building your weekly export'
+    // reason is the ONE human-facing parameter these two carry — it exists to
+    // be shown verbatim (docs/north-star/context-agent.md): the user always
+    // sees WHY the agent looked or ran something.
+    case 'capture_screen': return typeof params.reason === 'string' && params.reason.trim()
+      ? `Looking at your screen — ${params.reason.trim()}`
+      : 'Looking at your screen'
+    case 'run_command': {
+      const command = typeof params.command === 'string' && /^[\w.-]+$/.test(params.command) ? params.command : 'a command'
+      return typeof params.reason === 'string' && params.reason.trim()
+        ? `Running ${command} — ${params.reason.trim()}`
+        : `Running ${command}`
+    }
     case 'ask_user': return 'Asking you'
     case 'propose_memory': return 'Asking to remember'
     case 'propose_correction': return 'Previewing a correction'
