@@ -107,8 +107,10 @@ test('statusForTool never leaks secrets, prompts, or payloads riding in tool arg
   }
   const tools = [
     'get_moment', 'get_time_chunks', 'get_day_overview', 'search_history', 'list_page_visits',
-    'get_app_usage', 'get_week_summary', 'discover_repositories', 'search_files', 'git',
-    'read_file', 'list_dir', 'create_artifact', 'ask_user', 'propose_memory',
+    'get_app_usage', 'get_week_summary', 'get_attribution', 'list_clients',
+    'discover_repositories', 'search_files', 'git',
+    'read_file', 'list_dir', 'create_artifact', 'export_week_excel', 'capture_screen',
+    'ask_user', 'propose_memory',
     'mcp_notion_search', 'some_future_tool',
   ]
   for (const tool of tools) {
@@ -118,6 +120,47 @@ test('statusForTool never leaks secrets, prompts, or payloads riding in tool arg
       assert.ok(!label.includes(leak), `${tool} label leaked "${leak}": ${label}`)
     }
   }
+})
+
+test('every tool call gets a human one-liner — no tool falls through to a generic or technical label', () => {
+  // capture_screen surfaces its mandatory reason verbatim (the consent story),
+  // degrades to the plain line when the reason is missing or malformed, and
+  // bounds a runaway reason so the one-liner stays a one-liner.
+  assert.equal(
+    statusForTool('capture_screen', { reason: 'the active window has no useful title' }),
+    'Looking at your screen — the active window has no useful title',
+  )
+  assert.equal(statusForTool('capture_screen', {}), 'Looking at your screen')
+  assert.equal(statusForTool('capture_screen', { reason: 42 }), 'Looking at your screen')
+  assert.equal(statusForTool('capture_screen', null), 'Looking at your screen')
+  const runaway = statusForTool('capture_screen', { reason: 'x'.repeat(500) })
+  assert.ok(runaway.length < 160, `runaway reason not bounded: ${runaway.length} chars`)
+  assert.ok(runaway.endsWith('…'))
+
+  assert.equal(statusForTool('export_week_excel', { weekStartDate: '2026-07-20' }), 'Building your weekly Excel export')
+  assert.equal(statusForTool('get_attribution', { entityName: 'Acme' }), 'Checking work for Acme')
+  assert.equal(statusForTool('get_attribution', {}), 'Checking work for that name')
+  assert.equal(statusForTool('list_clients', {}), 'Reading your client roster')
+
+  // Unknown tools: the NAME is humanized, the input is never touched — a
+  // future tool can never dump raw JSON into the trail.
+  assert.equal(statusForTool('some_future_tool', { payload: '{"rows":[1]}' }), 'Running some future tool')
+  assert.equal(statusForTool('mcp_notion_search', { query: 'q' }), 'Checking a connected source')
+})
+
+test('export_week_excel builds a file — it is consulted but not counted as a source', () => {
+  const summary = summarizeAgentTurn({
+    toolTrace: [
+      { tool: 'get_week_summary', input: {}, output: '{}' },
+      { tool: 'export_week_excel', input: { weekStartDate: '2026-07-20' }, output: '{}' },
+    ],
+    fileDisclosures: [],
+    citations: [],
+  })
+  assert.equal(summary?.sourceCount, 1)
+  assert.equal(summary?.label, 'Used 1 source')
+  // Still listed among tools consulted, so the inspector shows the call.
+  assert.deepEqual(summary?.toolsConsulted.map((t) => t.tool), ['get_week_summary', 'export_week_excel'])
 })
 
 test('the settle summary reads "Used N sources · M files" and counts match the inspector aggregation', () => {

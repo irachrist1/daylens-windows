@@ -23,6 +23,11 @@ export interface AgentToolTraceEntryLike {
   failed?: boolean
 }
 
+/** capture_screen's `reason` is the ONE tool argument shown verbatim — its
+ *  schema requires the model to explain the look, and showing it is the
+ *  consent story. Bound it so a runaway reason cannot flood a one-liner. */
+const SCREEN_REASON_MAX = 120
+
 export function statusForTool(tool: string, input: unknown): string {
   const params = (input ?? {}) as Record<string, unknown>
   switch (tool) {
@@ -33,19 +38,36 @@ export function statusForTool(tool: string, input: unknown): string {
     case 'list_page_visits': return 'Going through your page visits'
     case 'get_app_usage': return `Checking time in ${params.appName ?? 'that app'}`
     case 'get_week_summary': return 'Reading the week'
+    case 'get_attribution': return `Checking work for ${params.entityName ?? 'that name'}`
+    case 'list_clients': return 'Reading your client roster'
     case 'discover_repositories': return 'Finding active repositories'
     case 'search_files': return `Searching files for "${params.query ?? ''}"`
     case 'git': return 'Reading git history'
     case 'read_file': return 'Reading a file'
     case 'list_dir': return 'Listing a folder'
     case 'create_artifact': return 'Building your file'
+    case 'export_week_excel': return 'Building your weekly Excel export'
+    case 'capture_screen': {
+      const reason = typeof params.reason === 'string' ? params.reason.trim() : ''
+      if (!reason) return 'Looking at your screen'
+      const bounded = reason.length > SCREEN_REASON_MAX ? `${reason.slice(0, SCREEN_REASON_MAX - 1)}…` : reason
+      return `Looking at your screen — ${bounded}`
+    }
     case 'ask_user': return 'Asking you'
     case 'propose_memory': return 'Asking to remember'
     case 'propose_correction': return 'Previewing a correction'
     case 'undo_correction': return 'Undoing a correction'
     case 'forget_memory': return 'Asking to forget a memory'
-    default: return tool.startsWith('mcp_') ? 'Checking a connected source' : 'Working'
+    default: return defaultToolLabel(tool)
   }
+}
+
+/** Unknown tools still get a quiet human line — the tool NAME is the only
+ *  thing used; inputs never reach a default label, so no raw JSON can leak. */
+function defaultToolLabel(tool: string): string {
+  if (tool.startsWith('mcp_')) return 'Checking a connected source'
+  const words = tool.replace(/[_-]+/g, ' ').trim()
+  return words ? `Running ${words}` : 'Working'
 }
 
 /** Settle a step in place by id (active → done/failed), keeping its position
@@ -123,7 +145,7 @@ export function aggregateToolsConsulted(
 
 /** Tools that interact with the person rather than fetch data — they are
  *  listed among tools consulted but do not count as sources. */
-const NON_SOURCE_TOOLS = new Set(['ask_user', 'create_artifact', 'propose_memory', 'forget_memory', 'propose_correction', 'undo_correction'])
+const NON_SOURCE_TOOLS = new Set(['ask_user', 'create_artifact', 'export_week_excel', 'propose_memory', 'forget_memory', 'propose_correction', 'undo_correction'])
 
 export interface AgentTurnSummary {
   /** Identical to the inspector's tools-consulted list for this turn. */
