@@ -305,7 +305,10 @@ export function categoryWord(category: AppCategory): string {
 export function categoryAction(category: AppCategory): string {
   switch (category) {
     case 'development': return 'building'
-    case 'aiTools': return 'building'
+    // AI-tool time proves the conversation happened, not that anything got
+    // built — "building the client's portal" from ChatGPT dwell was a judged
+    // fabrication. Neutral verb; development time earns "building".
+    case 'aiTools': return 'working on'
     case 'writing': return 'writing'
     case 'design': return 'designing'
     case 'research': return 'digging into'
