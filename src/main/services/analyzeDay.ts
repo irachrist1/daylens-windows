@@ -23,6 +23,7 @@ import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '.
 import { buildDaySnapshot } from '../lib/daySnapshot'
 import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 import { evaluateInterpretationRun, interpretationAgentEnabled } from '../lib/interpretationEval'
+import { findRawArtifactLeak } from '../lib/wrapNarrativeShared'
 import { runInterpretationAgentRelabel, type InterpretationAgentInsight } from './interpretationAgent'
 import { getSettings } from './settings'
 
@@ -431,12 +432,26 @@ export async function analyzeTimelineDay(
         }
       })
     }
-    if (agentResults.length > 0) {
+    // Per-block label gate: a label that leaks raw technical text discards
+    // THAT block's agent result (it falls back to the direct relabel below),
+    // not the whole pass — one bad name must not throw away every good one.
+    const cleanResults = agentResults.filter(({ block, insight }) => {
+      const label = insight.label?.trim() ?? ''
+      const leak = label ? findRawArtifactLeak(label) : 'the label was empty'
+      if (!leak) return true
+      console.warn(
+        `[timeline] interpretation agent label for block ${block.id} discarded (${leak}); falling back to the direct relabel`,
+      )
+      return false
+    })
+    if (cleanResults.length > 0) {
       // The eval gate (lib/interpretationEval): score the proposed day against
-      // the interpretation invariants before any write. Corrections must
-      // survive verbatim, labels must stay human — a violating agent pass is
-      // discarded wholesale, and the deterministic pipeline result stands.
-      const proposedById = new Map(agentResults.map((entry) => [entry.block.id, entry.insight]))
+      // the interpretation invariants before any write. A remaining violation
+      // here — a person's correction overwritten, evidence created or
+      // destroyed, an absence spanned — indicates SYSTEMIC misbehavior, so it
+      // still discards the whole agent pass and the deterministic pipeline
+      // result stands.
+      const proposedById = new Map(cleanResults.map((entry) => [entry.block.id, entry.insight]))
       const simulatedAfter: DayTimelinePayload = {
         ...payload,
         blocks: payload.blocks.map((block) => {
@@ -457,7 +472,7 @@ export async function analyzeTimelineDay(
         },
       })
       if (report.pass) {
-        for (const { block, insight } of agentResults) {
+        for (const { block, insight } of cleanResults) {
           try {
             const wrote = applyAIInsightToTimelineBlock(db, block, insight)
             if (wrote) relabeled++
