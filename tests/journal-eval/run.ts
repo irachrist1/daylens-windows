@@ -3,7 +3,7 @@
 //   npm run eval:days                     fast: deterministic dimensions only
 //   npm run eval:days -- --judge          + LLM shape judge (1 call/day)
 //   npm run eval:days -- --strict         non-zero exit under thresholds
-//   npm run eval:days -- 2026-07-22 …     only these days
+//   npm run eval:days -- YYYY-MM-DD …     only these days
 //   npm run eval:days -- --fresh          restage work DB from pristine first
 //
 // Scores what the user actually sees — timeline block labels + narratives and
