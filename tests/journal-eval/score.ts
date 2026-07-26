@@ -66,11 +66,8 @@ export function scoreToolSurfaces(day: EvalDay, observed: ObservedDay): Dimensio
 }
 
 function parseClock(date: string, hhmm: string): number {
-  // Times after midnight belong to the same owned day (a "01:30" gap end on a
-  // day that ran past midnight) — treat hours < 5 as next-calendar-day.
   const [h, m] = hhmm.split(':').map(Number)
   const base = new Date(`${date}T00:00:00`)
-  if (h < 5) base.setDate(base.getDate() + 1)
   base.setHours(h, m, 0, 0)
   return base.getTime()
 }
@@ -81,8 +78,13 @@ export function scoreGapHonesty(day: EvalDay, observed: ObservedDay): DimensionS
   const violations: string[] = []
   const TOLERANCE_MS = 20 * 60_000
   for (const gap of gaps) {
+    // Gap times are owned-day local clock. A gap whose end precedes its start
+    // crosses midnight ("22:00"–"01:30" = late night into the owned day's
+    // spill-over); an early-morning gap on the owned day itself is written in
+    // plain order ("01:30"–"12:00").
     const gapStart = parseClock(day.date, gap.from)
-    const gapEnd = parseClock(day.date, gap.to)
+    let gapEnd = parseClock(day.date, gap.to)
+    if (gapEnd <= gapStart) gapEnd += 24 * 3_600_000
     for (let i = 0; i < observed.blockBounds.length; i += 1) {
       const block = observed.blockBounds[i]
       if (block.startMs < gapStart - TOLERANCE_MS && block.endMs > gapEnd + TOLERANCE_MS) {

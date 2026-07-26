@@ -29,8 +29,9 @@ shape:
   - { from: "08:00", until: "12:00", desc: "baseline commit, hackathon landing page, Chunk 2 projections and router hardening" }
   - { from: "15:00", until: "18:30", desc: "v1 polish + work memory batches (F1-F7), parallel agent claim-commit burst 16:48-18:13, release v1.0.37 at 18:24" }
   - { from: "20:20", desc: "architecture chunks: Chunk 3 AI query fixes, block coalescing, memory backfill, Swift capture helper, through 22:58" }
+# the following night, so only the expressible tail is declared.
 gaps:
-  - { from: "01:05", to: "07:15", reason: "overnight; zero captured sessions between 01:01 and 07:20" }
+  - { from: "01:05", to: "07:15", reason: "overnight hole; zero captured sessions between 01:01 and 07:20" }
 notes: >
   Machine-reconstructed from git only; no journal exists for this day. Many
   commits between 16:48 and 18:13 are claim(...) markers authored by

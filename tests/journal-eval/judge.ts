@@ -24,8 +24,8 @@ Automatic caps:
 - Background media (an idle tab) labeled as the activity: cap at 3.
 - The day's stated core work absent from the story: cap at 5.
 
-Output STRICT JSON, no markdown fence:
-{"score": <0-10>, "reasoning": "<3-6 sentences: worst failures first, then what it got right>", "violations": ["<short specific violation>", ...]}`
+Output STRICT JSON, no markdown fence. Keep reasoning to AT MOST 3 sentences and violations to AT MOST 5 short items — terse and specific beats exhaustive:
+{"score": <0-10>, "reasoning": "<max 3 sentences: worst failure first, then what it got right>", "violations": ["<short specific violation>", ...]}`
 
 export interface ShapeVerdict {
   score: number
@@ -63,7 +63,7 @@ export async function judgeDayShape(
 
   const response = await client.messages.create({
     model: process.env.DAYLENS_EVAL_JUDGE_MODEL ?? 'claude-sonnet-5',
-    max_tokens: 1000,
+    max_tokens: 2000,
     system: SHAPE_JUDGE_SYSTEM,
     messages: [{
       role: 'user',
