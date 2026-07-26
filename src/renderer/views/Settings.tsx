@@ -1178,7 +1178,9 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
       { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you what the ai saw context packet disclosure' },
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
-      { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed' },
+      { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed granola meeting notes terminal commands capability' },
+      { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
+      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
     ],
   },
   {
@@ -1187,17 +1189,15 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'labels', label: 'Labels', keywords: 'category app override propagate zen browsing' },
       { id: 'clients', label: 'Clients', keywords: 'project attribution company work' },
       { id: 'privacy', label: 'Privacy & tracking', keywords: 'pause exclude excluded incognito private analytics local data' },
+      { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples diagnostics' },
       { id: 'screenContext', label: 'Screen context', keywords: 'experiment screenshot screen capture sample frame ocr consent opt-in backlog quarantine retry delete wipe' },
       { id: 'export', label: 'Export your data', keywords: 'export download backup take your data portability history json jsonl csv manifest verify complete local' },
     ],
   },
   {
-    label: 'System',
+    label: 'Application',
     items: [
-      { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
-      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
-      { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples' },
-      { id: 'updates', label: 'Updates', keywords: 'version install download release' },
+      { id: 'updates', label: 'Updates', keywords: 'version install download release changelog' },
       { id: 'help', label: 'Help & support', keywords: 'chat support contact message question bug feedback talk intercom' },
     ],
   },
@@ -3562,19 +3562,20 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Agent file access"
-          description="Control which files the AI may read. Observed activity is always on; contents need an explicit grant."
+          description="What the AI agent may reach on this machine. Observed activity is always on; file contents, meeting notes, and commands each need your say-so."
           maxWidth={760}
         >
-          <div style={{ display: 'grid', gap: 0, marginBottom: 22 }}>
+          <div style={{ marginBottom: 22 }}>
+            <GroupLabel>Capabilities</GroupLabel>
             <SettingsRow
               first
               title="Granola meeting notes"
-              description="Let the AI read your local Granola meeting notes when a question needs them."
+              description="When on, the AI can read the meeting notes stored in Granola's local cache on this machine and quote them in answers."
               control={<Toggle checked={settings.granolaAccessEnabled !== false} onChange={(value) => void persist({ granolaAccessEnabled: value })} />}
             />
             <SettingsRow
               title="Terminal access"
-              description="Let the AI run read-only allowlisted commands. Off by default; the first use each session still asks you."
+              description="When on, the AI can run read-only commands from a fixed allowlist (like git log) and see their output. Off by default; the first use each session still asks you."
               control={<Toggle checked={settings.terminalAccessEnabled ?? false} onChange={(value) => void persist({ terminalAccessEnabled: value })} />}
             />
           </div>
