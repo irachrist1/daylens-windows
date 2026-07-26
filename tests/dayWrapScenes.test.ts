@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDayWrapFacts, workActionPhrase } from '../src/renderer/lib/dayWrapScenes.ts'
+import { planDayWrapSlides } from '../src/renderer/lib/wrapDeck.ts'
 import { looksLikeRawArtifactLabel } from '../src/renderer/lib/wrappedFacts.ts'
 import type { AppCategory, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
@@ -363,4 +364,62 @@ test('an app/site slice carries the SITE own category, not the block one', () =>
 test('workActionPhrase never stacks a verb on a gerund label', () => {
   assert.equal(workActionPhrase('Reviewing work projects', 'development'), 'reviewing work projects')
   assert.equal(workActionPhrase('Daylens', 'development'), 'building Daylens')
+})
+
+test('workActionPhrase never stacks a verb on an imperative-led task title', () => {
+  // "building Debug Daylens freezing..." shipped in a real floor line; the
+  // captured title already leads with the verb, so it becomes the gerund.
+  assert.equal(
+    workActionPhrase('Debug Daylens freezing and sleep tracking issues', 'aiTools'),
+    'debugging Daylens freezing and sleep tracking issues',
+  )
+  assert.equal(workActionPhrase('Fix the sync race', 'development'), 'fixing the sync race')
+})
+
+test('workActionPhrase never stacks a verb on a subject that already names the work', () => {
+  // "Morning went to writing Oauth development" shipped in a real floor line:
+  // the category verb was blindly prepended to a noun phrase that already IS
+  // the work. Such subjects pass through as their own phrase.
+  assert.equal(workActionPhrase('Oauth development', 'writing'), 'oauth development')
+  assert.equal(workActionPhrase('OAuth development', 'writing'), 'OAuth development')
+  assert.equal(workActionPhrase('Site maintenance', 'productivity'), 'site maintenance')
+  // A bare subject still gets the category verb.
+  assert.equal(workActionPhrase('The essay', 'writing'), 'writing The essay')
+})
+
+test('a Claude Code window title with a spinner glyph never reaches a floor line verbatim', () => {
+  // Observed in a real wrap: "building ✳ Debug Daylens freezing and sleep
+  // tracking issues" — the raw window title, glyph included, straight into a
+  // deterministic fallback line. The only naming candidate this block offers
+  // IS that title; the glyph must be stripped and the phrase must read as an
+  // action, or the name must die to the category floor. Never the raw title.
+  const RAW_TITLE = '✳ Debug Daylens freezing and sleep tracking issues'
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: RAW_TITLE, start: NINE_AM, durationSeconds: 120 * 60, category: 'aiTools' }),
+    makeBlock({ label: 'Design review', start: NINE_AM + 130 * 60_000, durationSeconds: 40 * 60, category: 'design' }),
+  ]))
+
+  for (const activity of facts.workActivities) {
+    assert.ok(!activity.name.includes('✳'), `glyph leaked into an activity name: ${activity.name}`)
+  }
+  for (const seg of facts.dayStory) {
+    for (const item of seg.items) assert.ok(!item.includes('✳'), `glyph leaked into the story: ${item}`)
+  }
+
+  for (const spec of planDayWrapSlides(facts)) {
+    assert.ok(!spec.fallbackLine.includes(RAW_TITLE), `raw window title verbatim in a floor line: ${spec.fallbackLine}`)
+    assert.ok(!spec.fallbackLine.includes('✳'), `glyph in a floor line: ${spec.fallbackLine}`)
+    assert.ok(!/\b(building|writing|designing) Debug\b/.test(spec.fallbackLine),
+      `verb stacked on the imperative title: ${spec.fallbackLine}`)
+  }
+})
+
+test('a subject carrying a category noun composes into an honest story line', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Oauth development', start: NINE_AM, durationSeconds: 90 * 60, category: 'writing' }),
+  ]))
+  for (const spec of planDayWrapSlides(facts)) {
+    assert.ok(!/writing [Oo]auth development/.test(spec.fallbackLine),
+      `nonsense verb+noun composition in a floor line: ${spec.fallbackLine}`)
+  }
 })

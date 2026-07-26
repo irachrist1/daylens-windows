@@ -164,6 +164,15 @@ export async function getWrappedNarrative(
 
   const fallback = buildFallbackNarrative(facts, factsHash)
 
+  // Unusable model output. On a first generation the fallback is persisted
+  // (the day has an honest wrap, Regenerate can replace it). But when this
+  // call was a regeneration of a DRIFTED stored wrap, persisting the fallback
+  // would mark the cache fresh under the new hash — clobbering the stored
+  // wrap and freezing the deterministic floor in forever. Return the floor
+  // WITHOUT persisting so the stored wrap survives and a later open retries.
+  const settleUnusable = (): AIWrappedNarrative =>
+    regeneratingStale ? fallback : persist(fallback)
+
   // Quality gates: no AI for empty/tooEarly days — the fallback is honest enough
   // and we don't want to spend tokens on "not enough data yet".
   if (facts.quality === 'empty' || facts.quality === 'tooEarly') {
@@ -203,7 +212,7 @@ export async function getWrappedNarrative(
     const model = config.model
 
     const parsed = parseWrapResponse(text)
-    if (!parsed) return persist(fallback)
+    if (!parsed) return settleUnusable()
     let { narrative, rejections } = validateWrappedNarrativeObject(parsed, facts, factsHash, enrichment, factTable)
 
     // ONE repair round (wrapped-agent-plan: verify + at most one repair call).
@@ -245,7 +254,7 @@ export async function getWrappedNarrative(
       }
     }
 
-    return persist(narrative ?? fallback, narrative ? model : null)
+    return narrative ? persist(narrative, model) : settleUnusable()
   } catch (error) {
     console.warn(`[ai] wrapped_narrative failed for ${facts.date}:`, error)
     // A transient failure is not a generated wrap — return the floor without
