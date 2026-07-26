@@ -192,6 +192,41 @@ const MAX_SEMANTIC_HITS = 8
 const MAX_FILE_EXCERPTS = 5
 const FILE_EXCERPT_CHARS = 700
 
+// ─── Small-talk gate ─────────────────────────────────────────────────────────
+// DEV-244: context scales with what the question needs. A pure greeting or
+// courtesy turn ("hi", "thanks!", "good morning") asks for nothing from the
+// day record, so NOTHING is retrieved or disclosed for it — the chat loop
+// skips packet assembly entirely. The gate is deliberately conservative:
+// one token outside this lexicon and the turn is a real question that gets
+// full assembly. Deterministic; covered by tests/contextPacketSmallTalk.
+
+const SMALL_TALK_LEXICON = new Set([
+  // greetings
+  'hi', 'hello', 'hey', 'heya', 'hiya', 'yo', 'howdy', 'sup', 'greetings',
+  'morning', 'afternoon', 'evening', 'night', 'good', 'goodnight', 'goodbye',
+  'bye', 'later', 'welcome', 'daylens', 'there', 'again', 'everyone', 'friend',
+  // courtesy and acknowledgment
+  'thanks', 'thank', 'thankyou', 'thx', 'ty', 'cheers', 'please', 'appreciate',
+  'appreciated', 'ok', 'okay', 'cool', 'nice', 'great', 'awesome', 'perfect',
+  'got', 'it', 'sounds', 'sure', 'yes', 'yep', 'yeah', 'no', 'nope', 'lol',
+  'haha', 'wow', 'neat', 'sweet', 'lovely', 'so', 'much', 'very',
+  // "how are you" -shaped pleasantries
+  'how', 'are', 'you', 'u', 'doing', 'going', 'whats', 'what', 's', 'up',
+  'hows',
+])
+
+/** True when the whole message is small talk: short, and every token sits in
+ *  the small-talk lexicon. Anything else is a real question. */
+export function isSmallTalkTurn(question: string): boolean {
+  const tokens = question
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .map((token) => token.replace(/'/g, ''))
+    .filter(Boolean)
+  if (tokens.length === 0 || tokens.length > 8) return false
+  return tokens.every((token) => SMALL_TALK_LEXICON.has(token))
+}
+
 // ─── Time resolution ─────────────────────────────────────────────────────────
 
 const ISO_DATE_RE = /\b(\d{4}-\d{2}-\d{2})\b/g

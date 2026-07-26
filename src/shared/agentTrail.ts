@@ -138,6 +138,38 @@ export interface AgentTurnSummary {
   label: string
 }
 
+/** Human duration for the collapsed trail line: "12s", "1m 42s", "1h 4m".
+ *  Never empty and never sub-second noise — anything under a second reads
+ *  as one second, since the turn plainly did happen. */
+export function formatWorkedDuration(ms: number): string {
+  const totalSeconds = Math.max(1, Math.round(ms / 1000))
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes > 0 ? `${hours}h ${restMinutes}m` : `${hours}h`
+}
+
+/** The ONE collapsed line a settled answer leads with (DEV-244, the Codex
+ *  pattern): "Worked for 1m 42s" when the turn recorded its duration, an
+ *  honest step-count fallback for answers persisted before durations existed,
+ *  then the source summary. Empty means the turn has nothing to disclose. */
+export function trailHeadline(input: {
+  durationMs?: number | null
+  stepCount: number
+  summaryLabel: string
+}): string {
+  if (input.durationMs != null && input.durationMs > 0) {
+    return `Worked for ${formatWorkedDuration(input.durationMs)}`
+  }
+  if (input.stepCount > 0) {
+    return `Worked through ${input.stepCount} step${input.stepCount === 1 ? '' : 's'}`
+  }
+  return input.summaryLabel
+}
+
 export function summarizeAgentTurn(agent: {
   toolTrace?: AgentToolTraceEntryLike[]
   fileDisclosures?: Array<Pick<AIMessageFileDisclosure, 'path'>>

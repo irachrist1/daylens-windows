@@ -75,7 +75,7 @@ export function StreamingMessage({ messageId, fallback, renderContent, onSnapsho
     [fallback, renderContent, visibleSnapshot],
   )
 
-  // Tool activity while the agent works is the <LiveActivityTrail>'s job —
+  // Tool activity while the agent works is the <AgentProgressPanel>'s job —
   // this component renders only the streaming answer text.
   return <>{renderedContent}</>
 }

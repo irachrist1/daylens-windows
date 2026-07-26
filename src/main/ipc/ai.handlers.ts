@@ -96,7 +96,7 @@ export function registerAIHandlers(): void {
     return listContextPackets(getDb(), payload)
   })
 
-  // DEV-183: the read-only inspection behind "What the AI saw" — the recorded
+  // DEV-183: the read-only shared-context inspection — the recorded
   // packet grouped per kind, with plain-language omissions and each item
   // checked against the evidence backing it today. Null when no packet was
   // recorded for the reference; the renderer states that honestly.

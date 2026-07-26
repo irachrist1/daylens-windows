@@ -915,6 +915,19 @@ export interface AIAgentStep {
   startedAt: number
 }
 
+/** What one in-flight turn is drawing on (DEV-245): emitted once, right after
+ *  context assembly, so the live progress panel can show a collapsed
+ *  working-context section. Counts and scopes only — never item statements,
+ *  which stay behind the recorded packet and its inspector. */
+export interface AIChatWorkingContext {
+  /** Day scope the initial context drew from; empty when nothing attached. */
+  dates: string[]
+  /** Items disclosed in the initial context (0: nothing attached). */
+  itemCount: number
+  /** Files and folders the model may read this turn (model-readable grants). */
+  readablePaths: string[]
+}
+
 export interface AIChatStreamEvent {
   requestId: string
   delta: string
@@ -924,6 +937,9 @@ export interface AIChatStreamEvent {
   /** Structured step for the live activity trail. Rides alongside `status`,
    *  which stays populated for consumers of the plain status line. */
   step?: AIAgentStep
+  /** Working-context summary for the progress panel (DEV-245); sent once per
+   *  turn after context assembly. */
+  context?: AIChatWorkingContext
 }
 
 /** The agent's one clarifying question, pushed to the renderer. */
@@ -1055,7 +1071,7 @@ export interface AIMessageCitation {
 }
 
 // ─── Context packet inspection (DEV-183) ─────────────────────────────────────
-// The renderer-facing shape of "what the AI saw" for one exchange: the
+// The renderer-facing shape of the shared-context record for one exchange: the
 // recorded packet re-read from the local ledger, grouped per kind, with each
 // item checked against the evidence that backs it today. Read-only — the
 // inspector shows the record, it never edits it.
@@ -1161,6 +1177,9 @@ export interface AIThreadMessageMetadata {
     toolTrace: Array<{ tool: string; input: unknown; output: string; failed?: boolean }>
     stepCount: number
     groundingRetried: boolean
+    /** Wall-clock time the turn worked, for the collapsed "Worked for Xm Ys"
+     *  line (DEV-244). Absent on answers persisted before it was recorded. */
+    durationMs?: number
     fileDisclosures?: AIMessageFileDisclosure[]
     /** The recorded context packet this answer was built from (DEV-182);
      *  null when the packet ledger is unavailable. */

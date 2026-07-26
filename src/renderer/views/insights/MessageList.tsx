@@ -5,7 +5,7 @@ import { ipc } from '../../lib/ipc'
 import { MarkdownMessage } from './markdown'
 import { MentionText } from './mentions'
 import { StreamingMessage } from './StreamingMessage'
-import { LiveActivityTrail, PendingFallback, SettledActivityTrail } from './ActivityTrail'
+import { AgentProgressPanel, PendingFallback, SettledActivityTrail } from './ActivityTrail'
 import { ActionWidget } from './ActionWidget'
 import {
   IconActionButton,
@@ -87,8 +87,8 @@ export interface MessageListProps {
   onUndoActionWidget: (proposalId: string, undo: AIActionUndo) => void
   onDismissActionWidget: (widget: AIActionWidget) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
-  // "What the AI saw" (DEV-183): opens the read-only context-packet inspector
-  // for the exchange behind this assistant message.
+  // DEV-183: opens the read-only shared-context inspector for the exchange
+  // behind this assistant message.
   onInspectPacket?: (message: ThreadMessage) => void
   // DEV-200: resume / discard a paused turn's row.
   onResumePaused?: (message: ThreadMessage) => void
@@ -235,9 +235,10 @@ function MessageListImpl({
               } : {}),
             }}>
               {message.state === 'pending' ? (
-                // The live activity trail (issue #25): tool steps tick off
-                // above the streaming answer; the "Thinking" placeholder
-                // steps aside once the trail has rows.
+                // The structured progress panel (DEV-245): tool steps tick off
+                // above the streaming answer with a collapsed working-context
+                // section; the "Thinking" placeholder steps aside once the
+                // panel has rows.
                 <>
                   {/* The turn's visible state machine (DEV-200): when an
                       agent-initiated card is holding the turn, the pending row
@@ -248,7 +249,7 @@ function MessageListImpl({
                       {WAIT_LABEL[turnPhase.waitKind ?? ''] ?? 'Waiting for you'}
                     </div>
                   )}
-                  <LiveActivityTrail messageId={String(message.id)} reducedMotion={reducedMotion} />
+                  <AgentProgressPanel messageId={String(message.id)} reducedMotion={reducedMotion} />
                   <StreamingMessage
                     messageId={String(message.id)}
                     fallback={<PendingFallback messageId={String(message.id)} />}
@@ -435,32 +436,11 @@ function MessageListImpl({
                     </div>
                   )}
 
-                  {(message.agent?.citations?.length ?? 0) > 0 && (
-                    // Packet citations (DEV-182): each chip is one recorded
-                    // context-packet item the answer's superscripts point at.
-                    // Clicking a chip opens the full inspector (DEV-183) on
-                    // this exchange's packet.
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
-                      <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>From your day record</span>
-                      {message.agent?.citations?.map((citation) => (
-                        <button
-                          key={`${message.id}:cite:${citation.marker}`}
-                          type="button"
-                          onClick={canInspect(message) ? () => onInspectPacket?.(message) : undefined}
-                          title={`${citation.statement}\n${citation.identity}\n${canInspect(message) ? 'Click to see everything the AI was shown' : "Recorded in this answer's context packet"}`}
-                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-secondary)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: canInspect(message) ? 'pointer' : 'default' }}
-                        >
-                          {citation.marker} · {citation.statement}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
                   {message.agent != null && (
-                    // The settled trail (issue #25) + "What the AI saw"
-                    // (DEV-183): the answer's quiet summary and step list,
-                    // reconstructed from the persisted tool trace, next to
-                    // the recorded context-packet pill. Read-only; works
+                    // The settled disclosure (DEV-244): ONE collapsed
+                    // "Worked for Xm Ys" line that expands into the step
+                    // list, human-titled citations, opened files, and the
+                    // shared-context inspector (DEV-183). Read-only; works
                     // with no model configured.
                     <SettledActivityTrail
                       message={message}
@@ -468,21 +448,6 @@ function MessageListImpl({
                       onInspect={() => onInspectPacket?.(message)}
                       reducedMotion={reducedMotion}
                     />
-                  )}
-
-                  {(message.agent?.fileDisclosures?.length ?? 0) > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
-                      <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>Files opened</span>
-                      {message.agent?.fileDisclosures?.map((disclosure) => (
-                        <span
-                          key={`${message.id}:${disclosure.path}:${disclosure.excerptStart}`}
-                          title={`${disclosure.path}\nversion ${disclosure.versionFingerprint}\nbytes ${disclosure.excerptStart}–${disclosure.excerptEnd}\nLogged in Settings → Agent file access`}
-                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-secondary)' }}
-                        >
-                          {disclosure.name} · v{disclosure.versionFingerprint.split('-').pop()} · {disclosure.excerptStart}–{disclosure.excerptEnd}
-                        </span>
-                      ))}
-                    </div>
                   )}
 
                   {message.id === latestCompletedAssistantId && message.state === 'complete' && (message.suggestedFollowUps?.length ?? 0) >= 2 && (

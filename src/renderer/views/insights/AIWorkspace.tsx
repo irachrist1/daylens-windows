@@ -112,9 +112,9 @@ export default function AIWorkspace() {
     })
   }, [])
 
-  // "What the AI saw" (DEV-183): which exchange's recorded context packet the
-  // inspector is open on. Opened from the citation chips or the per-answer
-  // affordance; the inspector itself is read-only.
+  // Shared-context inspection (DEV-183): which exchange's recorded context
+  // packet the inspector is open on. Opened from the settled disclosure's
+  // citations or its inspect affordance; the inspector itself is read-only.
   const [inspectTarget, setInspectTarget] = useState<{ packetId: string | null; messageId: number | null } | null>(null)
   const openPacketInspector = useCallback((message: ThreadMessage) => {
     setInspectTarget({

@@ -1,21 +1,30 @@
-// The live activity trail on AI answers: while a turn runs, a calm stack of
-// human one-liners under the question — one in-progress row, finished rows
-// check-marked, failures stated plainly. When the turn settles, completed
-// answers show a quiet summary ("Used 4 sources · 1 file") next to the
-// existing "What the AI saw" pill; both open the context-packet inspector.
-// Persisted answers reconstruct the same trail from their tool trace.
+// The agent's activity surfaces on AI answers.
+//
+// While a turn runs (DEV-245): a structured progress panel — a working header
+// with elapsed time, one-line narration per tool step with inline status
+// chips, and a collapsible working-context section (minimized by default)
+// saying what the turn is drawing on.
+//
+// When the turn settles (DEV-244, the Codex pattern): completed answers lead
+// with ONE collapsed line ("Worked for 1m 42s") that expands on demand into
+// the step list, the source summary, human-titled citations, opened files,
+// and the shared-context inspector affordance. No chip walls; the full
+// disclosure record stays one click away, never the default presentation.
 //
 // Labels arrive pre-built from the whitelist in shared/agentTrail — this file
 // renders them and must never reach into tool inputs or outputs itself.
-import { useState, useSyncExternalStore } from 'react'
-import type { AIAgentStep } from '@shared/types'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { AIAgentStep, AIChatWorkingContext } from '@shared/types'
 import {
   collapseTrail,
+  formatWorkedDuration,
   liveTrailRows,
   stepsFromToolTrace,
   summarizeAgentTurn,
+  trailHeadline,
 } from '@shared/agentTrail'
-import { getStreamingStatus, getStreamingSteps, subscribeStreaming } from './streamingStore'
+import { citationDisplayTitle, humanizeFileTitle } from '@shared/citationDisplay'
+import { getStreamingContext, getStreamingStatus, getStreamingSteps, subscribeStreaming } from './streamingStore'
 import type { ThreadMessage } from './types'
 
 function StepGlyph({ state, reducedMotion }: { state: AIAgentStep['state']; reducedMotion: boolean }) {
@@ -87,12 +96,69 @@ function TrailStack({ steps, reducedMotion }: { steps: AIAgentStep[]; reducedMot
   )
 }
 
+const quietHeadingStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: '0.07em',
+  textTransform: 'uppercase',
+  color: 'var(--color-text-tertiary)',
+}
+
+const disclosureToggleStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  cursor: 'pointer',
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: 'var(--color-text-tertiary)',
+  textAlign: 'left',
+}
+
+/** The collapsed working-context section of the live panel (DEV-245):
+ *  minimized by default, honest about a turn that attached nothing. */
+function WorkingContextSection({ context }: { context: AIChatWorkingContext }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        style={disclosureToggleStyle}
+        title={open ? 'Hide what this answer is drawing on' : 'Show what this answer is drawing on'}
+      >
+        {open ? '▾' : '▸'} Working context
+      </button>
+      {open && (
+        <div style={{ display: 'grid', gap: 4, fontSize: 12, lineHeight: 1.55, color: 'var(--color-text-tertiary)' }}>
+          <span>
+            {context.itemCount === 0
+              ? 'Nothing from your day record is attached to this message.'
+              : `Drawing on ${context.itemCount} item${context.itemCount === 1 ? '' : 's'} from your day record${context.dates.length > 0 ? ` for ${context.dates.join(', ')}` : ''}.`}
+          </span>
+          {context.readablePaths.length > 0 && (
+            <span>
+              May read: {context.readablePaths.map((path) => path.split('/').pop() || path).join(', ')}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
- * The trail under an in-flight answer. Subscribes to the streaming store per
- * message (same pattern as <StreamingMessage>), so step arrivals re-render
- * only this component — never the list or the composer.
+ * The structured progress panel under an in-flight answer (DEV-245): steps
+ * tick off live with inline status chips, a working header carries elapsed
+ * time, and the working-context section sits collapsed underneath. Subscribes
+ * to the streaming store per message (same pattern as <StreamingMessage>), so
+ * step arrivals re-render only this component — never the list or composer.
  */
-export function LiveActivityTrail({ messageId, reducedMotion }: { messageId: string; reducedMotion: boolean }) {
+export function AgentProgressPanel({ messageId, reducedMotion }: { messageId: string; reducedMotion: boolean }) {
   const steps = useSyncExternalStore(
     (listener) => subscribeStreaming(messageId, listener),
     () => getStreamingSteps(messageId),
@@ -103,11 +169,37 @@ export function LiveActivityTrail({ messageId, reducedMotion }: { messageId: str
     () => getStreamingStatus(messageId),
     () => '',
   )
+  const context = useSyncExternalStore(
+    (listener) => subscribeStreaming(messageId, listener),
+    () => getStreamingContext(messageId),
+    () => null,
+  )
+  const startedAtRef = useRef(Date.now())
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const rows = liveTrailRows(steps, status)
-  if (rows.length === 0) return null
+  if (rows.length === 0 && !context) return null
+  const firstStepStart = steps.find((step) => step.startedAt > 0)?.startedAt
+  const elapsedMs = Math.max(0, nowMs - (firstStepStart ?? startedAtRef.current))
   return (
-    <div style={{ marginBottom: 10 }}>
-      <TrailStack steps={rows} reducedMotion={reducedMotion} />
+    <div style={{ marginBottom: 10, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', padding: '10px 12px', display: 'grid', gap: 8, maxWidth: 560 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ width: 12, display: 'inline-flex', justifyContent: 'center', flexShrink: 0 }}>
+          <span
+            className={reducedMotion ? undefined : 'ai-trail-dot'}
+            style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--color-primary)' }}
+          />
+        </span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>
+          Working · {formatWorkedDuration(elapsedMs)}
+        </span>
+      </div>
+      {rows.length > 0 && <TrailStack steps={rows} reducedMotion={reducedMotion} />}
+      {context && <WorkingContextSection context={context} />}
     </div>
   )
 }
@@ -132,21 +224,12 @@ export function PendingFallback({ messageId }: { messageId: string }) {
   )
 }
 
-const pillStyle: React.CSSProperties = {
-  fontSize: 11.5,
-  fontWeight: 600,
-  padding: '3px 10px',
-  borderRadius: 999,
-  border: '1px solid var(--color-border-ghost)',
-  background: 'transparent',
-  color: 'var(--color-text-tertiary)',
-}
-
 /**
- * The settled trail on a completed answer: a summary pill whose counts come
- * from the same aggregation the inspector uses, an expandable static trail
- * reconstructed from the persisted tool trace, and the existing
- * "What the AI saw" pill. Renders nothing for non-agent answers.
+ * The settled disclosure on a completed answer (DEV-244): ONE collapsed line
+ * ("Worked for 1m 42s") that expands into the reconstructed step list, the
+ * source summary, human-titled citations, opened files, and the read-only
+ * shared-context inspector. Counts come from the same aggregation the
+ * inspector uses. Renders nothing for non-agent answers.
  */
 export function SettledActivityTrail({
   message,
@@ -159,49 +242,81 @@ export function SettledActivityTrail({
   onInspect: () => void
   reducedMotion: boolean
 }) {
-  const [showSteps, setShowSteps] = useState(false)
+  const [open, setOpen] = useState(false)
   const agent = message.agent
   if (!agent) return null
   const steps = stepsFromToolTrace(agent.toolTrace)
   const summary = summarizeAgentTurn(agent)
-  if (steps.length === 0 && !summary?.label && !canInspect) return null
+  const citations = agent.citations ?? []
+  const files = agent.fileDisclosures ?? []
+  const headline = trailHeadline({
+    durationMs: agent.durationMs ?? null,
+    stepCount: steps.length,
+    summaryLabel: summary?.label ?? '',
+  })
+  const hasBody = steps.length > 0 || citations.length > 0 || files.length > 0 || Boolean(summary?.label) || canInspect
+  if (!headline && !hasBody) return null
   return (
     <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-        {steps.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowSteps((value) => !value)}
-            aria-expanded={showSteps}
-            title={showSteps ? 'Hide the steps this answer took' : 'Show the steps this answer took'}
-            style={{ ...pillStyle, cursor: 'pointer' }}
-          >
-            {showSteps ? '▾' : '▸'} {steps.length} step{steps.length === 1 ? '' : 's'}
-          </button>
-        )}
-        {summary?.label && (
-          <button
-            type="button"
-            onClick={canInspect ? onInspect : () => setShowSteps((value) => !value)}
-            title={canInspect ? 'Open everything the AI was shown for this answer' : 'Show the steps this answer took'}
-            style={{ ...pillStyle, color: 'var(--color-text-secondary)', cursor: 'pointer' }}
-          >
-            {summary.label}
-          </button>
-        )}
-        {canInspect && (
-          <button
-            type="button"
-            onClick={onInspect}
-            title="Open the recorded context packet for this answer"
-            style={{ ...pillStyle, cursor: 'pointer' }}
-          >
-            What the AI saw
-          </button>
-        )}
-      </div>
-      {showSteps && steps.length > 0 && (
-        <TrailStack steps={steps} reducedMotion={reducedMotion} />
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        title={open ? 'Hide how this answer was put together' : 'Show how this answer was put together'}
+        style={disclosureToggleStyle}
+      >
+        {open ? '▾' : '▸'} {headline || 'Answer details'}
+      </button>
+      {open && (
+        <div style={{ display: 'grid', gap: 10, paddingLeft: 14 }}>
+          {steps.length > 0 && <TrailStack steps={steps} reducedMotion={reducedMotion} />}
+          {summary?.label && (
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{summary.label}</div>
+          )}
+          {citations.length > 0 && (
+            <div style={{ display: 'grid', gap: 4 }}>
+              <span style={quietHeadingStyle}>Sources</span>
+              {citations.map((citation) => (
+                <button
+                  key={`${message.id}:cite:${citation.marker}`}
+                  type="button"
+                  onClick={canInspect ? onInspect : undefined}
+                  title={`${citation.statement}\n${canInspect ? 'Open the shared-context record for this answer' : 'Recorded in this answer’s shared context'}`}
+                  style={{ display: 'flex', alignItems: 'baseline', gap: 7, border: 'none', background: 'transparent', padding: 0, textAlign: 'left', cursor: canInspect ? 'pointer' : 'default', fontSize: 12, lineHeight: 1.5, color: 'var(--color-text-secondary)' }}
+                >
+                  <span style={{ color: 'var(--color-text-tertiary)', flexShrink: 0 }}>{citation.marker}.</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {citationDisplayTitle(citation)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {files.length > 0 && (
+            <div style={{ display: 'grid', gap: 4 }}>
+              <span style={quietHeadingStyle}>Files opened</span>
+              {files.map((disclosure) => (
+                <span
+                  key={`${message.id}:${disclosure.path}:${disclosure.excerptStart}`}
+                  title={`${disclosure.path}\nversion ${disclosure.versionFingerprint}\nbytes ${disclosure.excerptStart}–${disclosure.excerptEnd}\nLogged in Settings → Agent file access`}
+                  style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {humanizeFileTitle(disclosure.name)}
+                </span>
+              ))}
+            </div>
+          )}
+          {canInspect && (
+            <button
+              type="button"
+              onClick={onInspect}
+              title="Open the exact recorded context behind this answer"
+              style={{ ...disclosureToggleStyle, color: 'var(--color-text-secondary)' }}
+            >
+              See the exact context shared
+            </button>
+          )}
+        </div>
       )}
     </div>
   )

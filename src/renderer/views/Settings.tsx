@@ -1177,7 +1177,7 @@ const SECTION_GROUPS: SectionGroup[] = [
     label: 'AI',
     items: [
       { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
-      { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you what the ai saw context packet disclosure' },
+      { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you shared context packet disclosure' },
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
       { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed' },
     ],
@@ -3399,7 +3399,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             <SuppliedMemorySection reloadToken={suppliedReloadToken} />
 
             {/* DEV-183: the recorded-context browser — every AI exchange's
-                packet, openable into the read-only "What the AI saw" view. */}
+                packet, openable into the read-only shared-context view. */}
             <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
               <ContextPacketSection />
             </div>

@@ -161,6 +161,7 @@ interface AnswerEnvelope {
     toolTrace: Array<{ tool: string; input: unknown; output: string; failed?: boolean }>
     stepCount: number
     groundingRetried: boolean
+    durationMs?: number
     fileDisclosures?: import('@shared/types').AIMessageFileDisclosure[]
     contextPacketId?: string | null
     citations?: import('@shared/types').AIMessageCitation[]
@@ -3587,7 +3588,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
           } catch { /* display state only — never fail the turn over it */ }
         }
         if (requestId && options.onStreamEvent) {
-          options.onStreamEvent({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status, step: event.step })
+          options.onStreamEvent({ requestId, delta: event.delta, snapshot: event.snapshot, status: event.status, step: event.step, context: event.context })
         }
       },
       // Agent-initiated waits and the user pause are ONE machine: the card
@@ -3663,6 +3664,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       toolTrace: agentResult.toolTrace,
       stepCount: agentResult.stepCount,
       groundingRetried: agentResult.groundingRetried,
+      durationMs: agentResult.durationMs,
       fileDisclosures: agentResult.fileDisclosures,
       contextPacketId: agentResult.contextPacketId,
       citations: agentResult.citations,

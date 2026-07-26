@@ -8,7 +8,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { runChatAgentTurn } from '../src/main/agent/chatAgent.ts'
-import type { AIAgentStep } from '../src/shared/types.ts'
+import type { AIAgentStep, AIChatWorkingContext } from '../src/shared/types.ts'
 
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -50,7 +50,7 @@ test('publishes tool activity and only the grounded final answer', async () => {
       ] as never[])
     },
   })
-  const events: Array<{ delta: string; snapshot: string; status?: string; step?: AIAgentStep }> = []
+  const events: Array<{ delta: string; snapshot: string; status?: string; step?: AIAgentStep; context?: AIChatWorkingContext }> = []
 
   try {
     const result = await runChatAgentTurn('What happened Monday?', [], {
@@ -65,12 +65,22 @@ test('publishes tool activity and only the grounded final answer', async () => {
 
     assert.equal(result.text, 'No activity was captured.')
     assert.equal(result.groundingRetried, true)
+    assert.ok(result.durationMs >= 0, 'the turn records how long it worked')
 
-    // The tool call opens an active step (with the plain status line riding
-    // alongside for backward compatibility), the result settles the SAME step
-    // to done, and only then does the final grounded answer stream.
-    assert.equal(events.length, 3)
-    const [opened, settled, answer] = events
+    // The working-context event (DEV-245) leads: counts and scope only, sent
+    // once after packet assembly and before any tool step. Then the tool call
+    // opens an active step (with the plain status line riding alongside for
+    // backward compatibility), the result settles the SAME step to done, and
+    // only then does the final grounded answer stream.
+    assert.equal(events.length, 4)
+    const [working, opened, settled, answer] = events
+    assert.deepEqual(
+      { ...working, context: undefined },
+      { delta: '', snapshot: '', context: undefined },
+    )
+    assert.ok(working.context, 'the turn announces its working context')
+    assert.equal(working.context?.itemCount, 0, 'an empty day attaches nothing')
+    assert.deepEqual(working.context?.readablePaths, [])
     assert.equal(opened.status, 'Reading 2026-07-06')
     assert.deepEqual(
       { ...opened, step: undefined },

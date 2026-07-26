@@ -288,7 +288,7 @@ export function useAIChat() {
       const safeStep = event.step
         ? { ...event.step, label: sanitizeForRender(event.step.label).text }
         : undefined
-      setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot, event.status, safeStep)
+      setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot, event.status, safeStep, event.context)
     })
   }, [])
 

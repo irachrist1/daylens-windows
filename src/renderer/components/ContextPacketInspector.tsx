@@ -1,6 +1,6 @@
-// "What the AI saw" (DEV-183, agent-runtime-and-context.md §Context
-// inspection): the read-only view of the recorded context packet behind one
-// AI exchange. Everything shown is re-read from the local disclosure ledger —
+// The shared-context inspector (DEV-183, agent-runtime-and-context.md
+// §Context inspection): the read-only view of the recorded context packet
+// behind one AI exchange. Everything shown is re-read from the local disclosure ledger —
 // nothing here calls a model, and nothing here can be edited. The view is
 // honest about absence (empty groups say plainly that nothing of that kind
 // was sent) and about time (evidence deleted after the exchange stays in the
@@ -146,7 +146,7 @@ export function ContextPacketInspector({ packetId, messageId, onClose }: Context
   return (
     <div
       role="dialog"
-      aria-label="What the AI saw"
+      aria-label="Shared context"
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 24 }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose() }}
     >
@@ -154,7 +154,7 @@ export function ContextPacketInspector({ packetId, messageId, onClose }: Context
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '18px 20px 12px' }}>
           <div style={{ display: 'grid', gap: 3, flex: 1, minWidth: 0 }}>
             <span style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--color-text-primary)' }}>
-              What the AI saw
+              Shared context
             </span>
             <span style={{ ...quietTextStyle, fontSize: 11.5 }}>
               The exact context recorded for this exchange, before the request left this device. Read-only.

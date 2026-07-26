@@ -15,7 +15,7 @@
 import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
 import type Database from 'better-sqlite3'
 import os from 'node:os'
-import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind } from '@shared/types'
+import type { AIAgentStep, AIChatWorkingContext, AIMessageArtifact, AgentTurnWaitKind } from '@shared/types'
 import { statusForTool } from '@shared/agentTrail'
 import type { ResolvedProviderConfig, AIProviderUsage } from '../services/aiOrchestration'
 import { providerLabel } from '../services/aiOrchestration'
@@ -32,6 +32,7 @@ import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import {
   buildContextPacket,
   contextPacketsAvailable,
+  isSmallTalkTurn,
   recordContextPacket,
   renderContextPacketForAgent,
   type ContextPacket,
@@ -63,7 +64,7 @@ export interface ChatAgentDeps {
   db: Database.Database
   config: ResolvedProviderConfig
   /** Streams the growing answer (and tool status lines) to the renderer / bench collector. */
-  onStreamEvent?: (event: { delta: string; snapshot: string; status?: string; step?: AIAgentStep }) => void | Promise<void>
+  onStreamEvent?: (event: { delta: string; snapshot: string; status?: string; step?: AIAgentStep; context?: AIChatWorkingContext }) => void | Promise<void>
   askUser: (question: AgentQuestion) => Promise<string>
   artifactDir: string
   mcpServers?: McpServerConfig[]
@@ -93,6 +94,9 @@ export interface ChatAgentResult {
   usage: AIProviderUsage
   stepCount: number
   groundingRetried: boolean
+  /** Wall-clock time this turn worked, for the settled "Worked for Xm Ys"
+   *  line (DEV-244). */
+  durationMs: number
   /** The recorded context packet the turn answered from (DEV-182); null when
    *  the packet ledger is unavailable on this database. */
   contextPacketId: string | null
@@ -136,6 +140,7 @@ export async function runChatAgentTurn(
   deps: ChatAgentDeps,
 ): Promise<ChatAgentResult> {
   const now = deps.now ?? new Date()
+  const turnStartedAt = Date.now()
   const artifacts: AIMessageArtifact[] = []
   const toolTrace: AgentToolTraceEntry[] = []
   const toolResultStrings: string[] = []
@@ -157,27 +162,49 @@ export async function runChatAgentTurn(
   // per-item citation markers. Assembly failure degrades to a tools-only turn
   // (the tool results still ride the same privacy boundaries) — it never
   // blocks the answer.
+  //
+  // Context scales with the question (DEV-244): a pure greeting or courtesy
+  // turn asks nothing of the day record, so no packet is assembled and nothing
+  // is disclosed for it. Tools stay available either way.
   const destination = `${deps.config.provider}:${deps.config.model}`
   let contextPacket: ContextPacket | null = null
   let contextPacketRecorded = false
-  try {
-    contextPacket = await buildContextPacket(deps.db, {
-      purpose: 'answer',
-      question,
-      now,
-      destination,
-    })
-    if (contextPacketsAvailable(deps.db)) {
-      recordContextPacket(deps.db, contextPacket, {
-        exchangeKind: 'chat',
-        threadId: deps.threadId ?? null,
+  if (isSmallTalkTurn(question)) {
+    console.log('[agent] small-talk turn: no context packet assembled, nothing disclosed')
+  } else {
+    try {
+      contextPacket = await buildContextPacket(deps.db, {
+        purpose: 'answer',
+        question,
+        now,
+        destination,
       })
-      contextPacketRecorded = true
+      if (contextPacketsAvailable(deps.db)) {
+        recordContextPacket(deps.db, contextPacket, {
+          exchangeKind: 'chat',
+          threadId: deps.threadId ?? null,
+        })
+        contextPacketRecorded = true
+      }
+    } catch (error) {
+      console.warn('[agent] context packet assembly failed; answering from tools only', error)
+      contextPacket = null
     }
-  } catch (error) {
-    console.warn('[agent] context packet assembly failed; answering from tools only', error)
-    contextPacket = null
   }
+  // Tell the progress panel what this turn is drawing on (DEV-245): the day
+  // scope, how many items attached, and which paths the model may read.
+  // Counts and scopes only — item statements stay behind the recorded packet.
+  await deps.onStreamEvent?.({
+    delta: '',
+    snapshot: '',
+    context: {
+      dates: contextPacket?.request.dates ?? [],
+      itemCount: contextPacket?.items.length ?? 0,
+      readablePaths: (contextPacket?.permissions ?? [])
+        .filter((permission) => permission.state === 'model_readable')
+        .map((permission) => permission.path),
+    },
+  })
   // Packet statements count as evidence for the grounding verifiers: a time or
   // name the packet disclosed is cited, not hallucinated, even when the model
   // answered without re-fetching it through a tool.
@@ -419,6 +446,7 @@ export async function runChatAgentTurn(
       usage,
       stepCount,
       groundingRetried,
+      durationMs: Date.now() - turnStartedAt,
       contextPacketId: contextPacket && contextPacketRecorded ? contextPacket.id : null,
       citations,
       fileDisclosures: fileDisclosures.map((row) => ({
