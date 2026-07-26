@@ -8,6 +8,9 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import type Database from 'better-sqlite3'
 import { executeTool, execSearchSessionsWithMeaning } from '../services/aiTools'
+import { getLongestFocusStretch } from '../services/wrappedTools'
+import { getTimelineDayProjection } from '../core/query/projections'
+import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { getMomentEvidence } from '../lib/momentEvidence'
 import { getWebsiteVisitsForRange } from '../db/queries'
 import {
@@ -173,6 +176,9 @@ function timeChunks(
   const visits = getWebsiteVisitsForRange(db, spanStartMs, spanEndMs)
     .filter((visit) => !ignoredSpans.some((span) => span.startMs <= visit.visitTime && span.endMs > visit.visitTime))
   const spanSessions = getCorrectedSessionsForRange(db, spanStartMs, spanEndMs)
+  // The covering timeline block names what each increment WAS ("Building the
+  // sync engine"), so the chunk table can say the work, not only the app.
+  const dayBlocks = getTimelineDayProjection(db, date, null, { materialize: false, analysis: false }).blocks
   const chunks = []
   for (let offset = startOffset; offset < endOffset; offset += incrementMinutes) {
     const chunkStart = dayStart + offset * 60_000
@@ -201,10 +207,16 @@ function timeChunks(
           // carry no em dash (the voice contract bans it in every surface).
           ? { kind: 'untracked', label: 'no data captured, possibly a tracking failure' }
           : { kind: 'idle', label: 'no activity captured, likely away or idle' }
+    const coveringBlock = dayBlocks
+      .filter((block) => block.startTime < chunkEnd && block.endTime > chunkStart)
+      .sort((left, right) =>
+        (Math.min(right.endTime, chunkEnd) - Math.max(right.startTime, chunkStart))
+        - (Math.min(left.endTime, chunkEnd) - Math.max(left.startTime, chunkStart)))[0]
     chunks.push({
       startTime: fmtMinuteOffset(offset),
       endTime: fmtMinuteOffset(offset + incrementMinutes),
       durationMinutes: incrementMinutes,
+      blockLabel: coveringBlock ? userVisibleBlockLabel(coveringBlock) : null,
       activity,
       pages,
       gap,
@@ -251,6 +263,15 @@ export function buildDaylensTools(db: Database.Database) {
       execute: async ({ date, startTime, endTime, incrementMinutes }) => guarded(
         timeChunks(db, date, startTime, endTime, incrementMinutes),
       ),
+    }),
+
+    get_longest_focus_stretch: tool({
+      description: 'The single longest work stretch of one day: exact start and end clocks, exact duration, the app that carried it, and what the work was when a clean name exists. Use for "longest focus block", "longest stretch", "deepest run" questions. Returns an explicit miss when no work stretch cleared 20 minutes.',
+      inputSchema: z.object({ date: DATE }),
+      execute: async ({ date }) => {
+        const stretch = getLongestFocusStretch({ date }, db)
+        return guarded(stretch ?? { found: false, reason: 'No work stretch of 20 minutes or more on that day.' })
+      },
     }),
 
     search_history: tool({
