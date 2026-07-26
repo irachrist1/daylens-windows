@@ -42,7 +42,7 @@ import {
 import { resolvePacketCitations, type PacketCitation } from './contextCitations'
 import { getCurrentTrace } from '../ai/trace'
 import { buildAgentSystemPrompt } from './systemPrompt'
-import { renderTimeChunkAnswer, type TimeChunkResult } from './timeChunkAnswer'
+import { renderTimeChunkAnswer, wantsTimeChunkTable, type TimeChunkResult } from './timeChunkAnswer'
 import { sanitizeForRender } from '@shared/aiSanitize'
 
 const MAX_STEPS = 14
@@ -439,9 +439,7 @@ export async function runChatAgentTurn(
     // fidelity when the user ASKED for increments. Gate it on the question:
     // a turn that merely consulted get_time_chunks while researching keeps
     // the model's actual answer instead of having it hijacked by a table.
-    const askedForIncrements = /\b(?:chunks?|increments?|intervals?)\b/i.test(question)
-      || /\bbreak(?:\s+\S+){0,4}\s+into\b/i.test(question)
-    if (askedForIncrements) {
+    if (wantsTimeChunkTable(question)) {
       text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
     }
     const exportFormat = /\b(?:excel|xlsx)\b/i.test(question) ? 'xlsx' : /\bcsv\b/i.test(question) ? 'csv' : null

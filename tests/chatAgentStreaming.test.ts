@@ -234,6 +234,25 @@ test('consulting get_time_chunks does not replace the answer unless increments w
     })
     // Increments asked for: the deterministic table takes over.
     assert.ok(increments.text.includes('60-minute chunks'), `expected chunk table, got: ${increments.text.slice(0, 120)}`)
+
+    // A follow-up refinement of a previous chunk answer is still an
+    // increments request even though the increment noun lives in history.
+    const refinement = await runChatAgentTurn(
+      'make it 15-minute rows instead',
+      [
+        { role: 'user', content: 'Break Monday into 60-minute chunks' },
+        { role: 'assistant', content: 'Monday in 60-minute chunks: …' },
+      ],
+      {
+        db,
+        config: { provider: 'anthropic', apiKey: null, model: 'test' },
+        model: makeModel(),
+        askUser: async () => '',
+        artifactDir: fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-agent-chunks3-')),
+        now: new Date(2026, 6, 12, 12),
+      },
+    )
+    assert.ok(refinement.text.includes('60-minute chunks'), `expected chunk table for refinement, got: ${refinement.text.slice(0, 120)}`)
   } finally {
     db.close()
   }

@@ -62,6 +62,25 @@ function rowDescription(chunk: TimeChunkRow): string {
   return activity.join('; ')
 }
 
+// Does the question ask for the day broken into fixed increments? Gates the
+// deterministic chunk-table override in chatAgent: the table must take over
+// for every increment-shaped phrasing (including follow-up refinements like
+// "make it 15-minute rows instead"), but never hijack a turn that merely
+// consulted get_time_chunks while researching something else.
+const CHUNK_NOUNS = /\b(?:chunks?|increments?|intervals?|segments?|buckets?)\b/i
+const SPLIT_INTO = /\b(?:break|split|divide|chop)(?:\s+\S+){0,5}\s+(?:into|in|by)\b/i
+const HOURLY = /\bhour(?:ly|[- ]by[- ]hour)\b/i
+const N_MINUTES = /\b\d{1,3}[- ]?min(?:ute)?s?\b/i
+const HALF_HOUR = /\bhalf[- ]hours?\b/i
+
+export function wantsTimeChunkTable(question: string): boolean {
+  return CHUNK_NOUNS.test(question)
+    || SPLIT_INTO.test(question)
+    || HOURLY.test(question)
+    || N_MINUTES.test(question)
+    || HALF_HOUR.test(question)
+}
+
 export function renderTimeChunkAnswer(result: TimeChunkResult): string | null {
   if (!result.found || !result.date || !result.incrementMinutes || result.chunks.length === 0) return null
   const date = new Date(`${result.date}T12:00:00`)
