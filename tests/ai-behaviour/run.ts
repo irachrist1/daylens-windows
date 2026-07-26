@@ -23,6 +23,7 @@ import yaml from 'js-yaml'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy } from './realDb'
+import { summarizeArtifactsForJudge, summarizeTraceForJudge } from './evidence'
 import type { ScenarioRecord } from './types'
 import type { AIProviderMode } from '@shared/types'
 
@@ -40,71 +41,6 @@ const ANSI = {
 
 function color(c: keyof typeof ANSI, s: string): string {
   return process.stdout.isTTY ? `${ANSI[c]}${s}${ANSI.reset}` : s
-}
-
-// Read the per-scenario trace JSON the trace recorder writes during
-// sendMessage, and produce a compact text summary the judge can use as
-// authoritative evidence. The judge needs to see every tool input/output
-// so it does not flag real block labels as hallucinations.
-function summarizeTraceForJudge(tracePath: string): string | undefined {
-  if (!fs.existsSync(tracePath)) return undefined
-  let raw: string
-  try {
-    raw = fs.readFileSync(tracePath, 'utf8')
-  } catch {
-    return undefined
-  }
-  let trace: { events?: Array<Record<string, unknown>> }
-  try {
-    trace = JSON.parse(raw) as { events?: Array<Record<string, unknown>> }
-  } catch {
-    return undefined
-  }
-  const events = trace.events ?? []
-  const lines: string[] = []
-  for (const event of events) {
-    const kind = event.kind as string | undefined
-    if (kind === 'tool_result') {
-      const name = event.name as string
-      const input = JSON.stringify(event.input ?? {})
-      // Truncate output JSON to keep the judge prompt under control, but
-      // preserve enough that block labels, durations, and domain strings
-      // are visible.
-      const outputStr = JSON.stringify(event.output ?? null)
-      const outputPreview = outputStr.length > 1800 ? `${outputStr.slice(0, 1800)}…(truncated)` : outputStr
-      lines.push(`TOOL ${name}(${input}) → ${outputPreview}`)
-    } else if (kind === 'router') {
-      lines.push(`ROUTER matched=${event.matched} reason=${event.reason}`)
-    } else if (kind === 'router_decision') {
-      // The deterministic router produced this verbatim structured answer.
-      // The prose-pass rewrites it into natural language. Anything quoted
-      // from this block — durations, app names, block labels — is grounded.
-      const sa = ((event.structuredAnswer as string) ?? '').trim()
-      const preview = sa.length > 1500 ? `${sa.slice(0, 1500)}…` : sa
-      lines.push(`ROUTER_DECISION routedKind=${event.routedKind} hasTimeWindow=${event.hasTimeWindow}\nSTRUCTURED_ANSWER (authoritative — treat as tool output for grounding):\n${preview}`)
-    } else if (kind === 'prose_pass') {
-      // Shows the prose-pass rewrite and whether it was rejected (timestamp
-      // drift, empty, error) — in which case the structured answer above
-      // was returned to the user verbatim.
-      const out = ((event.output as string) ?? '').trim()
-      const fallback = event.fallback as string | undefined
-      const preview = out.length > 600 ? `${out.slice(0, 600)}…` : out
-      lines.push(`PROSE_PASS${fallback ? ` fallback=${fallback}` : ''} → ${preview}`)
-    } else if (kind === 'turn') {
-      const text = ((event.text as string) ?? '').trim()
-      if (text) {
-        const preview = text.length > 300 ? `${text.slice(0, 300)}…` : text
-        lines.push(`MODEL_TURN_TEXT: ${preview}`)
-      }
-    }
-  }
-  if (lines.length === 0) return undefined
-  // Cap the whole summary so the judge call stays within token budget.
-  const joined = lines.join('\n')
-  if (joined.length > 12000) {
-    return `${joined.slice(0, 12000)}\n(trace truncated for judge)`
-  }
-  return joined
 }
 
 function loadScenarios(): ScenarioRecord[] {
@@ -205,6 +141,10 @@ async function main(): Promise<void> {
     durationMs: number
     judge: Awaited<ReturnType<typeof judgeAnswer>>
     artifactsEmitted: number
+    // Persisted so a later re-judge pass can rebuild the judge's evidence
+    // (artifact files + follow-up chips) without re-running the subject.
+    artifacts: Array<{ title: string; format: string; path: string; kind: string }>
+    followUps: string[]
     tracePath?: string
     error?: string
   }> = []
@@ -220,7 +160,14 @@ async function main(): Promise<void> {
     try {
       const result = await sendMessage(
         { message: scenario.question, threadId: null },
-        { traceScenarioId: scenario.id },
+        {
+          traceScenarioId: scenario.id,
+          // A scenario can script the answer to any askUser card the turn
+          // raises; without one the production no-answer default applies.
+          ...(scenario.ask_user_answer
+            ? { onAgentQuestion: async () => scenario.ask_user_answer as string }
+            : {}),
+        },
       )
       const assistant = result.assistantMessage
       const text = assistant.content
@@ -235,8 +182,10 @@ async function main(): Promise<void> {
       console.log(color('yellow', `  A: ${text.replace(/\n/g, '\n     ')}`))
 
       const traceSummary = summarizeTraceForJudge(path.join(traceDir, `${scenario.id}.json`))
+      const artifactSummary = summarizeArtifactsForJudge(assistant.artifacts ?? [])
+      const evidence = [traceSummary, artifactSummary].filter(Boolean).join('\n\n') || undefined
       const followUps = (assistant.suggestedFollowUps ?? []).map((s) => s.text)
-      const verdict = await judgeAnswer(scenario, text, groundTruthBlob, judgeApiKey, traceSummary, followUps)
+      const verdict = await judgeAnswer(scenario, text, groundTruthBlob, judgeApiKey, evidence, followUps)
       const gradeColor: keyof typeof ANSI =
         verdict.grade === 'good' ? 'green'
         : verdict.grade === 'bad' ? 'yellow'
@@ -253,6 +202,8 @@ async function main(): Promise<void> {
         durationMs,
         judge: verdict,
         artifactsEmitted,
+        artifacts: (assistant.artifacts ?? []).map((a) => ({ title: a.title, format: a.format, path: a.path, kind: a.kind })),
+        followUps,
         tracePath: path.join(traceDir, `${scenario.id}.json`),
       })
     } catch (error) {
@@ -263,6 +214,8 @@ async function main(): Promise<void> {
         answer: '',
         answerKind: null,
         sourceKind: null,
+        artifacts: [],
+        followUps: [],
         durationMs: Date.now() - t0,
         judge: {
           scenarioId: scenario.id,

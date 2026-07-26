@@ -32,6 +32,9 @@ You will be given:
 
 CRITICAL — what counts as evidence:
 The TRACE is authoritative. If a number, block label, app name, page title, or domain appears in any tool OUTPUT, the model was entitled to cite it — that is NOT a hallucination, even if the ground-truth summary doesn't list it (ground truth is a compact summary and may omit things the tools returned). Treat ground truth as supplementary. A claim is a hallucination ONLY if the cited value appears in neither the trace nor ground truth.
+- Tool outputs carry epoch-millisecond timestamps; each tool line is followed by a LOCAL_TIMES line rendering every epoch in that output as "YYYY-MM-DD HH:MM". A clock time or time range the answer cites is grounded if it matches LOCAL_TIMES (start and end of a range each matching counts as a grounded range).
+- A tool output ending in "…(truncated …)" was cut for YOUR prompt only — the model saw the full output. A claim that would plausibly live in the truncated part is UNVERIFIABLE: do not grade it as fabrication, but do not count it toward citations_found either. Flag it as a hallucination only if it CONTRADICTS visible evidence or has no plausible source anywhere in the trace.
+- The CONTEXT_PACKET section (when present) was part of the model's prompt — statements quoted from it are grounded.
 
 CRITICAL — what makes an answer good:
 The bar is NOT "the answer matches the DB." The bar is: would a colleague who watched the user work this week answer it the same way? A factually correct answer that fails to reveal understanding is a FAIL. "3h in Cursor" when the truth is "3h finishing the chat refactor in Cursor" — FAIL. App totals as the headline — FAIL. The answer must name the ACTIVITY, not just the app.
@@ -96,25 +99,48 @@ export async function judgeAnswer(
 
   try {
     const client = new Anthropic({ apiKey })
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 400,
-      system: JUDGE_SYSTEM,
-      messages: [{ role: 'user', content: userPrompt }],
-    })
+    // claude-sonnet-4-6 rejects assistant prefill, so JSON-first is enforced
+    // by instruction instead; the raised token cap stops the mid-thought
+    // truncation that used to grade as "error", and one retry mops up a
+    // response that still fails to parse.
+    const callJudge = async (): Promise<string> => {
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1200,
+        system: JUDGE_SYSTEM,
+        messages: [
+          { role: 'user', content: `${userPrompt}\n\nYour reply MUST start with "{" — the JSON verdict itself, no preamble, no reasoning before it.` },
+        ],
+      })
+      return response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('')
+        .trim()
+    }
 
-    const raw = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('')
-      .trim()
+    const extractJson = (raw: string): string | null => {
+      const match = raw.match(/\{[\s\S]*\}/)
+      if (!match) return null
+      try {
+        JSON.parse(match[0])
+        return match[0]
+      } catch {
+        return null
+      }
+    }
 
-    const jsonMatch = raw.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
+    let raw = await callJudge()
+    let json = extractJson(raw)
+    if (!json) {
+      raw = await callJudge()
+      json = extractJson(raw)
+    }
+    if (!json) {
       return {
         scenarioId: scenario.id,
         grade: 'error',
-        reason: `judge returned non-JSON: ${raw.slice(0, 120)}`,
+        reason: `judge returned non-JSON after retry: ${raw.slice(0, 120)}`,
         citationsFound: false,
         hallucinationDetected: false,
         voiceOk: false,
@@ -124,7 +150,7 @@ export async function judgeAnswer(
       }
     }
 
-    const parsed = JSON.parse(jsonMatch[0]) as {
+    const parsed = JSON.parse(json) as {
       grade?: 'good' | 'bad' | 'worse'
       reason?: string
       citations_found?: boolean
