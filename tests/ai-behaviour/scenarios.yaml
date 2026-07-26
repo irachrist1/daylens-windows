@@ -90,12 +90,17 @@ scenarios:
       EXACT duration (e.g. "60 minutes" if it was 60 minutes, not "approximately 26
       minutes"). Says what was being worked on — the actual activity, derived from
       the block label, artifacts touched, or window titles. Apps are evidence,
-      not the headline. The span named must be one the tools actually returned:
+      not the headline. Every span or duration named must be one a tool returned:
       carving a sub-range out of a longer block by reading interval rows and
       judging where the work stopped is an invented duration and a fail, however
-      reasonable it sounds. If the longest block is mostly leisure or mixed, say
-      so plainly and then name the longest work-shaped block with its own real
-      bounds.
+      reasonable it sounds. Note for the judge: the get_longest_focus_stretch tool
+      itself returns sub-block facts — longestWorkStretch (a work run with its own
+      real bounds) and kindSplitSeconds (how the longest block's time divides by
+      kind). Quoting THOSE is grounded and required, not carving. If the longest
+      block is mostly leisure or mixed per kindSplitSeconds, the answer must say so
+      plainly, name the block's real bounds and what filled it, and then give
+      longestWorkStretch with its own bounds (or say the day had no work run at
+      all if the tool returned none).
     rubric:
       must_cite_duration: true
       must_name_specific_artifacts_or_blocks: true

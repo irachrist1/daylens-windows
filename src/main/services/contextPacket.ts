@@ -931,6 +931,7 @@ export function renderContextPacketForAgent(packet: ContextPacket): string {
     sections.push(
       `Context packet ${packet.id} — assembled locally from your corrected Daylens data for ${packet.request.dates.join(', ')} before this request; every item below is recorded in the local disclosure ledger. Treat it as orienting context and verify specifics with tools.`,
       'Citing: every packet item below carries a marker like [C3]. When a claim in your answer comes from a packet item, append that item\'s marker immediately after the claim (e.g. "The morning went to the planner refactor [C1]."). Use only markers printed below — never invent one. Claims grounded in this turn\'s tool results need no marker.',
+      'Leads vs facts: items under "Moments similar by meaning" are semantic leads, NOT confirmed facts. Before asserting one as something that happened, verify it with a tool (search or moment); otherwise phrase it as a lead ("a chat that looks like…") or leave it out. The same holds for any inference the packet itself does not state: never present a guess about why something is absent as an observation.',
     )
     for (const kind of Object.keys(KIND_ORDER) as ContextItemKind[]) {
       const lines: string[] = []

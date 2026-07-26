@@ -12,7 +12,7 @@ import { getLongestFocusStretch } from '../services/wrappedTools'
 import { getTimelineDayProjection } from '../core/query/projections'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { effectiveBlockKind } from '@shared/workKind'
+import { effectiveBlockKind, kindForCategory } from '@shared/workKind'
 import { formatClock as fmtClockMs } from '../../renderer/lib/dayWrapScenes'
 import { getMomentEvidence } from '../lib/momentEvidence'
 import { getWebsiteVisitsForRange } from '../db/queries'
@@ -269,13 +269,24 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     get_longest_focus_stretch: tool({
-      description: 'The longest stretches of one day, with exact bounds: longestWorkStretch (the longest work block of 20m+, with start/end clocks, exact duration, carrying app, and the work\'s name) and longestBlock (the longest block of ANY kind, so a leisure-dominated day still gets an honest answer). Use for "longest focus block", "longest stretch", "deepest run" questions. Never carve sub-ranges yourself; these bounds are the real ones.',
+      description: 'The longest stretches of one day, with exact bounds: longestWorkStretch (the longest unbroken run of WORK sessions with real start/end clocks computed from session evidence — safe to cite even when the day is still one open block) and longestBlock (the longest block of ANY kind, with its kind, kind-split seconds, top apps, and top pages). Use for "longest focus block", "longest stretch", "deepest run" questions. Answer shape: name longestBlock plainly with its exact bounds and what filled it (its own topApps/topPages); if it is mixed or leisure-dominated say so using kindSplitSeconds; then give longestWorkStretch with its own bounds — when substantialFocusBlock is false, say the day had no proper focus block and name that run as the closest thing. Never carve sub-ranges yourself; these are the only real bounds.',
       inputSchema: z.object({ date: DATE }),
       execute: async ({ date }) => {
-        const stretch = getLongestFocusStretch({ date }, db)
+        // Floor of 5 minutes: even on a day with no substantial focus block,
+        // the model gets the longest REAL work run with citable bounds instead
+        // of inventing one from chunk rows.
+        const stretch = getLongestFocusStretch({ date, minSeconds: 5 * 60 }, db)
         const blocks = getTimelineDayProjection(db, date, null, { materialize: false, analysis: false }).blocks
         const longest = [...blocks].sort((left, right) =>
           blockActiveSeconds(right) - blockActiveSeconds(left))[0]
+        let kindSplit: Record<string, number> | null = null
+        if (longest && longest.sessions.length > 0) {
+          kindSplit = {}
+          for (const session of longest.sessions) {
+            const kind = kindForCategory(session.category)
+            kindSplit[kind] = (kindSplit[kind] ?? 0) + session.durationSeconds
+          }
+        }
         const longestBlock = longest
           ? {
               label: userVisibleBlockLabel(longest),
@@ -283,12 +294,21 @@ export function buildDaylensTools(db: Database.Database) {
               startClock: fmtClockMs(longest.startTime),
               endClock: fmtClockMs(longest.endTime),
               durationSeconds: blockActiveSeconds(longest),
+              spanSeconds: Math.max(0, Math.round((longest.endTime - longest.startTime) / 1000)),
+              // Seconds by work kind inside the block, from its own sessions —
+              // so a "work" block that is mostly Netflix reads as what it is.
+              kindSplitSeconds: kindSplit,
+              topApps: longest.topApps.slice(0, 5).map((a) => ({ appName: a.appName, category: a.category })),
+              topPages: (longest.pageRefs ?? []).slice(0, 5).map((p) => p.pageTitle ?? p.domain ?? null).filter(Boolean),
             }
           : null
         return guarded({
           found: Boolean(stretch || longestBlock),
           date,
           longestWorkStretch: stretch,
+          // A stretch under 20 minutes is real but not substantial: say the day
+          // had no proper focus block, then name this run with its own bounds.
+          substantialFocusBlock: Boolean(stretch && stretch.durationSeconds >= 20 * 60),
           longestBlock,
         })
       },

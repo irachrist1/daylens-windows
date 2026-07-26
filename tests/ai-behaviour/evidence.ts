@@ -118,7 +118,10 @@ export function summarizeTraceForJudge(tracePath: string): string | undefined {
       // visible. 1800 chars was far too small: a week summary is ~8k, a day
       // overview ~15k, and everything past the cut read as fabrication.
       const outputStr = JSON.stringify(event.output ?? null)
-      const outputPreview = outputStr.length > 6000 ? `${outputStr.slice(0, 6000)}…(truncated — the model saw the FULL output; claims may be grounded in the truncated part)` : outputStr
+      // A chunk table's interval coverage IS the graded object — a judge that
+      // can't see the tail rows grades honest rows as fabrication.
+      const outputCap = outputStr.includes('"chunks"') ? 24000 : 6000
+      const outputPreview = outputStr.length > outputCap ? `${outputStr.slice(0, outputCap)}…(truncated — the model saw the FULL output; claims may be grounded in the truncated part)` : outputStr
       lines.push(`TOOL ${name}(${input}) → ${outputPreview}`)
       // Rendered from the FULL output, so times the model quoted from beyond
       // the preview still verify.

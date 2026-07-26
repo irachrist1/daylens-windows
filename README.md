@@ -64,6 +64,7 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Label voice](docs/specs/label-voice.md)                                 | The recorded, evaluatable rubric block labels are scored against                |
 | [Apps](docs/specs/apps.md)                                               | Day, week, and month application explanations and canonical totals              |
 | [AI agent](docs/specs/ai-agent.md)                                       | Voice, retrieval tools, sources, model choice, and Daylens actions              |
+| [Agent benchmark](docs/specs/agent-benchmark.md)                         | How every AI surface behaves, sounds, and is graded: queries, judges, hard caps |
 | [Wrapped](docs/specs/wrapped.md)                                         | Day, week, month, and year recaps on shared facts, voice, and evidence          |
 | [Briefs](docs/specs/briefs.md)                                           | Morning, evening, and weekly notifications from the same facts and voice        |
 | [Agent runtime and context](docs/specs/agent-runtime-and-context.md)     | Context assembly, file disclosure, scoped tools, and provider runtimes          |
