@@ -830,11 +830,12 @@ export function weightedCategoryDistributionFor(
       // until the next one, which is how a 17-second Netflix flip once spent
       // 695s of a CI-review block and stamped it dominant 'entertainment'.
       // Watching is an activity, not a residue: unless the browser's own
-      // foreground window titles corroborate the page, an entertainment
-      // domain's credit counts only inside the visit's recorded dwell — the
-      // fill seconds stay in the pool and fall out as honest 'browsing'.
+      // foreground window titles corroborate the page, a leisure-sink
+      // domain's credit (entertainment AND social_feed — an idle x.com tab
+      // fills the same way) counts only inside the visit's recorded dwell —
+      // the fill seconds stay in the pool and fall out as honest 'browsing'.
       let creditIntervals = freeIntervals
-      if (policyForHost(visit.domain) === 'entertainment'
+      if (policyForHost(visit.domain) !== null
         && !pool.windowTitles.some((title) => pageTitleInForegroundTitle(visit.pageTitle, title))) {
         const observedEndMs = visit.visitTime + Math.max(0, visit.durationSec) * 1000
         creditIntervals = freeIntervals
@@ -2270,14 +2271,25 @@ function normalizedTitleToken(value: string | null | undefined): string {
   return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
+// The shorter side of a title containment test must carry at least this much
+// normalized text before it can vouch. A bare brand word ("YouTube", 7 chars)
+// is a substring of any work title that mentions the service — a foreground
+// "youtube itinerary video notes" must not vouch for an idle YouTube tab.
+const TITLE_MATCH_MIN_CONTAINED_CHARS = 10
+
 // True when a visited page's title shows up in the session's foreground window
 // title (or vice versa) — the browser was demonstrably frontmost ON that page,
 // not merely keeping its tab alive behind another one. Both sides must carry
-// real text; a 3-character token would match half the web.
+// real text, and the containment test needs a meaningful amount of it: the
+// contained side must be either ≥10 normalized chars or exactly equal to the
+// other, so a brand word alone can never vouch for a background tab.
 function pageTitleInForegroundTitle(pageTitle: string | null, windowTitle: string | null): boolean {
   const page = normalizedTitleToken(pageTitle)
   const foreground = normalizedTitleToken(windowTitle)
   if (page.length < 4 || foreground.length < 4) return false
+  if (page === foreground) return true
+  const contained = page.length <= foreground.length ? page : foreground
+  if (contained.length < TITLE_MATCH_MIN_CONTAINED_CHARS) return false
   return foreground.includes(page) || page.includes(foreground)
 }
 
@@ -2321,12 +2333,15 @@ function resolveSessionKindRaw(session: AppSession, credits: ReconciledPageVisit
   }
   const budgetSeconds = Math.max(1, session.durationSeconds)
   const domains = [...byDomain.entries()]
-    // Media ambience: an entertainment domain is an activity only when the
-    // browser was demonstrably foregrounded on it — its page title reached the
-    // foreground title stream, or it holds the majority of the session's
-    // clamped budget. Anything less is a background tab and casts no vote.
+    // Media ambience: a leisure-sink domain (entertainment AND social_feed —
+    // every domain-policy category maps to leisure in kindForDomain) is an
+    // activity only when the browser was demonstrably foregrounded on it —
+    // its page title reached the foreground title stream, or it holds the
+    // majority of the session's clamped budget. Anything less is a background
+    // tab and casts no vote: an idle x.com tab must not flip an unfocused
+    // block to leisure any more than an idle Netflix tab does.
     .filter(([domain, info]) =>
-      policyForHost(domain) !== 'entertainment'
+      policyForHost(domain) === null
       || info.titleMatched
       || info.seconds > budgetSeconds / 2)
     .sort((left, right) => right[1].seconds - left[1].seconds)
@@ -4301,12 +4316,13 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
   const bridged = bridgeSameWorkCandidates(candidates, db, context)
   const reconciled = reconcileBoundaries(bridged, db, context, corrections)
   const floored = enforceUserCuts(enforceMinimumBlockFloor(reconciled, db, context), corrections.cuts)
-  // The evidence seam runs LAST: whatever a merge pass, stored correction, or
-  // sliver fold produced, no block leaves here spanning a 30-minute unobserved
-  // hole (timeline.md "Segmentation"). The one exception is a span the person
-  // explicitly fused (DEV-233): their merge outranks the seam.
-  return splitCandidatesAtEvidenceSeams(floored, db, corrections.mergedSpans)
-    .map((candidate) => buildBlockFromCandidate(candidate, db, context))
+  // The evidence seam runs after the floor: whatever a merge pass, stored
+  // correction, or sliver fold produced, no block leaves here spanning a
+  // 30-minute unobserved hole (timeline.md "Segmentation"). The one exception
+  // is a span the person explicitly fused (DEV-233): their merge outranks the
+  // seam.
+  const seamed = splitCandidatesAtEvidenceSeams(floored, db, corrections.mergedSpans)
+  return seamed.map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
 // Build the timeline blocks for a set of sessions through the one canonical

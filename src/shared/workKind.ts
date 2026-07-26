@@ -372,10 +372,12 @@ function resolveBlockKind(block: BlockKindInput): WorkKind {
   for (const site of block.websites) {
     const seconds = Math.max(0, site.totalSeconds) * scale
     if (seconds <= 0) continue
-    // Media ambience: an entertainment domain votes only when it held the
-    // majority of the browser's clamped budget — anything less is a background
-    // tab (a paused video, an idle Netflix tab), excluded from kind voting.
-    if (policyForHost(site.domain) === 'entertainment' && !(seconds > budgetSeconds / 2)) continue
+    // Media ambience: a leisure-sink domain (entertainment AND social_feed —
+    // both domain-policy categories map to leisure in kindForDomain) votes
+    // only when it held the majority of the browser's clamped budget —
+    // anything less is a background tab (a paused video, an idle Netflix or
+    // x.com tab), excluded from kind voting.
+    if (policyForHost(site.domain) !== null && !(seconds > budgetSeconds / 2)) continue
     const domainKind = kindForDomain(site.domain)
     weighted.push({ kind: domainKind ?? 'personal', seconds })
   }

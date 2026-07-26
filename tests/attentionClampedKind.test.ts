@@ -123,6 +123,24 @@ test('fallback kind: an entertainment domain without the majority of the clamped
   assert.equal(ambience, 'work')
 })
 
+test('fallback kind: an idle social-feed tab is ambience too, not only entertainment', () => {
+  // The ambience rule must cover EVERY leisure-mapping domain policy. x.com is
+  // 'social_feed', not 'entertainment' — before the fix its background credit
+  // always voted, so 390s of idle feed outvoted 300s of real work.
+  const kind = effectiveBlockKind({
+    dominantCategory: 'browsing',
+    topApps: [
+      { category: 'productivity', totalSeconds: 300 },
+      { category: 'browsing', totalSeconds: 800, isBrowser: true },
+    ],
+    websites: [
+      { domain: 'x.com', totalSeconds: 390 },
+      { domain: 'trainline.com', totalSeconds: 100 },
+    ],
+  })
+  assert.equal(kind, 'work')
+})
+
 test('fallback kind: a real watching block stays leisure — majority of the budget is activity', () => {
   const kind = effectiveBlockKind({
     dominantCategory: 'browsing',
@@ -237,6 +255,112 @@ test('segmentation: an idle Netflix tab cannot flip a CI-migration block to leis
     )
     assert.ok(covering, 'the browser stretch belongs to a block')
     assert.equal(effectiveBlockKind(covering!), 'work', 'the CI-migration stretch resolves work')
+  } finally {
+    db.close()
+  }
+})
+
+// social_feed domains map to leisure exactly like entertainment ones, but the
+// ambience filter only covered policyForHost === 'entertainment' — so ANY
+// background x.com credit flipped an unfocused browsing session to leisure
+// via resolveKind's leisure-anywhere rule.
+test('segmentation: a background x.com tab cannot flip a trainline booking session to leisure', () => {
+  const db = createProductionTestDatabase()
+  try {
+    insertSession(db, {
+      bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'browsing',
+      start: localMs(10, 0), end: localMs(10, 20), title: 'Trainline: book cheap train tickets',
+    })
+    // The real active tab: booking a train, observed nearly the whole window.
+    insertVisit(db, {
+      domain: 'trainline.com', title: 'Trainline: book cheap train tickets',
+      url: 'https://www.trainline.com/book',
+      visitMs: localMs(10, 0, 10), durationSec: 1150,
+      browserBundleId: 'com.google.Chrome', source: 'active_browser_context',
+    })
+    // The background x.com tab: raw history seconds exceed the browser's
+    // entire foreground time.
+    insertVisit(db, {
+      domain: 'x.com', title: 'Home / X',
+      url: 'https://x.com/home',
+      visitMs: localMs(10, 0), durationSec: 1900,
+      browserBundleId: 'com.google.Chrome', source: 'history',
+    })
+
+    const payload = getTimelineDayPayload(db, TEST_DATE, null, { materialize: false })
+    const covering = payload.blocks.find(
+      (block) => block.startTime <= localMs(10, 5) && block.endTime >= localMs(10, 15),
+    )
+    assert.ok(covering, 'the booking stretch belongs to a block')
+    assert.equal(effectiveBlockKind(covering!), 'personal',
+      'the trainline session stays personal — the x.com tab was never in the foreground')
+  } finally {
+    db.close()
+  }
+})
+
+// A brand word in the foreground title must not vouch for a background tab:
+// "youtube itinerary video notes" (a Notion doc ABOUT YouTube) contains the
+// page title "YouTube" as a substring, which the old containment test read as
+// the browser being foregrounded on YouTube.
+test('segmentation: a work title mentioning "youtube" does not vouch for an idle YouTube tab', () => {
+  const db = createProductionTestDatabase()
+  try {
+    insertSession(db, {
+      bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'browsing',
+      start: localMs(14, 0), end: localMs(14, 20), title: 'YouTube itinerary video notes',
+    })
+    // The real active tab starts five minutes in, so the idle YouTube tab's
+    // history fill earns real (but minority) credit for 14:00–14:05.
+    insertVisit(db, {
+      domain: 'notion.so', title: 'YouTube itinerary video notes',
+      url: 'https://www.notion.so/daylens/youtube-itinerary-video-notes',
+      visitMs: localMs(14, 5), durationSec: 890,
+      browserBundleId: 'com.google.Chrome', source: 'active_browser_context',
+    })
+    // The idle YouTube tab: bare brand page title, big raw history seconds.
+    insertVisit(db, {
+      domain: 'youtube.com', title: 'YouTube',
+      url: 'https://www.youtube.com/',
+      visitMs: localMs(14, 0), durationSec: 1900,
+      browserBundleId: 'com.google.Chrome', source: 'history',
+    })
+
+    const payload = getTimelineDayPayload(db, TEST_DATE, null, { materialize: false })
+    const covering = payload.blocks.find(
+      (block) => block.startTime <= localMs(14, 5) && block.endTime >= localMs(14, 15),
+    )
+    assert.ok(covering, 'the notes stretch belongs to a block')
+    assert.equal(effectiveBlockKind(covering!), 'work',
+      'the Notion work session stays work — a brand word in the title is not a foregrounded YouTube tab')
+  } finally {
+    db.close()
+  }
+})
+
+// The other direction must keep working: a browser genuinely foregrounded on
+// a real YouTube video — the full video title in the window title — is
+// watching, and the title match still vouches for it.
+test('segmentation: a genuinely foregrounded YouTube session still counts leisure', () => {
+  const db = createProductionTestDatabase()
+  try {
+    insertSession(db, {
+      bundleId: 'com.apple.Safari', appName: 'Safari', category: 'browsing',
+      start: localMs(21, 0), end: localMs(22, 0), title: 'Deep Focus Coding Music - YouTube',
+    })
+    insertVisit(db, {
+      domain: 'youtube.com', title: 'Deep Focus Coding Music - YouTube',
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      visitMs: localMs(21, 1), durationSec: 55 * 60,
+      browserBundleId: 'com.apple.Safari', source: 'history',
+    })
+
+    const payload = getTimelineDayPayload(db, TEST_DATE, null, { materialize: false })
+    const watching = payload.blocks.find(
+      (block) => block.startTime <= localMs(21, 30) && block.endTime >= localMs(21, 30),
+    )
+    assert.ok(watching, 'the evening produced a block')
+    assert.equal(effectiveBlockKind(watching!), 'leisure', 'real watching stays leisure')
   } finally {
     db.close()
   }
