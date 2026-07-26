@@ -73,8 +73,18 @@ export async function judgeAnswer(
   traceSummary?: string,
   followUps: string[] = [],
 ): Promise<JudgeVerdict> {
+  // The weekday↔date mapping the subject model also received: without it the
+  // judge computes weekdays in its head and has graded a correct "Friday the
+  // 24th" as a date error.
+  const recentDates = Array.from({ length: 8 }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - index)
+    return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  }).join('; ')
   const userPrompt = [
     `Question: ${scenario.question}`,
+    '',
+    `Recent dates with their true weekdays (authoritative; never compute weekdays yourself): ${recentDates}`,
     '',
     'Gold answer shape (PRIMARY bar — what a colleague who watched the user work would say):',
     scenario.gold_answer_shape?.trim() || '(no gold shape provided — grade against the rubric only)',

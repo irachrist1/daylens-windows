@@ -12,6 +12,8 @@ interface TimeChunkRow {
   startTime: string
   endTime: string
   durationMinutes: number
+  /** The covering timeline block's label: what the time WAS, not just the app. */
+  blockLabel?: string | null
   activity: TimeChunkActivity[]
   pages: TimeChunkPage[]
   gap: { label: string } | null
@@ -45,6 +47,12 @@ function rowDescription(chunk: TimeChunkRow): string {
   if (chunk.activity.length === 0) return chunk.gap?.label ?? 'no activity captured'
   const activity: string[] = []
   const known = new Set<string>()
+  // Lead with the covering block's label when it names real work: the row
+  // then says what the time WAS, with the apps as supporting detail.
+  if (chunk.blockLabel?.trim()) {
+    activity.push(chunk.blockLabel.trim())
+    known.add(chunk.blockLabel.trim().toLowerCase())
+  }
   for (const item of chunk.activity) {
     const title = userVisibleWindowTitle(item.windowTitle)
     // Colon, never an em dash: the voice contract bans em dashes in every

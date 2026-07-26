@@ -11,6 +11,9 @@ import { executeTool, execSearchSessionsWithMeaning } from '../services/aiTools'
 import { getLongestFocusStretch } from '../services/wrappedTools'
 import { getTimelineDayProjection } from '../core/query/projections'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { blockActiveSeconds } from '@shared/blockDuration'
+import { effectiveBlockKind } from '@shared/workKind'
+import { formatClock as fmtClockMs } from '../../renderer/lib/dayWrapScenes'
 import { getMomentEvidence } from '../lib/momentEvidence'
 import { getWebsiteVisitsForRange } from '../db/queries'
 import {
@@ -266,11 +269,28 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     get_longest_focus_stretch: tool({
-      description: 'The single longest work stretch of one day: exact start and end clocks, exact duration, the app that carried it, and what the work was when a clean name exists. Use for "longest focus block", "longest stretch", "deepest run" questions. Returns an explicit miss when no work stretch cleared 20 minutes.',
+      description: 'The longest stretches of one day, with exact bounds: longestWorkStretch (the longest work block of 20m+, with start/end clocks, exact duration, carrying app, and the work\'s name) and longestBlock (the longest block of ANY kind, so a leisure-dominated day still gets an honest answer). Use for "longest focus block", "longest stretch", "deepest run" questions. Never carve sub-ranges yourself; these bounds are the real ones.',
       inputSchema: z.object({ date: DATE }),
       execute: async ({ date }) => {
         const stretch = getLongestFocusStretch({ date }, db)
-        return guarded(stretch ?? { found: false, reason: 'No work stretch of 20 minutes or more on that day.' })
+        const blocks = getTimelineDayProjection(db, date, null, { materialize: false, analysis: false }).blocks
+        const longest = [...blocks].sort((left, right) =>
+          blockActiveSeconds(right) - blockActiveSeconds(left))[0]
+        const longestBlock = longest
+          ? {
+              label: userVisibleBlockLabel(longest),
+              kind: effectiveBlockKind(longest),
+              startClock: fmtClockMs(longest.startTime),
+              endClock: fmtClockMs(longest.endTime),
+              durationSeconds: blockActiveSeconds(longest),
+            }
+          : null
+        return guarded({
+          found: Boolean(stretch || longestBlock),
+          date,
+          longestWorkStretch: stretch,
+          longestBlock,
+        })
       },
     }),
 
