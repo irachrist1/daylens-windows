@@ -1,40 +1,58 @@
-# Machine-reconstructed: no journal entry. Ground truth is the daylens git
-# history plus the calendar signals stored in the snapshot (personal planning
-# blocks, not attended meetings).
+# Machine-reconstructed: no journal entry. Ground truth model: the day is what
+# the HUMAN did at the keyboard. Git shows 38 daylens commits, but the
+# foreground and browser history show a rest day — X/YouTube/Netflix — with
+# short agent check-ins (Cursor Agents, Devin briefs, Warp resume sessions)
+# and an evening Andersen social-content block. The commits are proof the
+# project advanced via agent lanes, not that he was coding.
 date: "2026-07-12"
 confidence: machine
 sources:
-  - "git: daylens (38 commits, 08:02-17:58)"
-  - "external_signals calendar: personal planning blocks (AI/ML learning 9am, Writing 12pm, Run 6:30pm, Reading 6:45pm, Wind down 10pm)"
-  - "app_sessions: real coverage only 14:00-23:26; one runaway 858-min session logged at 00:00"
+  - "git: daylens (38 commits, 08:02-17:58 — W1-A/B/C/D lane merges, billing hardening, chat agent loop ADR 0003)"
+  - "browser history 08:03-10:53: X, YouTube, then long Netflix stretches (08:59 for 32min, 09:57/10:10 for 13min each) exactly across the 08:02-09:50 commit bursts"
+  - "foreground 15:41-16:27: Cursor Agents dashboard + Devin writing daylens-ai-chat briefs (~25 min); Warp '✳ Resume Daylens AI agent chat rebuild' at 18:11, 18:41, 22:05"
+  - "foreground evening: Notes 19:27-19:48, Dia 'Andersen Rwanda Post Review' 19:48 (~19 min), ChatGPT same topic 20:03, Canva LinkedIn carousel 21:52"
+  - "domains: netflix.com 2.9h, youtube.com 2.6h, x.com 54min; github.com 10min (profile README edit 13:46)"
 summary: >
-  A Daylens hardening day proven by 38 commits from 08:02 to 17:58. The
-  early morning merged Wave 1: absence guards, the provider circuit breaker
-  with telemetry retention, real chat cancel, and the whole-deck wrapped
-  judge (08:02-08:47). A timeline-correction hardening burst followed
-  (09:36-09:50: absence hidden by inflated session ends, corrections as
-  interval facts). Commits pause 09:50-13:47 — the calendar had AI/ML
-  learning and Writing blocks planned there, unverifiable — then billing
-  hardening lands 13:47-15:06 (atomic payment state, spend reservation,
-  Polar ordering), and the day closes by rebuilding chat as one agent loop
-  with a grounded tool surface (ADR 0003) at 17:58.
+  A rest day at the keyboard while agents rebuilt Daylens. The screen from
+  morning to late evening is mostly X, YouTube and Netflix — including long
+  Netflix stretches exactly across the morning windows when the Wave-1 lane
+  merges (08:02-08:47) and the timeline-correction burst (09:36-09:50)
+  landed, so those commits were agent lanes finishing, not him coding. His
+  visible Daylens touchpoints are short and supervisory: editing his GitHub
+  profile README at 13:46, a ~25-minute mid-afternoon block on the Cursor
+  Agents dashboard and in Devin writing daylens-ai-chat briefs (15:41-16:27),
+  and Warp "Resume Daylens AI agent chat rebuild" check-ins at 18:11, 18:41
+  and 22:05 — around which the billing hardening (13:47-15:09) and the chat
+  agent-loop rebuild (17:58, ADR 0003) landed. The one hands-on work block is
+  Andersen social content in the evening: reviewing an Andersen Rwanda post
+  (~19:48-20:10, Dia + ChatGPT) and a "How Businesses are using AI in 2026"
+  LinkedIn carousel in Canva around 21:52, plus Notes, WhatsApp and a student
+  account-balance email.
 primaryWork:
-  - name: Daylens development (Wave 1 merges, timeline corrections, billing hardening, chat agent loop)
+  - name: Driving agents on Daylens (Wave-1 merges, billing hardening, chat agent loop)
     aliases: [daylens]
+secondary:
+  - name: Andersen Rwanda LinkedIn post + AI carousel (review, ChatGPT, Canva)
+    aliases: [andersen, carousel, linkedin post]
 bannedAsWork:
   - "cursor agents"
   - "new chat"
 shape:
-  - { from: "08:00", until: "09:50", desc: "Wave 1 merges (absence guard, circuit breaker, real cancel, deck judge) then timeline-correction hardening" }
-  - { from: "13:47", until: "15:10", desc: "billing hardening: atomic payment/spend state, key provisioning, Postgres survival, CI fix" }
-  - { from: "16:30", until: "18:00", desc: "AI fixes and the chat rebuild as one agent loop (ADR 0003)" }
+  - { from: "08:00", until: "13:40", desc: "leisure browsing — X, YouTube, long Netflix stretches — while agent lanes merge Wave 1 (08:02-08:47), land the timeline-correction burst (09:36-09:50) and pause until 13:47" }
+  - { from: "13:46", until: "14:00", desc: "GitHub profile README edit" }
+  - { from: "14:00", until: "15:40", desc: "YouTube/X viewing; billing-hardening commits land 13:47-15:09 (agent lanes)" }
+  - { from: "15:41", until: "16:30", desc: "agent supervision: Cursor Agents dashboard, Devin daylens-ai-chat briefs (~25 min)" }
+  - { from: "16:30", until: "19:25", desc: "back to YouTube/Netflix/X with brief Warp agent check-ins (18:11, 18:41); chat agent-loop rebuild commit lands 17:58" }
+  - { from: "19:27", until: "22:10", desc: "evening Andersen content: Notes, Andersen Rwanda post review (Dia + ChatGPT), Canva AI-in-2026 LinkedIn carousel; one more Warp agent check-in 22:05" }
+  - { from: "22:10", desc: "Netflix, X, ChatGPT wind-down" }
 notes: >
-  Machine-reconstructed from git plus stored calendar signals; no journal
-  exists for this day. Capture is broken before 14:00: the only pre-14:00
-  row is a single runaway 858-minute "Home / X" session logged at 00:00,
-  which alone inflates the day's tracked total by ~14 hours — yet git
-  proves real work from 08:02. Do not punish missing morning evidence, and
-  do not let that phantom session read as an all-night X binge. The
-  calendar entries are personal planning blocks (including a 6:30pm run),
-  not verified attendance; the commit lull 09:50-13:47 is consistent with
-  the planned learning/writing blocks but unproven.
+  Machine-reconstructed; no journal exists for this day. Capture is broken
+  before 14:00 — the only pre-14:00 app session is a runaway 858-minute
+  "Home / X" row logged at 00:00 that alone inflates tracked time by ~14
+  hours; browser history is the reliable morning source, and it shows
+  leisure, not an all-night X binge and not coding. Do not narrate the 38
+  commits as hands-on development: the human-visible Daylens work is agent
+  supervision measured in minutes (Devin briefs, Cursor Agents, Warp
+  resumes). The snapshot's calendar entries (AI/ML learning 9am, Writing
+  12pm, Run 6:30pm) are personal planning blocks contradicted by the
+  observed leisure browsing — not attended blocks.

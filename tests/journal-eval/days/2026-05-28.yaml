@@ -1,43 +1,51 @@
-# Machine-reconstructed: no journal entry. Ground truth is the daylens git
-# history — 73 commits in one day, part-human, part parallel coding agents
-# (the claim(...) commits).
+# Machine-reconstructed: no journal entry. Ground truth model: the day is what
+# the HUMAN did at the keyboard — here, orchestrating a fleet of coding agents
+# (Codex, Cursor, Antigravity, Kiro, Factory, Warp, Claude) on Daylens's v1
+# closeout. Raw commit count (73) badly overstates hands-on coding: many are
+# claim(...) markers and features authored by "Claude <noreply@anthropic.com>"
+# or the spcsgaba agent identity.
 date: "2026-05-28"
 confidence: machine
 sources:
-  - "git: daylens (73 commits, 08:00-22:58, incl. release v1.0.37 at 18:24)"
-  - "app_sessions coverage 00:00-01:01 and 07:20-23:59, hole 19:00-20:20"
+  - "git: daylens (73 commits, 08:00-21:41, incl. release v1.0.37 at 18:24; authors mix Christian Tonny, irachrist1/spcsgaba, and Claude <noreply@anthropic.com>)"
+  - "foreground: rotation across Codex 1.6h, Cursor 1.1h, Antigravity 47min, Kiro, factory-desktop, Warp, Ghostty, Gemini + Electron (the Daylens app itself) 1.6h"
+  - "domains: devpost.com/cbc-alu-spring-hackathon 11:32-12:47, meet.google.com 'Introduction to Machine Learning - C1' 11:06, youtube 40min + x.com 26min evening"
 summary: >
-  A single-project v1-closeout marathon on Daylens: 73 commits between 08:00
-  and 22:58. The morning shipped the CBC Spring 2026 hackathon landing page
-  and Chunk 2 projections (11:28-11:30); the afternoon was a v1 polish and
-  work-memory push (Week review, memory batches F1-F7, timeline label
-  gating) with a burst of parallel agent claim-commits between 16:48 and
-  18:13; release v1.0.37 went out at 18:24. The evening moved to the
-  architecture fix plan: Chunk 3 single-source queries (19:08), AI loading
-  fixes, block coalescing and memory backfill (21:18-21:41), and the macOS
-  Swift capture helper as the Chunk 1 foundation (22:57).
+  A Daylens v1-closeout day run as an agent fleet: the foreground rotates all
+  day through Codex, Cursor, Antigravity, Kiro, Factory, Warp and the Daylens
+  app itself, while 73 commits land — the morning baseline at 08:00, the CBC
+  Spring 2026 hackathon landing page at 11:28-11:30, an afternoon v1-polish
+  and work-memory push (batches F1-F7) whose 16:48-17:02 burst is literally
+  authored by parallel agents (claim(...) markers, Claude-authored features),
+  and release v1.0.37 at 18:24. Around the hackathon commits he briefly
+  joined an ALU Intro to Machine Learning Meet at 11:06 and set the hackathon
+  up on Devpost (11:32-12:47). After a foreground hole 18:50-20:55, the
+  evening is mostly YouTube and X with Daylens app checks and the daylens-v1
+  GitHub repo open, while a last agent wave lands R2-R6 (block coalescing,
+  32k evidence packing, memory backfill, workspace-key routing) at
+  21:18-21:41.
 primaryWork:
-  - name: Daylens development (v1 closeout, work memory, release v1.0.37)
+  - name: Daylens development (v1 closeout, work memory, release v1.0.37 — agent-fleet driven)
     aliases: [daylens]
 secondary:
-  - name: CBC Spring 2026 hackathon landing page
-    aliases: [hackathon, cbc]
+  - name: CBC Spring 2026 hackathon (landing page + Devpost setup)
+    aliases: [hackathon, cbc, devpost]
 bannedAsWork:
   - "cursor agents"
   - "new chat"
 shape:
-  - { from: "08:00", until: "12:00", desc: "baseline commit, hackathon landing page, Chunk 2 projections and router hardening" }
-  - { from: "15:00", until: "18:30", desc: "v1 polish + work memory batches (F1-F7), parallel agent claim-commit burst 16:48-18:13, release v1.0.37 at 18:24" }
-  - { from: "20:20", desc: "architecture chunks: Chunk 3 AI query fixes, block coalescing, memory backfill, Swift capture helper, through 22:58" }
-# the following night, so only the expressible tail is declared.
+  - { from: "07:35", until: "09:30", desc: "Ghostty/terminal morning around the 08:00 v1.0.35 baseline commit" }
+  - { from: "10:15", until: "12:50", desc: "Codex/Dia mix: hackathon landing ships 11:28-11:30, ALU ML class Meet touched 11:06, hackathon Devpost setup" }
+  - { from: "13:00", until: "18:45", desc: "agent-fleet rotation (Codex, Cursor, Antigravity, Kiro, Factory, Warp) on v1 polish + work-memory batches; agent claim-commit burst 16:48-17:02; release v1.0.37 at 18:24" }
+  - { from: "20:55", desc: "evening: YouTube/X, Daylens app checks, daylens-v1 repo on GitHub; final agent wave R2-R6 lands 21:18-21:41" }
 gaps:
   - { from: "01:05", to: "07:15", reason: "overnight hole; zero captured sessions between 01:01 and 07:20" }
 notes: >
-  Machine-reconstructed from git only; no journal exists for this day. Many
-  commits between 16:48 and 18:13 are claim(...) markers authored by
-  parallel coding agents, so raw commit count overstates hands-on-keyboard
-  intensity — the human arc is the morning hackathon/projections work, the
-  afternoon memory/release push, and the evening architecture chunks.
-  Capture has a hole from ~19:00 to 20:20 even though a commit lands at
-  19:08 (possibly agent-pushed); treat that hole as a capture uncertainty,
-  not a verified off-computer gap.
+  Machine-reconstructed; no journal exists for this day. Treat the commit
+  stream as proof the project advanced, not as hands-on-keyboard minutes:
+  commits 16:48-17:02 are authored by Claude <noreply@anthropic.com> and the
+  spcsgaba agent identity, and the 21:18-21:41 R-series lands while the
+  foreground shows YouTube/X — agents finishing their lanes. The human's day
+  is the orchestration itself plus the hackathon Devpost setup. Foreground
+  has a hole ~18:50-20:55; treat it as capture uncertainty, not a verified
+  off-computer gap.
