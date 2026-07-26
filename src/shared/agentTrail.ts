@@ -33,6 +33,9 @@ export function statusForTool(tool: string, input: unknown): string {
     case 'list_page_visits': return 'Going through your page visits'
     case 'get_app_usage': return `Checking time in ${params.appName ?? 'that app'}`
     case 'get_week_summary': return 'Reading the week'
+    case 'get_calendar_events': return `Checking the calendar for ${params.date ?? 'the day'}`
+    case 'get_meeting_notes': return 'Reading meeting notes'
+    case 'get_git_activity': return `Reading git activity for ${params.date ?? 'the day'}`
     case 'discover_repositories': return 'Finding active repositories'
     case 'search_files': return `Searching files for "${params.query ?? ''}"`
     case 'git': return 'Reading git history'

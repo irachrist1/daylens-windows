@@ -20,6 +20,8 @@ import {
   listFocusEventTimesInRange,
   listMachineStateEventsBefore,
 } from '../db/focusEventRepository'
+import { getCalendarEvents, getGitActivity } from '../services/wrappedTools'
+import { shiftLocalDateString } from '../lib/localDate'
 import { sanitizeToolResult } from '@shared/aiSanitize'
 import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
 import { trackingControlsStateFromSettings } from '@shared/trackingControls'
@@ -211,6 +213,79 @@ function timeChunks(
   return { found: true, date, startTime, endTime, incrementMinutes, chunks }
 }
 
+const MAX_CALENDAR_RANGE_DAYS = 31
+
+// ─── Granola meeting notes (DEV-241) ─────────────────────────────────────────
+// The chat reads the SAME minimized day layer the wrap enrichment reads: the
+// notesSignal each Granola connector record carries (title, date, participant
+// first names, capped note lines). Never the raw cache, never transcripts.
+
+interface MeetingNote {
+  date: string
+  title: string
+  scheduledClock: string | null
+  participants: string[]
+  noteLines: string[]
+}
+
+function granolaIsConnected(db: Database.Database): boolean {
+  try {
+    const row = db.prepare(
+      `SELECT 1 FROM connector_connections WHERE connector_id = 'granola' AND status != 'disconnected'`,
+    ).get()
+    return row != null
+  } catch {
+    return false
+  }
+}
+
+function readGranolaMeetingNotes(
+  db: Database.Database,
+  filters: { date?: string; query?: string; limit: number },
+): MeetingNote[] {
+  let rows: Array<{ envelope_json: string }> = []
+  try {
+    rows = db.prepare(`
+      SELECT envelope_json FROM connector_records
+      WHERE connector_id = 'granola' AND kind = 'meeting_record' AND tombstoned_at IS NULL
+      ORDER BY effective_at DESC, updated_at DESC
+    `).all() as Array<{ envelope_json: string }>
+  } catch {
+    return []
+  }
+  const needle = filters.query?.trim().toLowerCase() || null
+  const notes: MeetingNote[] = []
+  for (const row of rows) {
+    let signal: Record<string, unknown> | null = null
+    try {
+      const envelope = JSON.parse(row.envelope_json) as { notesSignal?: Record<string, unknown> }
+      signal = envelope.notesSignal ?? null
+    } catch {
+      continue
+    }
+    if (!signal || typeof signal.date !== 'string' || typeof signal.title !== 'string') continue
+    const note: MeetingNote = {
+      date: signal.date,
+      title: signal.title,
+      scheduledClock: typeof signal.scheduledClock === 'string' ? signal.scheduledClock : null,
+      participants: Array.isArray(signal.participants)
+        ? signal.participants.filter((name): name is string => typeof name === 'string')
+        : [],
+      noteLines: Array.isArray(signal.actionItems)
+        ? signal.actionItems.filter((line): line is string => typeof line === 'string')
+        : [],
+    }
+    if (filters.date && note.date !== filters.date) continue
+    if (needle) {
+      const haystack = [note.title, ...note.participants, ...note.noteLines].join('\n').toLowerCase()
+      if (!haystack.includes(needle)) continue
+    }
+    notes.push(note)
+    if (notes.length >= filters.limit) break
+  }
+  return notes
+}
+
 interface AggregatedPage {
   pageTitle: string | null
   domain: string
@@ -346,6 +421,78 @@ export function buildDaylensTools(db: Database.Database) {
       description: 'The client/project roster the user has set up, optionally scoped to a date range.',
       inputSchema: z.object({ startDate: DATE.optional(), endDate: DATE.optional() }),
       execute: async (params) => guarded(executeTool('listClients', params, db)),
+    }),
+
+    get_calendar_events: tool({
+      description: 'Scheduled calendar events for a date or a short date range: titles, start clocks, durations, and attendee counts, plus a meetingReport that says which meetings have supporting captured evidence (matched), which were schedule-only (calendar_only), and which were observed without a calendar entry (captured_only). Works for ANY date, including future ones: "what is on my calendar tomorrow" resolves to tomorrow\'s date and is a legal query. Use for every calendar, schedule, or meeting question. A scheduled event is a plan, not proof the user attended; only the meetingReport\'s matched bucket carries attendance evidence.',
+      inputSchema: z.object({
+        date: DATE,
+        endDate: DATE.optional().describe('Inclusive range end; omit for a single day'),
+      }),
+      execute: async ({ date, endDate }) => {
+        const last = endDate ?? date
+        if (last < date) return { found: false, reason: 'endDate is before date.' }
+        const spanDays = Math.round((dayStartMs(last) - dayStartMs(date)) / DAY_MS) + 1
+        if (!Number.isFinite(spanDays) || spanDays > MAX_CALENDAR_RANGE_DAYS) {
+          return { found: false, reason: `Range too wide. Ask for at most ${MAX_CALENDAR_RANGE_DAYS} days at a time.` }
+        }
+        const days: Array<Record<string, unknown>> = []
+        for (let day = date; day <= last; day = shiftLocalDateString(day, 1)) {
+          // The same data function the Wrapped/MCP layer serves: stored signal
+          // first, one on-demand local-calendar collection when nothing is
+          // stored yet (how a future date gets its events).
+          const result = await getCalendarEvents({ date: day }, db)
+          if (result) days.push({ date: day, ...result })
+        }
+        if (days.length === 0) {
+          const span = date === last ? date : `${date} to ${last}`
+          return {
+            found: false,
+            reason: `No calendar events stored or discoverable for ${span}. The calendar source reads what is synced into this machine's local calendar; an empty result can also mean no readable calendar tool is installed.`,
+          }
+        }
+        return guarded({ found: true, days })
+      },
+    }),
+
+    get_meeting_notes: tool({
+      description: 'Granola meeting notes ingested from the user\'s Granola app: meeting title, date, scheduled clock, participant first names, and the user\'s own note lines. Filter by date and/or a search query over titles, participants, and note text; with no filters it returns the most recent notes. Use for "what did we discuss or decide in that meeting", "what are my notes from Monday", and any Granola question. Notes are minimized excerpts, never transcripts.',
+      inputSchema: z.object({
+        date: DATE.optional(),
+        query: z.string().min(1).optional().describe('Case-insensitive match over title, participants, and note lines'),
+        limit: z.number().int().min(1).max(30).optional().describe('Max notes returned, default 10, newest first'),
+      }),
+      execute: async ({ date, query, limit }) => {
+        const notes = readGranolaMeetingNotes(db, { date, query, limit: limit ?? 10 })
+        if (notes.length === 0) {
+          if (!granolaIsConnected(db)) {
+            return {
+              found: false,
+              reason: 'Granola is not connected, so no meeting notes are available. The user can connect it in Settings under Connections.',
+            }
+          }
+          const filters = [date ? `date ${date}` : null, query ? `query "${query}"` : null].filter(Boolean).join(' and ')
+          return {
+            found: false,
+            reason: filters
+              ? `Granola is connected but no meeting notes match ${filters}.`
+              : 'Granola is connected but no meeting notes have been ingested yet.',
+          }
+        }
+        return guarded({ found: true, noteCount: notes.length, notes })
+      },
+    }),
+
+    get_git_activity: tool({
+      description: 'The day\'s ingested git signal: repositories with commit counts and messages, plus PR activity from the gh CLI when it is available. Use for "what did I commit or ship on <date>" before crawling repositories by hand; combine with discover_repositories when this signal misses a repository.',
+      inputSchema: z.object({ date: DATE }),
+      execute: async ({ date }) => {
+        const activity = await getGitActivity({ date }, db)
+        if (!activity) {
+          return { found: false, reason: `No git activity stored or discoverable for ${date}. Commits are read from local repositories and PRs from the gh CLI.` }
+        }
+        return guarded({ found: true, date, ...activity })
+      },
     }),
   }
 }

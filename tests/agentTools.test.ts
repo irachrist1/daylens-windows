@@ -14,6 +14,7 @@ import Database from 'better-sqlite3'
 import ExcelJS from 'exceljs'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
+import { putExternalSignal } from '../src/main/services/externalSignals.ts'
 import { buildSystemTools } from '../src/main/agent/systemTools.ts'
 import { addFileAccessGrant } from '../src/main/services/fileAccess.ts'
 import { mcpChildEnv } from '../src/main/agent/mcpTools.ts'
@@ -171,6 +172,186 @@ test('get_day_overview distinguishes locked time from unexplained capture gaps',
   // rather than claiming a tracking failure the events disprove.
   assert.ok(chunks.chunks[2].activity.length > 0, 'canonical evidence fills the 10-11 chunk')
   assert.ok(!chunks.chunks[2].gap, 'observed foreground time is not a gap')
+  db.close()
+})
+
+// ─── daylensTools: calendar / Granola / git signals (DEV-241) ───────────────
+
+function dateString(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function seedGranolaNote(
+  db: Database.Database,
+  note: { id: string; date: string; title: string; participants: string[]; noteLines: string[]; scheduledClock: string | null },
+): void {
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO connector_connections (connector_id, status, account_label, config_json, connected_at, updated_at)
+    VALUES ('granola', 'connected', 'person@example.invalid', '{}', ?, ?)
+    ON CONFLICT(connector_id) DO NOTHING
+  `).run(now, now)
+  db.prepare(`
+    INSERT INTO connector_records (
+      id, connector_id, source_record_id, kind, entity_id, date, effective_at,
+      retrieved_at, sensitivity, permission_scope, envelope_json, created_at, updated_at
+    ) VALUES (?, 'granola', ?, 'meeting_record', NULL, ?, ?, ?, 'personal', 'file:read', ?, ?, ?)
+  `).run(
+    note.id,
+    `note:${note.id}`,
+    note.date,
+    new Date(`${note.date}T12:00:00`).getTime(),
+    now,
+    JSON.stringify({
+      notesSignal: {
+        date: note.date,
+        title: note.title,
+        participants: note.participants,
+        actionItems: note.noteLines,
+        scheduledClock: note.scheduledClock,
+      },
+    }),
+    now,
+    now,
+  )
+}
+
+test('get_calendar_events answers a FUTURE date: tomorrow returns the stored events', async () => {
+  const db = setupDb()
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  const date = dateString(tomorrow)
+  putExternalSignal(db, date, 'calendar', {
+    events: [
+      { title: 'Quarterly planning', startClock: '10:00', durationMinutes: 45, attendeeCount: 4 },
+      { title: 'Design review', startClock: '2:30pm', durationMinutes: 30, attendeeCount: 2 },
+    ],
+  })
+
+  const tools = buildDaylensTools(db)
+  const result = await (tools.get_calendar_events as any).execute({ date }, {} as any)
+
+  assert.equal(result.found, true)
+  assert.equal(result.days.length, 1)
+  assert.equal(result.days[0].date, date)
+  assert.deepEqual(
+    result.days[0].events.map((event: { title: string }) => event.title),
+    ['Quarterly planning', 'Design review'],
+  )
+  // A future scheduled event has no captured evidence yet: calendar_only, never matched.
+  assert.equal(result.days[0].meetingReport.calendarOnlyCount, 2)
+  assert.equal(result.days[0].meetingReport.matchedCount, 0)
+  db.close()
+})
+
+test('get_calendar_events spans a range and returns only days with a signal', async () => {
+  const db = setupDb()
+  putExternalSignal(db, '2026-06-10', 'calendar', {
+    events: [{ title: 'Client sync', startClock: '9:00', durationMinutes: 30, attendeeCount: 3 }],
+  })
+  putExternalSignal(db, '2026-06-12', 'calendar', {
+    events: [{ title: 'Retro', startClock: '16:00', durationMinutes: 60, attendeeCount: 5 }],
+  })
+
+  const tools = buildDaylensTools(db)
+  const result = await (tools.get_calendar_events as any).execute(
+    { date: '2026-06-10', endDate: '2026-06-12' },
+    {} as any,
+  )
+
+  assert.equal(result.found, true)
+  assert.deepEqual(result.days.map((day: { date: string }) => day.date), ['2026-06-10', '2026-06-12'])
+  db.close()
+})
+
+test('get_calendar_events returns an explicit miss, never silence, for an empty date', async () => {
+  const db = setupDb()
+  const tools = buildDaylensTools(db)
+  const result = await (tools.get_calendar_events as any).execute({ date: '2020-02-03' }, {} as any)
+  assert.equal(result.found, false)
+  assert.ok(typeof result.reason === 'string' && result.reason.includes('2020-02-03'))
+
+  const badRange = await (tools.get_calendar_events as any).execute(
+    { date: '2026-01-01', endDate: '2026-12-31' },
+    {} as any,
+  )
+  assert.equal(badRange.found, false)
+  assert.ok(typeof badRange.reason === 'string' && badRange.reason.length > 0)
+  db.close()
+})
+
+test('get_meeting_notes reads a seeded Granola note by date and by query', async () => {
+  const db = setupDb()
+  seedGranolaNote(db, {
+    id: 'granola-note-1',
+    date: '2026-06-10',
+    title: 'Product sync',
+    participants: ['Ana', 'Ben'],
+    noteLines: ['Ship the beta invite list', 'Ana owns the pricing page'],
+    scheduledClock: '14:00',
+  })
+  seedGranolaNote(db, {
+    id: 'granola-note-2',
+    date: '2026-06-11',
+    title: 'Board prep',
+    participants: ['Chris'],
+    noteLines: ['Draft the metrics slide'],
+    scheduledClock: null,
+  })
+
+  const tools = buildDaylensTools(db)
+
+  const byDate = await (tools.get_meeting_notes as any).execute({ date: '2026-06-10' }, {} as any)
+  assert.equal(byDate.found, true)
+  assert.equal(byDate.notes.length, 1)
+  assert.equal(byDate.notes[0].title, 'Product sync')
+  assert.deepEqual(byDate.notes[0].participants, ['Ana', 'Ben'])
+  assert.ok(byDate.notes[0].noteLines.includes('Ship the beta invite list'), 'note contents must be readable')
+
+  const byQuery = await (tools.get_meeting_notes as any).execute({ query: 'metrics slide' }, {} as any)
+  assert.equal(byQuery.found, true)
+  assert.equal(byQuery.notes.length, 1)
+  assert.equal(byQuery.notes[0].title, 'Board prep')
+
+  const noMatch = await (tools.get_meeting_notes as any).execute({ date: '2026-06-12' }, {} as any)
+  assert.equal(noMatch.found, false)
+  assert.match(noMatch.reason, /no meeting notes match/)
+  db.close()
+})
+
+test('get_meeting_notes miss says Granola is not connected when it is not', async () => {
+  const db = setupDb()
+  const tools = buildDaylensTools(db)
+  const result = await (tools.get_meeting_notes as any).execute({}, {} as any)
+  assert.equal(result.found, false)
+  assert.match(result.reason, /not connected/)
+  db.close()
+})
+
+test('get_git_activity returns the stored signal and an explicit miss otherwise', async () => {
+  const db = setupDb()
+  putExternalSignal(db, '2026-06-10', 'git', {
+    repos: [{
+      repo: 'daylens',
+      commitCount: 2,
+      messages: ['Fix the calendar tool', 'Add meeting notes'],
+      firstCommitClock: '9:12am',
+      lastCommitClock: '4:40pm',
+    }],
+    totalCommits: 2,
+    prs: [{ title: 'Chat calendar access', state: 'open', repo: 'daylens' }],
+  })
+
+  const tools = buildDaylensTools(db)
+  const found = await (tools.get_git_activity as any).execute({ date: '2026-06-10' }, {} as any)
+  assert.equal(found.found, true)
+  assert.equal(found.totalCommits, 2)
+  assert.equal(found.repos[0].repo, 'daylens')
+  assert.equal(found.prs[0].state, 'open')
+
+  const miss = await (tools.get_git_activity as any).execute({ date: '2020-02-03' }, {} as any)
+  assert.equal(miss.found, false)
+  assert.ok(typeof miss.reason === 'string' && miss.reason.includes('2020-02-03'))
   db.close()
 })
 
