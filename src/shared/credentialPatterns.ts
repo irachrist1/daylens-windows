@@ -12,12 +12,21 @@ export interface CredentialPattern {
   exempt?: (match: string, offset: number, whole: string) => boolean
 }
 
-// A match immediately followed by a known document extension is a filename,
-// not a secret. Scoped to the generic entropy backstops only — provider-shaped
-// tokens (sk-…, ghp_…, JWTs) are never exempted.
-const DOC_EXTENSION_AFTER_MATCH = /^\.(?:md|markdown|xlsx|xls|csv|txt|docx|pdf|json|html)\b/i
+// A match that reads as a human filename slug immediately followed by a
+// document extension is a filename, not a secret. Scoped to the generic
+// entropy backstops only — provider-shaped tokens (sk-…, ghp_…, JWTs) are
+// never exempted. Deliberately NOT exempt: .json/.html (signed URLs put
+// high-entropy tokens in the path right before those), any slug without at
+// least two plain dictionary-word segments ("secrets-<token>.md"), and any
+// slug carrying a long entropy-looking segment ("prod-api-<token>.md").
+const DOC_EXTENSION_AFTER_MATCH = /^\.(?:md|markdown|xlsx|xls|csv|txt|docx|pdf)\b/i
 function isDocumentFilename(match: string, offset: number, whole: string): boolean {
-  return DOC_EXTENSION_AFTER_MATCH.test(whole.slice(offset + match.length, offset + match.length + 12))
+  if (!DOC_EXTENSION_AFTER_MATCH.test(whole.slice(offset + match.length, offset + match.length + 12))) return false
+  const segments = match.split(/[-_]/)
+  const wordSegments = segments.filter((segment) => /^[A-Za-z]{2,12}$/.test(segment))
+  if (wordSegments.length < 2) return false
+  // Any long non-word segment is entropy-shaped (hash, token), not a slug word.
+  return segments.every((segment) => segment.length < 16 || /^[A-Za-z]+$/.test(segment))
 }
 
 export const CREDENTIAL_PATTERNS: CredentialPattern[] = [

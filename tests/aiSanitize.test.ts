@@ -40,3 +40,19 @@ test('a bare high-entropy token is still redacted, filename exemption or not', (
   const withDoc = sanitizeForRender(`token ${token} is in notes.md`).text
   assert.ok(!withDoc.includes(token))
 })
+
+test('a token dressed up as a filename is still redacted', () => {
+  const token = 'q7Vb2mX9pL4dK8sT1zR6wN3yH5cJ0aFg'
+  // One word segment + one entropy segment is not a human slug.
+  const secretsFile = sanitizeForRender(`saved secrets-${token}.md for you`).text
+  assert.ok(!secretsFile.includes(token), `leaked: ${secretsFile}`)
+  // Two word segments do not launder a long entropy segment either.
+  const prodFile = sanitizeForRender(`see prod-api-${token}.md`).text
+  assert.ok(!prodFile.includes(token), `leaked: ${prodFile}`)
+  // Signed-URL shapes: high-entropy path element right before .json/.html
+  // is exactly what the backstop exists for — never exempted.
+  const signedJson = sanitizeForRender(`https://internal.example.com/${token}${token.slice(0, 8)}.json`).text
+  assert.ok(!signedJson.includes(token), `leaked: ${signedJson}`)
+  const signedHtml = sanitizeForRender(`report at cdn.example.com/${token}.html`).text
+  assert.ok(!signedHtml.includes(token), `leaked: ${signedHtml}`)
+})
