@@ -189,6 +189,56 @@ test('step labels never carry raw tool arguments such as file paths', async () =
   }
 })
 
+test('consulting get_time_chunks does not replace the answer unless increments were asked for', async () => {
+  const db = createProductionTestDatabase()
+  const makeModel = () => {
+    let call = 0
+    return new MockLanguageModelV3({
+      doStream: async () => {
+        call += 1
+        if (call === 1) {
+          return response([
+            { type: 'tool-call', toolCallId: 'call-chunks', toolName: 'get_time_chunks', input: '{"date":"2026-07-06","incrementMinutes":60}' },
+            { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage },
+          ] as never[])
+        }
+        return response([
+          { type: 'text-start', id: 'text-1' },
+          { type: 'text-delta', id: 'text-1', delta: 'The longest run was Cursor from 09:00.' },
+          { type: 'text-end', id: 'text-1' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage },
+        ] as never[])
+      },
+    })
+  }
+  try {
+    const research = await runChatAgentTurn('What was my longest focus block Monday?', [], {
+      db,
+      config: { provider: 'anthropic', apiKey: null, model: 'test' },
+      model: makeModel(),
+      askUser: async () => '',
+      artifactDir: fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-agent-chunks-')),
+      now: new Date(2026, 6, 12, 12),
+    })
+    // No increments asked for: the model's prose answer survives even though
+    // get_time_chunks was consulted.
+    assert.equal(research.text, 'The longest run was Cursor from 09:00.')
+
+    const increments = await runChatAgentTurn('Break Monday into 60-minute chunks', [], {
+      db,
+      config: { provider: 'anthropic', apiKey: null, model: 'test' },
+      model: makeModel(),
+      askUser: async () => '',
+      artifactDir: fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-agent-chunks2-')),
+      now: new Date(2026, 6, 12, 12),
+    })
+    // Increments asked for: the deterministic table takes over.
+    assert.ok(increments.text.includes('60-minute chunks'), `expected chunk table, got: ${increments.text.slice(0, 120)}`)
+  } finally {
+    db.close()
+  }
+})
+
 test('creates a requested spreadsheet when the model gathered rows but skipped the artifact call', async () => {
   const db = createProductionTestDatabase()
   const visitTime = new Date(2026, 6, 6, 9).getTime()

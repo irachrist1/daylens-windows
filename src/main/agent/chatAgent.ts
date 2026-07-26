@@ -435,7 +435,15 @@ export async function runChatAgentTurn(
     }
 
     let text = await streamTurn(messages)
-    text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
+    // The deterministic chunk table exists to guarantee complete-interval
+    // fidelity when the user ASKED for increments. Gate it on the question:
+    // a turn that merely consulted get_time_chunks while researching keeps
+    // the model's actual answer instead of having it hijacked by a table.
+    const askedForIncrements = /\b(?:chunks?|increments?|intervals?)\b/i.test(question)
+      || /\bbreak(?:\s+\S+){0,4}\s+into\b/i.test(question)
+    if (askedForIncrements) {
+      text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
+    }
     const exportFormat = /\b(?:excel|xlsx)\b/i.test(question) ? 'xlsx' : /\bcsv\b/i.test(question) ? 'csv' : null
     const exportPages = (pageVisitResult as PageVisitToolResult | null)?.pages
     if (exportFormat && artifacts.length === 0 && exportPages?.length) {
