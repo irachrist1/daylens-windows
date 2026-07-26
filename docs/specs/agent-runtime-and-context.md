@@ -73,7 +73,7 @@ The interpretation agent receives a bounded group of evidence and proposes under
 
 Its output is stored as versioned inference with source evidence, confidence, interpretation-policy version, model and runtime version, and creation time. It never overwrites the evidence that produced it. Reprocessing the same evidence may replace an automated inference but cannot override a person’s correction.
 
-In the current codebase this is the not-yet-wired `interpretationAgentEnabled` path in `analyzeDay.ts`. When wired, day analysis becomes an agent turn over the same tools as the chat agent: for each low-confidence block it may pull title context, entities, calendar, or (consented) frames before labeling. Deterministic heuristics stay as the always-available fallback and the floor for hermetic tests. This is where "the AI understands activity" and "the agent pulls context" become the same feature.
+In the current codebase this is the `interpretationAgentEnabled` path in `analyzeDay.ts` (default off), implemented in `services/interpretationAgent.ts`. With the flag on, the relabel of each low-confidence block becomes an agent turn over the same tool executors as the chat and wrap surfaces: it may pull window-title context, calendar, git activity, or entity attribution before labeling, and its labels are held to the same label-voice contract and gated by `evaluateInterpretationRun` before anything persists. With the flag off, the agent is never consulted. Deterministic heuristics stay as the always-available fallback and the floor for hermetic tests. This is where "the AI understands activity" and "the agent pulls context" become the same feature.
 
 ### Question-answering agent
 
