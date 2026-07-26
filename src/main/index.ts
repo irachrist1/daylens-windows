@@ -136,7 +136,7 @@ import { stopRangeWorker } from './services/rangeWorker'
 import { installEmbedWorkerTransport, stopEmbedWorker } from './services/embedWorkerHost'
 import { startStallWatchdog, stopStallWatchdog } from './services/stallWatchdog'
 import { setPermissionWatcherWindow, startPermissionWatcher, stopPermissionWatcher } from './services/permissionWatcher'
-import { startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
+import { ensureExternalSignalsForDate, registerExternalSignalBackfill, startExternalSignalCollection, stopExternalSignalCollection } from './services/externalSignals'
 import { registerExportHandlers } from './ipc/export.handlers'
 import { registerScreenContextHandlers } from './ipc/screenContext.handlers'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
@@ -1318,6 +1318,15 @@ app.whenReady()
     // daily. Wired here — not in startBackgroundServices — because the DB
     // needs pruning even when tracking is disabled or paused.
     if (!REAL_DAY_HARNESS && !SMOKE_TEST) startAIUsageRetentionSchedule()
+
+    // On-demand enrichment backfill for wrap / Analyze of a HISTORICAL day
+    // (the background collector only walks today and yesterday). Wired here —
+    // not in startBackgroundServices — because regenerating an old day must
+    // work even when tracking is disabled or paused; capture consent is still
+    // enforced inside collection.
+    if (!REAL_DAY_HARNESS && !SMOKE_TEST) {
+      registerExternalSignalBackfill((date) => ensureExternalSignalsForDate(getDb(), date))
+    }
 
     // The process monitor (Windows + Linux) is started in startBackgroundServices
     // once tracking is enabled; diagnostics requests reuse the same instance.
