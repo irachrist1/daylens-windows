@@ -568,6 +568,57 @@ test('a user category correction blocks the category heal (invariant 8)', async 
   }
 })
 
+// DEV-288: labels persisted under the v4 guards still said "Cursor Agents"
+// because the v4 stamp only proves the v4 rules ran. A version bump must make
+// the startup entry rescan: the stamp is keyed by version, so a v4-stamped
+// database has no v5 stamp and heals the stored shapes on open.
+test('a database stamped v4 with the offending stored labels heals on open', async () => {
+  const db = createProductionTestDatabase()
+  try {
+    markMaintenanceRun(db, labelGuardMaintenanceKey(4))
+
+    const offending: Array<[string, string]> = [
+      ['blk_bare_surface', 'Cursor Agents'],
+      ['blk_wrapped_surface', 'Working on Cursor Agents'],
+      // The two v5 shapes: the tool as the leading conjunct's object, and the
+      // trailing AI-assistant credit.
+      ['blk_tool_lead', 'Working in Codex and planning the relabel pass'],
+      ['blk_tool_credit', 'Architecting the relabel pass with Codex and Gemini'],
+    ]
+    offending.forEach(([id, label], index) => {
+      seedBlock(db, {
+        id,
+        startHour: 9 + index,
+        endHour: 10 + index,
+        label,
+        labelSource: 'ai',
+        evidence: DEV_EVIDENCE,
+        labelRows: [{ id: `lbl_${id}`, label, source: 'ai' }],
+      })
+    })
+
+    const result = await runLabelGuardRepairIfNeeded(db)
+    assert.equal(result.status, 'ran', 'the v4 stamp does not satisfy the v5 key; the repair runs')
+    assert.equal(result.healedBlocks, offending.length, 'every offending stored label healed')
+
+    for (const [id, label] of offending) {
+      const row = blockRow(db, id)
+      assert.notEqual(row.label_current, label, `${id} no longer carries "${label}"`)
+      assert.ok(
+        !storedLabelViolatesWorkNameGuards(row.label_current, { dominantCategory: 'development' }),
+        `${id} healed to a guard-passing label, got "${row.label_current}"`,
+      )
+      assert.deepEqual(labelRowSources(db, id), [], `${id}'s disqualified ai row is gone`)
+    }
+
+    assert.ok(hasMaintenanceRun(db, labelGuardMaintenanceKey()), 'the v5 stamp is written on completion')
+    const again = await runLabelGuardRepairIfNeeded(db)
+    assert.equal(again.status, 'already-ran', 'the next open under v5 is a no-op')
+  } finally {
+    db.close()
+  }
+})
+
 test('a pre-stamped database never rescans (guard-version keying)', async () => {
   const db = createProductionTestDatabase()
   markMaintenanceRun(db, labelGuardMaintenanceKey())
