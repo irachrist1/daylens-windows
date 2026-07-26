@@ -252,7 +252,14 @@ async function main(): Promise<void> {
     try {
       const result = await sendMessage(
         { message: scenario.question, threadId: null },
-        { traceScenarioId: scenario.id },
+        {
+          traceScenarioId: scenario.id,
+          // A scenario can script the answer to any askUser card the turn
+          // raises; without one the production no-answer default applies.
+          ...(scenario.ask_user_answer
+            ? { onAgentQuestion: async () => scenario.ask_user_answer as string }
+            : {}),
+        },
       )
       const assistant = result.assistantMessage
       const text = assistant.content
