@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react'
 import type { DayAnalysisVersionSummary, WrappedAskResult } from '@shared/types'
 import type { WrapDeckMeta, WrapSlideSpec } from '../../lib/wrapDeck'
 import { resolveSlideLine } from '../../lib/wrapDeck'
-import { buildWrapExportModels, exportButtonLabel, exportWrapDeck, saveSlideButtonLabel, saveWrapSlide, type WrapExportState, type WrapSlideSaveState } from './wrapExport'
+import { buildWrapExportModels, exportButtonLabel, exportWrapDeck, saveSlideButtonLabel, saveWrapSlide, wrapExportFailureDetail, type WrapExportState, type WrapSlideSaveState } from './wrapExport'
 import WrapSlideView from './WrapSlideView'
 import { ghostButton, opaqueSlideSurface, pickPalette, prefersReducedMotion, primaryButton, Scene, THEME, type Theme, type WrapPalette } from './wrapKit'
 
@@ -173,9 +173,11 @@ export default function WrapDeck({
       .then((outcome) => {
         if (outcome.kind === 'saved') setExportState({ kind: 'done', count: outcome.count })
         else if (outcome.kind === 'canceled') setExportState({ kind: 'idle' })
-        else setExportState({ kind: 'failed', rendered: outcome.rendered, total: outcome.total })
+        else setExportState({ kind: 'failed', rendered: outcome.rendered, total: outcome.total, failedIds: outcome.failedIds })
       })
-      .catch(() => setExportState({ kind: 'failed' }))
+      // The rejection carries the real story ("Writing x.png failed after 2 of
+      // 4 slides: disk full") — surface it, don't flatten it to a generic line.
+      .catch((error: unknown) => setExportState({ kind: 'failed', detail: wrapExportFailureDetail(error) ?? undefined }))
   }, [exportModels, exportStem, meta.footer])
 
   // The in-context ask.

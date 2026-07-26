@@ -297,11 +297,13 @@ export async function saveWrapSlide(
   return true
 }
 
-/** The whole-deck export outcome, as the finale button reports it. */
+/** The whole-deck export outcome, as the finale button reports it. A render
+ *  failure names the scenes that did not render (wrapped.md: export failure
+ *  reports which scenes rendered). */
 export type WrapDeckExportOutcome =
   | { kind: 'saved'; count: number }
   | { kind: 'canceled' }
-  | { kind: 'failed'; rendered: number; total: number }
+  | { kind: 'failed'; rendered: number; total: number; failedIds: string[] }
 
 /** Export every slide as its own PNG. All slides render FIRST; if any slide
  *  fails to render, nothing is saved and the outcome names the coverage — an
@@ -313,11 +315,11 @@ export async function exportWrapDeck(
   footer: string,
   deps: WrapExportDeps = domDeps(),
 ): Promise<WrapDeckExportOutcome> {
-  if (models.length === 0) return { kind: 'failed', rendered: 0, total: 0 }
+  if (models.length === 0) return { kind: 'failed', rendered: 0, total: 0, failedIds: [] }
   const blobs = await Promise.all(models.map((model) => renderWrapSlide(model, footer, deps)))
-  const rendered = blobs.filter((b): b is Blob => b != null)
-  if (rendered.length !== models.length) {
-    return { kind: 'failed', rendered: rendered.length, total: models.length }
+  const failedIds = models.filter((_, i) => blobs[i] == null).map((m) => m.id)
+  if (failedIds.length > 0) {
+    return { kind: 'failed', rendered: models.length - failedIds.length, total: models.length, failedIds }
   }
   const files = models.map((model, i) => ({ filename: wrapSlideFilename(stem, i, model), blob: blobs[i]! }))
   const result = await deps.saveAll(stem, files)
@@ -333,18 +335,39 @@ export type WrapExportState =
   | { kind: 'idle' }
   | { kind: 'working' }
   | { kind: 'done'; count: number }
-  | { kind: 'failed'; rendered?: number; total?: number }
+  | { kind: 'failed'; rendered?: number; total?: number; failedIds?: string[]; detail?: string }
+
+/** The human-worthy line inside a save/write rejection. Electron wraps every
+ *  invoke rejection in "Error invoking remote method 'x': Error: <message>";
+ *  strip that machinery so the person reads the message, not the transport.
+ *  Pure, so the honest-failure path is pinnable in the hermetic suite. */
+export function wrapExportFailureDetail(error: unknown): string | null {
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : null
+  if (!raw) return null
+  const detail = raw
+    .replace(/^Error invoking remote method '[^']*':\s*/, '')
+    .replace(/^Error:\s*/, '')
+    .trim()
+    .replace(/\.$/, '')
+  if (!detail) return null
+  return detail.length > 140 ? `${detail.slice(0, 139)}…` : detail
+}
 
 export function exportButtonLabel(state: WrapExportState): string {
   switch (state.kind) {
     case 'working': return 'Exporting…'
     case 'done': return `Saved ${state.count} ${state.count === 1 ? 'slide' : 'slides'} ✓`
-    case 'failed':
+    case 'failed': {
       // wrapped.md: export failure reports which scenes rendered.
       if (state.rendered != null && state.total != null && state.total > 0 && state.rendered < state.total) {
-        return `Only ${state.rendered} of ${state.total} slides rendered. Nothing was saved. Try again`
+        const missing = state.failedIds && state.failedIds.length > 0
+          ? ` (missing: ${state.failedIds.slice(0, 4).join(', ')}${state.failedIds.length > 4 ? ', …' : ''})`
+          : ''
+        return `Only ${state.rendered} of ${state.total} slides rendered${missing}. Nothing was saved. Try again`
       }
+      if (state.detail) return `${state.detail}. Try again`
       return "Export didn't finish. Try again"
+    }
     default: return 'Export all slides'
   }
 }

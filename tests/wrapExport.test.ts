@@ -237,9 +237,9 @@ test('saveWrapSlide: a single slide save produces one file with the given name',
 
 // ─── Failures are visible, never swallowed, never partial ────────────────────
 
-import { exportButtonLabel, saveSlideButtonLabel } from '../src/renderer/components/wrap/wrapExport.ts'
+import { exportButtonLabel, saveSlideButtonLabel, wrapExportFailureDetail } from '../src/renderer/components/wrap/wrapExport.ts'
 
-test('failure: a slide that renders to null aborts the export and saves NOTHING', async () => {
+test('failure: a slide that renders to null aborts the export, saves NOTHING, and names the scene', async () => {
   const { slides, meta } = deckAndMeta()
   const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
   const { deps, savedAll } = stubCanvasDeps()
@@ -250,6 +250,7 @@ test('failure: a slide that renders to null aborts the export and saves NOTHING'
   if (outcome.kind === 'failed') {
     assert.equal(outcome.total, models.length)
     assert.equal(outcome.rendered, models.length - 1, 'the outcome reports how many scenes rendered')
+    assert.deepEqual(outcome.failedIds, [models[2].id], 'the outcome names the scene that did not render')
   }
   assert.equal(savedAll.length, 0, 'no partial share reaches the sink')
 })
@@ -296,6 +297,16 @@ test('failure labels: states are said honestly, one calm line, no sorry, no em d
     'Only 9 of 12 slides rendered. Nothing was saved. Try again',
     'a render failure reports which scenes rendered',
   )
+  assert.equal(
+    exportButtonLabel({ kind: 'failed', rendered: 10, total: 12, failedIds: ['shape', 'apps'] }),
+    'Only 10 of 12 slides rendered (missing: shape, apps). Nothing was saved. Try again',
+    'a render failure names the missing scenes',
+  )
+  assert.equal(
+    exportButtonLabel({ kind: 'failed', detail: 'Writing x.png failed after 2 of 4 slides: disk full' }),
+    'Writing x.png failed after 2 of 4 slides: disk full. Try again',
+    'a write failure surfaces the real story, not a generic line',
+  )
   assert.equal(saveSlideButtonLabel('failed'), "Save didn't finish. Try again")
   assert.equal(saveSlideButtonLabel('saved'), 'Saved ✓')
   assert.equal(saveSlideButtonLabel('idle'), 'Save slide')
@@ -311,4 +322,16 @@ test('failure labels: states are said honestly, one calm line, no sorry, no em d
     assert.doesNotMatch(label, /—/, 'no em dashes in product strings')
   }
   assert.notEqual(exportButtonLabel({ kind: 'failed' }), exportButtonLabel({ kind: 'idle' }), 'a failure must be distinguishable from idle')
+})
+
+test('wrapExportFailureDetail: strips the Electron invoke machinery so the person reads the message', () => {
+  assert.equal(
+    wrapExportFailureDetail(new Error("Error invoking remote method 'export:wrap-slides': Error: Writing w-slide-03.png failed after 2 of 4 slides: EDQUOT: quota exceeded")),
+    'Writing w-slide-03.png failed after 2 of 4 slides: EDQUOT: quota exceeded',
+  )
+  assert.equal(wrapExportFailureDetail(new Error('disk full.')), 'disk full')
+  assert.equal(wrapExportFailureDetail(new Error('')), null)
+  assert.equal(wrapExportFailureDetail(42), null)
+  const long = wrapExportFailureDetail(new Error('x'.repeat(500)))
+  assert.ok(long && long.length <= 140, 'a runaway message is capped for the button')
 })
