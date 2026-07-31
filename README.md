@@ -36,6 +36,7 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 | Document                                           | Purpose                                                          |
 | -------------------------------------------------- | ---------------------------------------------------------------- |
 | [Product direction](docs/product/product.md)       | The product promise, problem, principles, and boundaries         |
+| [Landing positioning](docs/product/landing-positioning.md) | Accepted public-site audience, promise, and AI-forward voice |
 | [V2 direction](docs/product/v2.md)                 | Accepted V2 scope, sequencing, and technical boundaries          |
 | [Vocabulary](docs/product/vocabulary.md)           | Shared meanings for product and architecture terms               |
 | [Architecture](docs/codebase/architecture.md)      | Verified codebase map, invariants, and recorded decisions (start here) |

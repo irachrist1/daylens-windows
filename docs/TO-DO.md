@@ -4,13 +4,13 @@ This is the one place for documentation, decision, and research work that has no
 
 ## Decisions waiting on me
 
-- [ ] Choose the first-customer wedge for positioning and connector priority. Recorded recommendation: professionals who account for their time to clients (consultants, freelancers, agency ICs) — it matches the paid job in the organizational-sharing draft and the strongest competitors' audiences. Alternatives considered: AI-forward knowledge workers wanting personal memory; keeping the broad "any individual" framing. The V2 foundations are identical under all three, so no implementation waits on this.
+- [x] Choose the first-customer wedge for positioning and connector priority. Accepted: AI-forward knowledge workers who want personal memory of their laptop day and context for the AI tools they already use — see [landing positioning](product/landing-positioning.md). Alternatives considered: professionals who account for time to clients; keeping only the broad "any individual" framing without an AI-forward lead.
 
 ## Product validation
 
 - [ ] Build the competitor matrix described in V2, angled at the chosen first-customer wedge.
 - [ ] Design and build the comparison hub and individual comparison pages for the website.
-- [ ] Rewrite the landing page around the accepted positioning, questions, and product surfaces.
+- [ ] Finish the public-site copy pass against [landing positioning](product/landing-positioning.md): remaining docs sections, roadmap/changelog marketing chrome, comparison pages, and any leftover open-source or timesheet-primary framing.
 - [ ] Define activation and retention measurements for the first recognizable day, useful retrieval, and useful agent answer.
 
 ## Documentation and developer experience

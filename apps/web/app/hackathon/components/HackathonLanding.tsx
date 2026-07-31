@@ -1,30 +1,21 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { motion, AnimatePresence } from "motion/react";
-import { Check, ChevronLeftIcon, ChevronRightIcon, ZoomIn, X } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { ChevronDown, FileSpreadsheet } from "lucide-react";
 import { Counter } from "./Counter";
 import { ThemeToggle } from "./ThemeToggle";
+import { HeroDemo } from "./hero-demo/HeroDemo";
+import { DEMO_ASKS } from "./hero-demo/demoData";
 import { assetPath } from "@/app/lib/basePath";
 import {
   MAC_DOWNLOAD_HREF,
   WINDOWS_DOWNLOAD_HREF,
   LINUX_STATUS_HREF,
 } from "@/app/lib/platformLinks";
-
-import { Swiper, SwiperSlide } from "swiper/react";
-import { Autoplay, EffectCoverflow, Navigation, Pagination } from "swiper/modules";
 import { cn } from "@/app/lib/cn";
-
-// Import Swiper styles
-import "swiper/css";
-import "swiper/css/effect-coverflow";
-import "swiper/css/pagination";
-import "swiper/css/navigation";
-
-const GITHUB_URL = "https://github.com/irachrist1/daylens-v1";
 
 // ─── Content ────────────────────────────────────────────────────────────────
 
@@ -34,66 +25,37 @@ const STATS = [
   { label: "Data shared with anyone else", value: 0, suffix: "%" },
 ];
 
-const QUERIES = [
-  {
-    q: "What did I learn about machine learning this week?",
-    a: "Neural network fundamentals, forward propagation, L-layer networks, plus the hands-on Coursera labs from Tuesday and Wednesday.",
-    img: "/hackathon/05-ai-ml-query.png",
-    tag: "ai chat",
-    zoom: "1.35",
-    origin: "80% 35%"
-  },
-  {
-    q: "What did I work on today?",
-    a: "13h 22m tracked, 24 blocks, 28 apps and 22 sites. Right-side narrative reads back the shape of the day, not just the totals.",
-    img: "/hackathon/01-timeline-day.png",
-    tag: "timeline",
-    zoom: "1.25",
-    origin: "85% 35%"
-  },
-  {
-    q: "How long was I in Ghostty during Building & Testing blocks?",
-    a: "5h 20m across three days. Broken down to the minute per session. The query routes to block + app intersections.",
-    img: "/hackathon/06-ai-ghostty-query.png",
-    tag: "ai chat",
-    zoom: "1.35",
-    origin: "80% 20%"
-  },
-  {
-    q: "Show me what I actually consumed in Dia.",
-    a: "Domain breakdown for every browser app, with a generated summary of what each app was used for — not just hours-in-tab.",
-    img: "/hackathon/03-apps-all.png",
-    tag: "apps",
-    zoom: "1.3",
-    origin: "85% 35%"
-  },
-];
+const EXAMPLE_ASKS = DEMO_ASKS;
 
 const PILLARS = [
   {
-    title: "Content Indexer",
-    body: "A background job sends every new browser session to Claude with a two-sentence, topic-tagged prompt. Results land in a local SQLite table the chat can search. Built this week.",
+    title: "Ask in plain language",
+    body: "Ask what you got done, where an afternoon went, or what you were last deep in — and get an answer grounded in what actually happened on your laptop.",
   },
   {
-    title: "Tool-calling chat",
-    body: "Claude with SQLite tables and the content index as tools. Deterministic router handles common shapes first. searchContentByTopic returns what you actually consumed.",
+    title: "Answers from real work",
+    body: "Timeline, Apps, and AI read the same memory. Drafts, summaries, and recalls come from evidence you can still open and correct — not from a blank page.",
   },
   {
-    title: "MCP server",
-    body: "Opt-in MCP exposes Daylens to Claude Desktop, Cursor, and Claude Code. Your work history becomes context for any agent. Off by default, revocable from Settings.",
+    title: "Context for the tools you already use",
+    body: "Opt in to share Daylens memory with Claude, Cursor, and other agents when you want your day as context there too. Off until you turn it on.",
   },
   {
-    title: "Local-first by design",
-    body: "Every byte lives in a single SQLite file on your laptop. The only thing that leaves the device is the question you choose to ask.",
+    title: "Private on your laptop",
+    body: "Your activity lives in a local database on your machine. What leaves the device is what you choose to send when you ask — not a silent copy of your whole day.",
   },
 ];
 
-const SUPPORTED_APPS = [
+const SUPPORTED_APPS: Array<{
+  name: string;
+  src: string;
+  invertInDark?: boolean;
+}> = [
   { name: "VS Code", src: "/brands/vscode.ico" },
   { name: "Claude", src: "/brands/claude-app.png" },
   { name: "Dia", src: "/brands/dia.png" },
   { name: "Chrome", src: "/brands/chrome.svg" },
-  { name: "Notion", src: "/brands/notion.svg" },
+  { name: "Notion", src: "/brands/notion.svg", invertInDark: true },
   { name: "Figma", src: "/brands/figma.svg" },
   { name: "Linear", src: "/brands/linear.svg" },
   { name: "Slack", src: "/brands/slack.png" },
@@ -139,6 +101,98 @@ function Button({
   );
 }
 
+function ExampleAskAccordion() {
+  const [openIndex, setOpenIndex] = useState(0);
+
+  return (
+    <ul className="mt-12 flex flex-col gap-3 text-left">
+      {EXAMPLE_ASKS.map((item, index) => {
+        const isOpen = openIndex === index;
+        return (
+          <li
+            key={item.q}
+            className={cn(
+              "overflow-hidden rounded-2xl border transition-colors",
+              isOpen
+                ? "border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900/60"
+                : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-transparent",
+            )}
+          >
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => setOpenIndex(isOpen ? -1 : index)}
+              className="flex w-full items-start gap-4 px-5 py-4 text-left md:px-6 md:py-5"
+            >
+              <span className="min-w-0 flex-1 text-base font-medium tracking-tight md:text-lg">
+                “{item.q}”
+              </span>
+              <ChevronDown
+                className={cn(
+                  "mt-1 size-5 shrink-0 text-zinc-400 transition-transform duration-300",
+                  isOpen && "rotate-180",
+                )}
+                aria-hidden
+              />
+            </button>
+            <AnimatePresence initial={false}>
+              {isOpen && (
+                <motion.div
+                  key="answer"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+                  className="overflow-hidden"
+                >
+                  <div className="border-t border-zinc-200 px-5 pb-5 pt-4 dark:border-zinc-800 md:px-6 md:pb-6">
+                    <p className="whitespace-pre-line text-sm leading-relaxed text-zinc-600 dark:text-zinc-300 md:text-base">
+                      {item.a}
+                    </p>
+                    {item.attachment && (
+                      <div className="mt-4 flex max-w-md items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-950">
+                        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400">
+                          <FileSpreadsheet className="size-5" aria-hidden />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                            {item.attachment.title}
+                          </p>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                            {item.attachment.kind}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="shrink-0 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                        >
+                          Open
+                        </button>
+                      </div>
+                    )}
+                    {item.evidence.length > 0 && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {item.evidence.map((chip) => (
+                          <span
+                            key={chip}
+                            className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400"
+                          >
+                            {chip}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function AppleIcon() {
   return (
     <svg
@@ -178,23 +232,6 @@ function LinuxIcon() {
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export function HackathonLanding() {
-  const [zoomImage, setZoomImage] = useState<{ img: string; q: string; a: string; tag: string; zoom: string; origin: string } | null>(null);
-
-  useEffect(() => {
-    if (!zoomImage) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setZoomImage(null);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [zoomImage]);
-
   return (
     <div className="min-h-screen bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
       {/* NAVBAR */}
@@ -210,24 +247,6 @@ export function HackathonLanding() {
             />
             <span className="text-sm font-medium tracking-tight">Daylens</span>
           </Link>
-          <nav className="hidden gap-7 lg:flex">
-            {[
-              { label: "Demos", href: "#demos" },
-              { label: "Privacy", href: "#privacy" },
-              { label: "Architecture", href: "#architecture" },
-              { label: "GitHub", href: GITHUB_URL },
-            ].map((l) => (
-              <a
-                key={l.label}
-                href={l.href}
-                target={l.href.startsWith("http") ? "_blank" : undefined}
-                rel={l.href.startsWith("http") ? "noreferrer" : undefined}
-                className="text-sm font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              >
-                {l.label}
-              </a>
-            ))}
-          </nav>
           <div className="flex items-center gap-2">
             <ThemeToggle />
             <Button href="#download" variant="primary" className="h-9 text-xs">
@@ -243,43 +262,28 @@ export function HackathonLanding() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
-          className="mx-auto flex max-w-6xl flex-col items-center gap-14 lg:items-stretch"
+          className="mx-auto flex w-full max-w-7xl flex-col items-center gap-14"
         >
-          <section className="flex w-full flex-col items-start justify-between gap-8 lg:flex-row lg:gap-12">
+          <section className="flex w-full max-w-6xl flex-col items-start justify-between gap-8 lg:flex-row lg:gap-12">
             <h1 className="max-w-2xl text-balance text-4xl font-medium leading-[1.05] tracking-tighter md:text-6xl lg:text-7xl">
               Your digital life, made searchable on demand.
             </h1>
             <div className="flex max-w-md flex-col gap-6 lg:pt-3">
               <p className="text-base leading-relaxed text-zinc-600 dark:text-zinc-400 md:text-lg">
-                Daylens is a local-first memory system for your laptop. It
-                watches what you do, enriches it with Claude, and lets you ask
-                anything in plain language.
+                Daylens watches what you do on your laptop, keeps it private,
+                and lets you ask anything in plain language — or bring that
+                context into the AI tools you already use.
               </p>
               <div className="flex flex-row gap-2">
-                <Button href="#demos" variant="primary">
-                  See it answer
-                </Button>
-                <Button href="#download" variant="outline">
+                <Button href="#download" variant="primary">
                   Download
                 </Button>
               </div>
             </div>
           </section>
 
-          <div className="relative mx-auto w-full max-w-6xl overflow-hidden rounded-xl border border-zinc-200 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.12)] dark:border-zinc-800 dark:shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)] lg:rounded-[2rem]">
-            <Image
-              src={assetPath("/hackathon/01-timeline-day.png")}
-              alt="Daylens today view — a reconstructed timeline of your work"
-              width={2538}
-              height={1802}
-              priority
-              quality={95}
-              sizes="(max-width: 768px) calc(100vw - 2rem), (max-width: 1280px) calc(100vw - 2rem), 1152px"
-              className="h-auto w-full"
-              style={{
-                imageRendering: "-webkit-optimize-contrast",
-              }}
-            />
+          <div className="relative mx-auto w-full max-w-6xl">
+            <HeroDemo />
           </div>
         </motion.div>
       </section>
@@ -292,8 +296,8 @@ export function HackathonLanding() {
               The apps you already live in.
             </h2>
             <p className="mt-3 max-w-md text-base text-zinc-500 dark:text-zinc-400">
-              Daylens watches without integrations, plug-ins, or permissions
-              you'll regret.
+              Daylens watches your workspace quietly — without a pile of
+              integrations to set up first.
             </p>
           </div>
 
@@ -308,7 +312,10 @@ export function HackathonLanding() {
                   alt={app.name}
                   width={32}
                   height={32}
-                  className="size-8 opacity-90"
+                  className={cn(
+                    "size-8 opacity-90",
+                    app.invertInDark && "dark:invert",
+                  )}
                 />
               </div>
             ))}
@@ -346,218 +353,18 @@ export function HackathonLanding() {
         </div>
       </section>
 
-      {/* DEMOS */}
-      <section id="demos" className="px-4 py-20 lg:py-28 overflow-hidden">
-        <div className="mx-auto max-w-7xl">
-          <div className="mb-16 text-center lg:mb-24">
-            <h2 className="text-3xl font-medium tracking-tight sm:text-4xl">
-              Ask anything. Get a real answer.
-            </h2>
-            <p className="mx-auto mt-4 max-w-xl text-base text-zinc-500 dark:text-zinc-400">
-              Four queries, four real answers from real data on a real laptop.
-              No mocks. No edits.
-            </p>
-          </div>
-
-          <div className="relative mx-auto max-w-5xl px-4 md:px-8">
-            {/* Custom Carousel Styles */}
-            <style>{`
-              .demos-swiper {
-                width: 100%;
-                padding-bottom: 50px !important;
-                overflow: visible !important;
-              }
-              .demos-swiper .swiper-slide {
-                width: 100%;
-                max-width: 600px;
-                opacity: 0.35;
-                filter: blur(4px);
-                transform: scale(0.93);
-                transition: opacity 0.4s ease, filter 0.4s ease, transform 0.4s ease;
-              }
-              .demos-swiper .swiper-slide-active {
-                opacity: 1;
-                filter: blur(0px);
-                transform: scale(1);
-              }
-              .demos-swiper img {
-                image-rendering: -webkit-optimize-contrast;
-                image-rendering: crisp-edges;
-              }
-              .demos-swiper .swiper-pagination-bullet {
-                background: #71717a !important; /* zinc-400 */
-                opacity: 0.4;
-                transition: opacity 0.2s ease, background-color 0.2s ease;
-              }
-              .demos-swiper .swiper-pagination-bullet-active {
-                background: #18181b !important; /* zinc-900 */
-                opacity: 1;
-              }
-              .dark .demos-swiper .swiper-pagination-bullet-active {
-                background: #f4f4f5 !important; /* zinc-100 */
-                opacity: 1;
-              }
-            `}</style>
-
-            <Swiper
-              modules={[Autoplay, Pagination, Navigation]}
-              grabCursor={true}
-              centeredSlides={true}
-              slidesPerView="auto"
-              loop={true}
-              autoplay={{
-                delay: 4000,
-                disableOnInteraction: false,
-                pauseOnMouseEnter: true,
-              }}
-              pagination={{
-                clickable: true,
-              }}
-              navigation={{
-                nextEl: ".demos-swiper-button-next",
-                prevEl: ".demos-swiper-button-prev",
-              }}
-              className="demos-swiper"
-            >
-              {QUERIES.map((query, i) => (
-                <SwiperSlide key={query.q}>
-                  <motion.article
-                    initial={{ opacity: 0, y: 20 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true }}
-                    transition={{
-                      duration: 0.45,
-                      ease: [0.25, 0.46, 0.45, 0.94],
-                    }}
-                    className="flex h-full min-h-[420px] min-w-0 flex-col justify-between gap-5 rounded-2xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-900 md:p-8"
-                  >
-                    <header className="flex flex-col gap-2.5">
-                      <p className="text-lg font-medium leading-snug tracking-tight text-zinc-900 dark:text-zinc-100 md:text-xl">
-                        "{query.q}"
-                      </p>
-                    </header>
-
-                    <div
-                      onClick={() => setZoomImage(query)}
-                      className="group/img relative mt-auto overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 cursor-pointer aspect-[16/10]"
-                    >
-                      {/* Animated Scale Wrapper on Hover */}
-                      <div className="w-full h-full overflow-hidden transition-transform duration-300 group-hover/img:scale-[1.02]">
-                        <Image
-                          src={assetPath(query.img)}
-                          alt={query.q}
-                          width={1280}
-                          height={800}
-                          quality={95}
-                          sizes="(max-width: 768px) 100vw, 1000px"
-                          className="w-full h-full object-cover"
-                          style={{
-                            transform: `scale(${query.zoom})`,
-                            transformOrigin: query.origin,
-                          }}
-                        />
-                      </div>
-                      {/* Hover Overlay */}
-                      <div className="absolute inset-0 bg-black/0 transition-all duration-300 group-hover/img:bg-black/20 flex items-center justify-center">
-                        <div className="p-2.5 rounded-full bg-white/90 dark:bg-zinc-900/90 shadow-md border border-zinc-200 dark:border-zinc-800 opacity-0 scale-90 transition-all duration-300 group-hover/img:opacity-100 group-hover/img:scale-100 flex items-center gap-1.5 text-xs font-medium text-zinc-900 dark:text-zinc-100">
-                          <ZoomIn className="size-4" />
-                          <span>Click to expand</span>
-                        </div>
-                      </div>
-                    </div>
-                  </motion.article>
-                </SwiperSlide>
-              ))}
-            </Swiper>
-
-            {/* Custom Navigation Buttons */}
-            <div className="absolute left-0 top-1/2 z-10 w-full -translate-y-1/2 pointer-events-none hidden md:flex justify-between px-0 md:-px-4">
-              <button className="demos-swiper-button-prev p-3 rounded-full bg-white/90 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 shadow-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all active:scale-95 pointer-events-auto -translate-x-1/2">
-                <ChevronLeftIcon className="h-5 w-5 text-zinc-800 dark:text-zinc-200" />
-              </button>
-              <button className="demos-swiper-button-next p-3 rounded-full bg-white/90 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 shadow-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all active:scale-95 pointer-events-auto translate-x-1/2">
-                <ChevronRightIcon className="h-5 w-5 text-zinc-800 dark:text-zinc-200" />
-              </button>
-            </div>
-          </div>
+      {/* EXAMPLE ASKS */}
+      <section className="px-4 py-20 lg:py-28">
+        <div className="mx-auto max-w-3xl text-center">
+          <h2 className="text-3xl font-medium tracking-tight sm:text-4xl">
+            Ask anything about your day.
+          </h2>
+          <p className="mx-auto mt-4 max-w-xl text-base text-zinc-500 dark:text-zinc-400">
+            Open a question to see the kind of answer Daylens gives — grounded
+            in what actually happened, not a blank page.
+          </p>
+          <ExampleAskAccordion />
         </div>
-      </section>
-
-      {/* PRIVACY */}
-      <section id="privacy" className="px-4 py-20 lg:py-28">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: "-100px" }}
-          transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-          className="mx-auto w-full max-w-7xl rounded-[2rem] bg-zinc-900 px-6 pt-16 pb-8 dark:bg-zinc-100 md:px-12 md:py-20"
-        >
-          <div className="mx-auto max-w-4xl">
-            <div className="mb-12 flex flex-col items-center text-center">
-              <h2 className="text-3xl font-medium tracking-tight text-white dark:text-zinc-900 sm:text-4xl">
-                Nothing leaves your device unless you ask.
-              </h2>
-              <p className="mt-4 max-w-md text-sm text-white/70 dark:text-zinc-600 sm:text-base">
-                The privacy model is not a feature. It is the constraint that
-                makes the rest of the product trustworthy.
-              </p>
-            </div>
-
-            <div className="overflow-hidden rounded-2xl bg-white dark:bg-zinc-950">
-              <div className="flex flex-col md:flex-row">
-                <div className="flex flex-col border-b border-zinc-200 p-8 dark:border-zinc-800 md:basis-2/5 md:border-b-0 md:border-r md:p-10">
-                  <h3 className="text-center text-3xl font-medium tracking-tight">
-                    Local-first
-                  </h3>
-                  <p className="mt-2 text-center text-base text-zinc-500 dark:text-zinc-400">
-                    A single SQLite file on your laptop. No cloud. No account.
-                  </p>
-                  <p className="mt-8 text-center text-lg font-medium">
-                    Free, forever, on every Mac.
-                  </p>
-                  <div className="mt-8 flex flex-col gap-3">
-                    <Button href={MAC_DOWNLOAD_HREF} variant="primary" className="w-full">
-                      <AppleIcon /> Download for Mac
-                    </Button>
-                    <Button href={GITHUB_URL} target="_blank" rel="noreferrer" variant="outline" className="w-full">
-                      Read the source
-                    </Button>
-                  </div>
-                  <p className="mt-8 text-center text-xs text-zinc-400 dark:text-zinc-500">
-                    Open source. CBC Spring 2026 Hackathon submission.
-                  </p>
-                </div>
-
-                <div className="flex flex-col justify-between p-8 md:basis-3/5 md:p-10">
-                  <ul className="flex flex-col gap-3">
-                    {[
-                      "Every byte stored locally in SQLite",
-                      "Zero background telemetry",
-                      "Zero third-party analytics",
-                      "Only your question is sent to Claude, per query",
-                      "MCP access is opt-in and revocable",
-                      "Settings shows every captured field",
-                      "Delete the database, delete every byte",
-                    ].map((line) => (
-                      <li key={line} className="flex items-center gap-3">
-                        <Check className="size-4" strokeWidth={2} />
-                        <span className="text-sm font-medium">{line}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <div className="mt-8 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-                    <p className="text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
-                      Daylens is designed around the inverse of surveillance.
-                      You see what is captured. You decide what your AI can
-                      read. The product is self-knowledge under your control.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </motion.div>
       </section>
 
       {/* ARCHITECTURE */}
@@ -565,11 +372,11 @@ export function HackathonLanding() {
         <div className="mx-auto max-w-7xl">
           <div className="mb-16 text-center">
             <h2 className="text-3xl font-medium tracking-tight sm:text-4xl">
-              Three Claude integrations, not one.
+              What the AI can do.
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-base text-zinc-500 dark:text-zinc-400">
-              Substantive use of the API. Not a chatbot wrapped around your
-              schedule.
+              Built for knowledge workers — anyone who lives on a laptop and
+              already uses AI.
             </p>
           </div>
 
@@ -591,30 +398,6 @@ export function HackathonLanding() {
         </div>
       </section>
 
-      {/* DEMO VIDEO PLACEHOLDER */}
-      <section id="video" className="px-4 py-20 lg:py-28">
-        <div className="mx-auto max-w-5xl text-center">
-          <h2 className="text-3xl font-medium tracking-tight sm:text-4xl">
-            See it answer in real time.
-          </h2>
-          <p className="mx-auto mt-4 max-w-xl text-base text-zinc-500 dark:text-zinc-400">
-            A three-minute walkthrough against live data. Same four queries.
-            Real answers.
-          </p>
-
-          <div className="mt-12 overflow-hidden rounded-2xl border border-zinc-200 shadow-[0_20px_50px_-15px_rgba(0,0,0,0.12)] dark:border-zinc-800">
-            <div className="flex aspect-video flex-col items-center justify-center bg-zinc-50 text-zinc-400 dark:bg-zinc-900 dark:text-zinc-600">
-              <svg width="56" height="56" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-              <p className="mt-3 font-mono text-xs uppercase tracking-widest">
-                demo · uploading
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
       {/* DOWNLOAD */}
       <section id="download" className="px-4 py-24 lg:py-32">
         <div className="mx-auto max-w-3xl text-center">
@@ -622,8 +405,8 @@ export function HackathonLanding() {
             Get your history back.
           </h2>
           <p className="mx-auto mt-5 max-w-xl text-base text-zinc-500 dark:text-zinc-400">
-            Open source. Local-first. Available now for macOS. Windows and
-            Linux are next.
+            Private by default. Available now for macOS. Windows and Linux are
+            next.
           </p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
             <Button href={MAC_DOWNLOAD_HREF} variant="primary">
@@ -636,25 +419,13 @@ export function HackathonLanding() {
               <LinuxIcon /> Linux status
             </Button>
           </div>
-          <p className="mt-6 text-xs text-zinc-400 dark:text-zinc-500">
-            Source on{" "}
-            <a
-              href={GITHUB_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="underline underline-offset-4 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              GitHub
-            </a>
-            .
-          </p>
         </div>
       </section>
 
       {/* FOOTER */}
       <footer className="border-t border-zinc-200 px-4 py-10 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 text-sm text-zinc-500 dark:text-zinc-400 md:flex-row">
-          <div className="flex items-center gap-2">
+        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-4 text-sm text-zinc-500 dark:text-zinc-400 md:grid-cols-3">
+          <div className="flex items-center justify-center gap-2 md:justify-start">
             <Image
               src={assetPath("/app-icon.png")}
               alt="Daylens"
@@ -666,64 +437,19 @@ export function HackathonLanding() {
               Daylens
             </span>
           </div>
-          <p className="font-mono text-[11px] uppercase tracking-widest">
-            CBC Spring 2026 · ALU · Christian Tonny
+          <div className="flex justify-center">
+            <Link
+              href="/docs"
+              className="transition-colors hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              Docs
+            </Link>
+          </div>
+          <p className="text-center font-mono text-[11px] uppercase tracking-widest md:text-right">
+            Christian Tonny
           </p>
         </div>
       </footer>
-
-      {/* LIGHTBOX MODAL */}
-      <AnimatePresence>
-        {zoomImage && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-4 md:p-8 bg-zinc-950/80 backdrop-blur-md cursor-zoom-out"
-            onClick={() => setZoomImage(null)}
-          >
-            {/* Modal Content */}
-            <motion.div
-              initial={{ scale: 0.95, y: 10 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 10 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="relative w-full max-w-5xl bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col cursor-default"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Close Button */}
-              <button
-                onClick={() => setZoomImage(null)}
-                className="absolute right-4 top-4 z-10 p-2.5 rounded-full bg-zinc-950/60 hover:bg-zinc-800 border border-zinc-800/80 text-zinc-400 hover:text-white transition-all active:scale-95 shadow-md cursor-pointer"
-              >
-                <X className="size-5" />
-              </button>
-
-              {/* High-res Image Wrapper */}
-              <div className="relative w-full aspect-[16/10] overflow-hidden bg-zinc-950 flex items-center justify-center">
-                <img
-                  src={assetPath(zoomImage.img)}
-                  alt={zoomImage.q}
-                  className="w-full h-full object-cover select-none"
-                  style={{
-                    imageRendering: "-webkit-optimize-contrast",
-                    transform: `scale(${zoomImage.zoom})`,
-                    transformOrigin: zoomImage.origin,
-                  }}
-                />
-              </div>
-
-              {/* Bottom Caption Bar */}
-              <div className="p-5 md:p-6 bg-zinc-950 border-t border-zinc-900 flex flex-col gap-2">
-                <h4 className="text-base font-semibold leading-snug text-white md:text-lg">
-                  "{zoomImage.q}"
-                </h4>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
