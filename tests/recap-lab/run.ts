@@ -71,7 +71,74 @@ function formatMs(ms: number): string {
   return ms >= 10_000 ? `${(ms / 1000).toFixed(1)}s` : `${(ms / 1000).toFixed(2)}s`
 }
 
+const PANEL_WIDTH = 68
+
+// The recap panel as the person actually sees it after clicking the button —
+// the same elements in the same order as the day inspector renders: the
+// degraded banner when the recap could not be written, the recap itself, the
+// divider, and the button row. Reading a variant means reading THIS, not a
+// developer dump of it, so a wording problem is visible where it will land.
+function renderRecapPanel(opts: {
+  heading: string
+  summary: string
+  degraded: boolean
+  degradedReason: string | null
+}): string[] {
+  const inner = PANEL_WIDTH - 4
+  const lines: string[] = []
+  const push = (text: string, style: keyof typeof ANSI | null = null) => {
+    const padded = `│ ${text.padEnd(inner + 1)} │`
+    lines.push(style ? color(style, padded) : padded)
+  }
+  const blank = () => push('')
+  const soft = (text: string, style: keyof typeof ANSI) => {
+    for (const line of wrap(text, inner, '').split('\n')) push(line, style)
+  }
+
+  lines.push(color('gray', `┌─ ${opts.heading} `.padEnd(PANEL_WIDTH - 1, '─') + '┐'))
+  blank()
+  if (opts.degraded) {
+    // Verbatim from the inspector: nothing fails silently, and the reason is
+    // passed straight through to the person.
+    soft(
+      opts.degradedReason
+        ? `The full recap couldn't be generated — ${opts.degradedReason} Showing the day's facts; Generate recap retries.`
+        : "The full recap couldn't be generated. Showing the day's facts; Generate recap retries.",
+      'dim',
+    )
+    blank()
+  }
+  for (const line of wrap(opts.summary || '(nothing)', inner, '').split('\n')) push(line)
+  blank()
+  push(color('gray', '─'.repeat(inner)))
+  // A past day shows both buttons; the recap one reads "Regenerate" once a
+  // recap exists, which it does by the time this panel is drawn.
+  push(color('dim', '[ Re-analyze with AI ]  [ Regenerate recap ]'))
+  blank()
+  lines.push(color('gray', '└'.padEnd(PANEL_WIDTH - 1, '─') + '┘'))
+  return lines
+}
+
+// The app logs breaker state and provider stack traces on failure. Useful when
+// hunting a provider problem, noise when reading recap prose, so it is held
+// back unless --verbose and reprinted under the panel when something failed.
+function captureAppLogs<T>(verbose: boolean, run: () => Promise<T>): Promise<{ value: T; logs: string[] }> {
+  if (verbose) return run().then((value) => ({ value, logs: [] }))
+  const logs: string[] = []
+  const original = { log: console.log, warn: console.warn, error: console.error }
+  const sink = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
+  console.log = sink
+  console.warn = sink
+  console.error = sink
+  const restore = () => { console.log = original.log; console.warn = original.warn; console.error = original.error }
+  return run().then(
+    (value) => { restore(); return { value, logs } },
+    (error) => { restore(); throw error },
+  )
+}
+
 async function main(): Promise<void> {
+  const verbose = process.argv.includes('--verbose')
   const args = process.argv.slice(2).filter((arg) => !arg.startsWith('-'))
   const dateStr = args[0] && /^\d{4}-\d{2}-\d{2}$/.test(args[0]) ? args[0] : yesterdayLocal()
   const variantFilter = (args[0] && !/^\d{4}-\d{2}-\d{2}$/.test(args[0]) ? args[0] : args[1]) ?? ''
@@ -94,7 +161,7 @@ async function main(): Promise<void> {
   console.log(color('dim', `[setup] real DB copy: ${dbCtx.copiedDbPath}`))
 
   const { initDb } = await import('../../src/main/services/database')
-  initDb()
+  await captureAppLogs(verbose, async () => initDb())
 
   const { getApiKey, setSettings, getSettings } = await import('../../src/main/services/settings')
   const provider = (process.env.DAYLENS_EVAL_PROVIDER ?? getSettings().aiProvider ?? 'anthropic') as AIProviderMode
@@ -167,20 +234,27 @@ async function main(): Promise<void> {
     voiceFindings: Array<{ phrase: string; reason: string }>
   }> = []
 
+  const dayHeading = new Date(`${dateStr}T12:00:00`).toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric',
+  })
+
   for (const [index, variant] of variants.entries()) {
     const shipped = variant.id === SHIPPED_RECAP_VARIANT_ID
     console.log(color('bold', `[${index + 1}/${variants.length}] ${variant.id}${shipped ? color('dim', '  (currently shipped)') : ''}`))
-    console.log(color('gray', `  ${variant.description}`))
+    console.log(color('gray', `  ${variant.description}\n`))
 
     const startedAt = Date.now()
     let summary = ''
     let degraded = false
     let degradedReason: string | null = null
+    let appLogs: string[] = []
     try {
-      const result = await generateDaySummary(dateStr, { variant, bypassCache: true })
-      summary = result.summary
-      degraded = result.degraded === true
-      degradedReason = result.degradedReason ?? null
+      const { value, logs } = await captureAppLogs(verbose, () =>
+        generateDaySummary(dateStr, { variant, bypassCache: true }))
+      appLogs = logs
+      summary = value.summary
+      degraded = value.degraded === true
+      degradedReason = value.degradedReason ?? null
     } catch (error) {
       degraded = true
       degradedReason = error instanceof Error ? error.message : String(error)
@@ -188,23 +262,25 @@ async function main(): Promise<void> {
     }
     const ms = Date.now() - startedAt
 
-    if (degraded) {
-      // A degraded result means the model never produced a recap: what is
-      // printed is the deterministic factual line, not this variant's output.
-      console.log(color('red', `  FAILED after ${formatMs(ms)} — ${degradedReason ?? 'no reason given'}`))
-      console.log(color('dim', wrap(summary || '(nothing)', 72, '  ')))
-    } else {
-      console.log(color('dim', `  ${formatMs(ms)}`))
-      console.log('')
-      console.log(wrap(summary))
+    // What the person sees, first and largest — the thing being judged.
+    for (const line of renderRecapPanel({ heading: `Timeline · ${dayHeading}`, summary, degraded, degradedReason })) {
+      console.log(`  ${line}`)
     }
 
+    // Everything below is for whoever is tuning, not for the person.
     const findings = recapVoiceFindings(summary).map((finding) => ({ phrase: finding.phrase, reason: finding.reason }))
-    if (!degraded && findings.length > 0) {
-      console.log('')
+    console.log(color('dim', `\n  took ${formatMs(ms)}${degraded ? ' · no recap was written; the panel above is the factual fallback' : ''}`))
+    if (!degraded) {
       for (const finding of findings) {
         console.log(color('yellow', `  voice: "${finding.phrase}" — ${finding.reason}`))
       }
+    }
+    if (degraded && appLogs.length > 0) {
+      console.log(color('gray', '  ─── why it failed ───'))
+      for (const line of appLogs.slice(0, 4)) {
+        console.log(color('gray', `  ${line.split('\n')[0].slice(0, 140)}`))
+      }
+      console.log(color('gray', '  (run with --verbose for the full provider output)'))
     }
     console.log('')
 
