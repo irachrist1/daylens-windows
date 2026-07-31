@@ -83,6 +83,7 @@ function renderRecapPanel(opts: {
   summary: string
   degraded: boolean
   degradedReason: string | null
+  needsAction: boolean
 }): string[] {
   const inner = PANEL_WIDTH - 4
   const lines: string[] = []
@@ -102,7 +103,7 @@ function renderRecapPanel(opts: {
     // passed straight through to the person.
     soft(
       opts.degradedReason
-        ? `The full recap couldn't be generated — ${opts.degradedReason} Showing the day's facts; Generate recap retries.`
+        ? `The full recap couldn't be generated — ${opts.degradedReason} Showing the day's facts; ${opts.needsAction ? 'generate again once that is sorted.' : 'Generate recap retries.'}`
         : "The full recap couldn't be generated. Showing the day's facts; Generate recap retries.",
       'dim',
     )
@@ -110,10 +111,12 @@ function renderRecapPanel(opts: {
   }
   for (const line of wrap(opts.summary || '(nothing)', inner, '').split('\n')) push(line)
   blank()
-  push(color('gray', '─'.repeat(inner)))
+  // Styling goes through push's style argument, never baked into the text:
+  // padEnd counts escape sequences and would shorten the visible line.
+  push('─'.repeat(inner), 'gray')
   // A past day shows both buttons; the recap one reads "Regenerate" once a
   // recap exists, which it does by the time this panel is drawn.
-  push(color('dim', '[ Re-analyze with AI ]  [ Regenerate recap ]'))
+  push('[ Re-analyze with AI ]  [ Regenerate recap ]', 'dim')
   blank()
   lines.push(color('gray', '└'.padEnd(PANEL_WIDTH - 1, '─') + '┘'))
   return lines
@@ -247,6 +250,7 @@ async function main(): Promise<void> {
     let summary = ''
     let degraded = false
     let degradedReason: string | null = null
+    let needsAction = false
     let appLogs: string[] = []
     try {
       const { value, logs } = await captureAppLogs(verbose, () =>
@@ -255,6 +259,7 @@ async function main(): Promise<void> {
       summary = value.summary
       degraded = value.degraded === true
       degradedReason = value.degradedReason ?? null
+      needsAction = value.degradedNeedsAction === true
     } catch (error) {
       degraded = true
       degradedReason = error instanceof Error ? error.message : String(error)
@@ -263,7 +268,7 @@ async function main(): Promise<void> {
     const ms = Date.now() - startedAt
 
     // What the person sees, first and largest — the thing being judged.
-    for (const line of renderRecapPanel({ heading: `Timeline · ${dayHeading}`, summary, degraded, degradedReason })) {
+    for (const line of renderRecapPanel({ heading: `Timeline · ${dayHeading}`, summary, degraded, degradedReason, needsAction })) {
       console.log(`  ${line}`)
     }
 

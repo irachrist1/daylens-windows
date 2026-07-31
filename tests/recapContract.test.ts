@@ -80,6 +80,37 @@ test('an unusable reply produces no recap, so the caller can degrade honestly', 
   assert.equal(parseDaySummaryResultText('{"notASummary": "hello"}'), null)
 })
 
+test('a provider failure reaches the panel as a sentence, not as tagged internals', async () => {
+  const { degradedRecapReason } = await import('../src/main/jobs/aiService.ts')
+  const tagged = new Error(
+    'Anthropic Claude\'s credit balance is too low. Top it up with the provider, or switch providers in Settings → AI. ⟦dlerr:{"code":"credit_exhausted"}⟧',
+  )
+  const result = degradedRecapReason(tagged)
+  assert.ok(!result.degradedReason?.includes('dlerr'), `the error sentinel reached the panel: ${result.degradedReason}`)
+  assert.ok(!result.degradedReason?.includes('⟦'), 'the sentinel brackets reached the panel')
+  assert.match(result.degradedReason ?? '', /credit balance is too low/)
+  assert.match(result.degradedReason ?? '', /\.$/, 'the reason is punctuated so it reads as a sentence in the banner')
+})
+
+test('a wall only the person can clear is not dressed up as something a retry fixes', async () => {
+  const { degradedRecapReason } = await import('../src/main/jobs/aiService.ts')
+  const hardWall = degradedRecapReason(new Error('Out of credit. ⟦dlerr:{"code":"credit_exhausted"}⟧'))
+  assert.equal(hardWall.degradedNeedsAction, true, 'exhausted credit needs the person to act, not another click')
+
+  const transient = degradedRecapReason(new Error('Rate limited, try shortly. ⟦dlerr:{"code":"transient_rate_limit"}⟧'))
+  assert.equal(transient.degradedNeedsAction, undefined, 'a transient failure IS worth retrying')
+
+  const timeout = degradedRecapReason(new Error('Day summary timed out'))
+  assert.equal(timeout.degradedNeedsAction, undefined)
+  assert.equal(timeout.degradedReason, 'Day summary timed out.')
+})
+
+test('an unreadable failure still degrades without inventing a reason', async () => {
+  const { degradedRecapReason } = await import('../src/main/jobs/aiService.ts')
+  assert.deepEqual(degradedRecapReason(new Error('')), {})
+  assert.deepEqual(degradedRecapReason(undefined), {})
+})
+
 test('every recap variant is shippable: distinct id, a description, and real directives', () => {
   const ids = RECAP_VARIANTS.map((variant) => variant.id)
   assert.equal(new Set(ids).size, ids.length, `duplicate variant ids: ${ids.join(', ')}`)

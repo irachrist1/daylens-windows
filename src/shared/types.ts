@@ -671,6 +671,10 @@ export interface AIDaySummaryResult {
   /** Why the AI recap could not be generated, in words the person can act on
    *  (provider error, timeout, unreadable reply). Only set when degraded. */
   degradedReason?: string
+  /** The failure is a wall only the person can clear — billing, credit, auth,
+   *  a model that no longer exists. Retrying cannot succeed until they act, so
+   *  the panel must not offer one as if it might. */
+  degradedNeedsAction?: boolean
 }
 
 export type AIAnswerKind =

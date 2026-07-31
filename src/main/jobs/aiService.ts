@@ -41,6 +41,7 @@ import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNar
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummaryParse'
 import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariants'
+import { decodeProviderErrorMeta, isHardProviderWall } from '@shared/aiProviderError'
 import {
   resolveDayContext,
 } from '../core/query/attributionResolvers'
@@ -1945,6 +1946,27 @@ function parseDaySummaryResult(raw: string): AIDaySummaryResult | null {
   return parseDaySummaryResultText(raw)
 }
 
+/** Turn a failed recap call into the words the panel shows and whether a retry
+ *  could possibly help.
+ *
+ *  This reason is put on the result and rendered directly, so it never passes
+ *  through the renderer's error sanitizer: the structured meta the provider
+ *  layer tags onto its messages has to be decoded HERE, or the person reads
+ *  ⟦dlerr:{"code":"credit_exhausted"}⟧ in the middle of the sentence telling
+ *  them what went wrong. */
+export function degradedRecapReason(error: unknown): { degradedReason?: string; degradedNeedsAction?: boolean } {
+  const raw = error instanceof Error ? error.message.trim() : typeof error === 'string' ? error.trim() : ''
+  const { message, meta } = decodeProviderErrorMeta(raw)
+  const clean = message.trim()
+  return {
+    ...(clean ? { degradedReason: /[.!?…]$/.test(clean) ? clean : `${clean}.` } : {}),
+    // A wall only the person can clear (billing, credit, auth, a model that is
+    // gone). Offering "try again" against one of those is a lie — the retry
+    // cannot succeed until they act.
+    ...(meta && isHardProviderWall(meta.code) ? { degradedNeedsAction: true } : {}),
+  }
+}
+
 function currentLocalDateString(): string {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -2024,9 +2046,7 @@ export async function generateDaySummary(
     // person can act on ("AI access is paused…", "…timed out"); pass that
     // reason through instead of burying it in the log (DEV-279).
     console.warn(`[ai] day_summary failed for ${dateStr}:`, error)
-    const message = error instanceof Error ? error.message.trim() : ''
-    const reason = message ? (/[.!?…]$/.test(message) ? message : `${message}.`) : undefined
-    return { ...fallback, degraded: true, degradedReason: reason }
+    return { ...fallback, degraded: true, ...degradedRecapReason(error) }
   }
 }
 
