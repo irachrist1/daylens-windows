@@ -6140,6 +6140,10 @@ function buildTimelineBlocksForDay(
   options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): WorkContextBlock[] {
   const shouldMaterialize = options.materialize ?? true
+  // Materializing is the caller's intent; this is the store's capability. The
+  // MCP server opens the day store read-only, where repair-on-read — which
+  // deliberately writes even on a passive read — threw mid-read instead.
+  const storeIsWritable = !db.readonly
   // forceRebuild (the absence-repair path in analyzeDay.ts): reconstruct the
   // day from its sessions through the full pipeline even when it is "processed".
   const forceRebuild = (options.forceRebuild ?? false) && shouldMaterialize
@@ -6183,13 +6187,13 @@ function buildTimelineBlocksForDay(
         const analysisSurvived = repaired.some((block) => !block.isLive
           && (block.label.source === 'ai' || block.label.source === 'workflow' || block.label.source === 'user'))
         if (analysisSurvived || persistedDayHasCorrections(db, dateStr)) {
-          persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
+          if (storeIsWritable) persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
           flagSuspiciousUnbrokenBlocks(dateStr, repaired)
           return repaired
         }
         // No label or correction survived the rebuild — the day is effectively
         // un-analyzed again and falls through to the coarse read (DEV-268).
-        invalidateTimelineDay(db, dateStr)
+        if (storeIsWritable) invalidateTimelineDay(db, dateStr)
         forceMaterialize = true
       } else {
         // Heuristic bump heal-on-read: a processed day whose blocks were
@@ -6198,7 +6202,7 @@ function buildTimelineBlocksForDay(
         // policy documented at TIMELINE_HEURISTIC_VERSION). When the heal
         // declines, the sealed shape is kept and only its deterministic
         // facts refresh below.
-        if (persisted.some((block) => block.heuristicVersion !== TIMELINE_HEURISTIC_VERSION)) {
+        if (storeIsWritable && persisted.some((block) => block.heuristicVersion !== TIMELINE_HEURISTIC_VERSION)) {
           const healed = healStaleShapePersistedDay(db, dateStr, persisted, sessions)
           if (healed) {
             flagSuspiciousUnbrokenBlocks(dateStr, healed)
@@ -6210,7 +6214,7 @@ function buildTimelineBlocksForDay(
         // at the time — and category colors every surface (timeline.md §3.4).
         // Refresh just those deterministic facts in place so old days converge
         // on today's categorization without an AI call or touching a label.
-        refreshStaleBlockCategoryFacts(db, persisted)
+        if (storeIsWritable) refreshStaleBlockCategoryFacts(db, persisted)
         flagSuspiciousUnbrokenBlocks(dateStr, persisted)
         return persisted
       }
@@ -6229,7 +6233,7 @@ function buildTimelineBlocksForDay(
 
   const computed = rebuildDayBlocksWithCarriedLabels(db, dateStr, sessions)
   flagSuspiciousUnbrokenBlocks(dateStr, computed)
-  if (shouldMaterialize) {
+  if (shouldMaterialize && storeIsWritable) {
     persistTimelineDayIfChanged(db, dateStr, sessions, computed, forceMaterialize)
   }
   return computed

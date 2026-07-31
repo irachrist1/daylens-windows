@@ -41,6 +41,8 @@ import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNar
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummaryParse'
 import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariants'
+import { claudeCodeChatAvailable, runClaudeCodeChat } from '../agent/claudeCodeChat'
+import { buildAgentSystemPrompt } from '../agent/systemPrompt'
 import { decodeProviderErrorMeta, isHardProviderWall } from '@shared/aiProviderError'
 import {
   resolveDayContext,
@@ -3489,9 +3491,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     agentConfig = { ...agentConfig, model: modelOverride }
   }
 
-  // CLI providers can't make structured tool calls. Say so in one line and
-  // point to Settings — never silently swap providers (invariant 12).
-  if (!providerSupportsAgentTools(agentConfig.provider, agentConfig.transport)) {
+  // A CLI provider cannot make the structured tool calls this loop needs, but
+  // the Claude CLI can run a loop of its own over the Daylens MCP server. That
+  // branch is taken below, once the system prompt it needs has been built.
+  const cliCannotDriveThisLoop = !providerSupportsAgentTools(agentConfig.provider, agentConfig.transport)
+  const claudeCodeCanAnswer = cliCannotDriveThisLoop
+    && agentConfig.provider === 'claude-cli'
+    && claudeCodeChatAvailable()
+  if (cliCannotDriveThisLoop && !claudeCodeCanAnswer) {
     const cliNotice = `Chat answers now come from a live agent over your real data, which needs an API provider — ${providerLabel(agentConfig.provider)} runs through a CLI and can't call tools. Pick an API provider in Settings → AI (or a per-chat model from the catalog) and ask me again.`
     await stream.streamText(cliNotice)
     return persistTurn({
@@ -3528,6 +3535,67 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   const trackingStart = firstSessionRow?.t
     ? new Date(firstSessionRow.t).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : null
+
+  // Chat on the local Claude Code, driving Daylens' own read-only MCP tools.
+  // It gets the same voice contract and operating rules as the in-app agent,
+  // so the answer is held to the same grounding and honesty; what it does not
+  // get yet is citations, memory writes, correction previews, or streaming.
+  // The answer arrives whole.
+  if (claudeCodeCanAnswer) {
+    const claudeTool = await resolveCLITool('claude')
+    if (!claudeTool) {
+      const missing = 'The Claude CLI is no longer on this machine, so chat has nothing to answer with. Reconnect it in Settings → AI.'
+      await stream.streamText(missing)
+      return persistTurn({
+        assistantText: missing,
+        answerKind: 'error',
+        sourceKind: 'deterministic',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    }
+    try {
+      const text = await runClaudeCodeChat({
+        threadId: String(threadId ?? 'new'),
+        question,
+        systemPrompt: buildAgentSystemPrompt({
+          now: new Date(),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          trackingStart,
+          providerLabel: providerLabel(agentConfig.provider),
+          model: agentConfig.model,
+          homeDir: os.homedir(),
+          extraSystem,
+        }),
+        model: agentConfig.model,
+        executablePath: claudeTool.executablePath,
+        signal: getAmbientAbortSignal(),
+      })
+      await stream.streamText(text)
+      return persistTurn({
+        assistantText: text,
+        answerKind: 'freeform_chat',
+        sourceKind: 'freeform',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      // Never silently fall through to another provider (invariant 12): say
+      // what failed and leave the person's choice of provider alone.
+      const message = error instanceof Error ? error.message : String(error)
+      const notice = `Your local Claude Code could not answer this one: ${message}`
+      console.warn('[ai:chat] claude-code path failed:', error)
+      await stream.streamText(notice)
+      return persistTurn({
+        assistantText: notice,
+        answerKind: 'error',
+        sourceKind: 'deterministic',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    }
+  }
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[ai:chat] agent turn → provider=${agentConfig.provider} model=${agentConfig.model}`)
