@@ -20,7 +20,7 @@ async function getStore() {
   return _store
 }
 
-const DEFAULTS: AppSettings = {
+export const DEFAULTS: AppSettings = {
   mcpServers: [],
   granolaAccessEnabled: true,
   terminalAccessEnabled: false,
@@ -47,7 +47,11 @@ const DEFAULTS: AppSettings = {
   openrouterModel: 'anthropic/claude-sonnet-4.6',
   aiFallbackOrder: ['anthropic', 'openai', 'google'],
   aiModelStrategy: 'balanced',
-  aiChatProvider: 'anthropic',
+  // Undefined means "chat has no opinion of its own, follow Settings". A
+  // concrete default here made the `?? aiProvider` fallback in providerRouting
+  // dead: chat stayed pinned to Anthropic forever while Settings said something
+  // else, so connecting the Claude CLI left chat still billing the API.
+  aiChatProvider: undefined,
   aiBackgroundEnrichment: false,
   aiActiveBlockPreview: false,
   aiPromptCachingEnabled: true,
@@ -63,7 +67,7 @@ const DEFAULTS: AppSettings = {
   morningNudgeEnabled: true,
   weeklyBriefEnabled: true,
   activityFreeNotificationText: false,
-  interpretationAgentEnabled: false,
+  interpretationAgentEnabled: true,
   distractionAlertThresholdMinutes: 10,
   distractionAlertsEnabled: true,
   mcpServerEnabled: false,
@@ -145,7 +149,7 @@ export function getSettings(): AppSettings {
     openrouterModel: liveModelId(_store.get('openrouterModel', 'anthropic/claude-sonnet-4.6') as string),
     aiFallbackOrder: (_store.get('aiFallbackOrder', ['anthropic', 'openai', 'google']) as AppSettings['aiFallbackOrder']),
     aiModelStrategy: (_store.get('aiModelStrategy', 'balanced') as AppSettings['aiModelStrategy']),
-    aiChatProvider: (_store.get('aiChatProvider', 'anthropic') as AppSettings['aiChatProvider']),
+    aiChatProvider: (_store.get('aiChatProvider', undefined) as AppSettings['aiChatProvider']),
     aiBackgroundEnrichment: (_store.get('aiBackgroundEnrichment', false) as boolean),
     aiActiveBlockPreview: (_store.get('aiActiveBlockPreview', false) as boolean),
     aiPromptCachingEnabled: (_store.get('aiPromptCachingEnabled', true) as boolean),
@@ -161,7 +165,7 @@ export function getSettings(): AppSettings {
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     weeklyBriefEnabled: (_store.get('weeklyBriefEnabled', true) as boolean),
     activityFreeNotificationText: (_store.get('activityFreeNotificationText', false) as boolean),
-    interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', false) as boolean),
+    interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', true) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
