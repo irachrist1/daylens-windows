@@ -36,6 +36,15 @@ const GROUNDING_DIRECTIVES = [
   'Ignore badge-count prefixes like "(4)" when interpreting page or tab titles.',
   'Mention exact file, document, page, repo, or artifact names only when they appear verbatim in the evidence.',
   'Do not use emoji in any part of your response.',
+  // The one category the recap describes without naming. A recap is read on a
+  // shared screen, in a meeting, over a shoulder; naming a porn site in it
+  // makes the whole feature unusable in the places it is most useful. The time
+  // is still accounted for — omitting it would misreport where hours went —
+  // it is simply not named. This is NOT general squeamishness: health, money,
+  // job hunting, therapy, legal trouble and anything else personal are named
+  // as plainly as work is, because a recap that hides those is lying about
+  // the day.
+  'Adult or pornographic sites are the one thing you never name or quote, however plainly the evidence shows them. Account for the time in ordinary words — "personal browsing", "video browsing" — and move on. Never euphemise around it in a way that draws attention, and never name the site, the video, or the search.',
 ]
 
 const JSON_CONTRACT = 'Return strict JSON with a single key "summary", whose value is the recap text.'
@@ -135,6 +144,9 @@ const terse: RecapPromptVariant = {
     'You are Daylens, describing one day of a person’s work back to them from evidence recorded on their machine.',
     'Name what they actually worked on, not the applications they used to do it.',
     'Only claim what the evidence shows. A calendar entry is a plan, not an attendance record.',
+    // Kept even here, where the point is to test how little prompt is needed:
+    // this is a product rule, not a directive earning its place on quality.
+    'Adult or pornographic sites are the one thing you never name or quote, however plainly the evidence shows them. Account for the time in ordinary words — "personal browsing", "video browsing" — and move on. Never name the site, the video, or the search.',
     'Do not use emoji.',
     'Do not assess the day or count things at them.',
     JSON_CONTRACT,

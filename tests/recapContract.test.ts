@@ -123,6 +123,22 @@ test('every recap variant is shippable: distinct id, a description, and real dir
   }
 })
 
+test('every variant carries the one naming rule, and carries it as the only one', () => {
+  // A recap gets read on a shared screen. Naming a porn site in it makes the
+  // feature unusable exactly where it is most useful — but the time is still
+  // accounted for, and nothing ELSE personal gets the same treatment: health,
+  // money, job hunting are named as plainly as work.
+  for (const variant of RECAP_VARIANTS) {
+    const directives = variant.directives.join('\n')
+    assert.match(directives, /Adult or pornographic sites/, `${variant.id} can name a porn site in a recap`)
+    assert.match(directives, /Account for the time/, `${variant.id} may drop the time instead of describing it`)
+    assert.ok(
+      !/\b(health|medical|therapy|job hunt|finances?)\b/i.test(directives),
+      `${variant.id} extends the naming rule past adult content, which would hide real parts of the day`,
+    )
+  }
+})
+
 test('the shipped variant names something that exists', () => {
   assert.equal(shippedRecapVariant().id, SHIPPED_RECAP_VARIANT_ID)
 })
