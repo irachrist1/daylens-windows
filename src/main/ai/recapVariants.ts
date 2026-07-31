@@ -162,8 +162,13 @@ const terse: RecapPromptVariant = {
 
 export const RECAP_VARIANTS: RecapPromptVariant[] = [shipped, evidenceFirst, colleague, terse]
 
-/** The variant the app uses. Changed when the lab produces a winner. */
-export const SHIPPED_RECAP_VARIANT_ID = 'shipped'
+/** The variant the app uses. Changed when the lab produces a winner.
+ *
+ *  Chosen by reading all four against two real days through the lab. It was
+ *  clean on both where evidence-first tripped the voice check and terse — which
+ *  carries none of the shared directives — opened a day with a stat dump in raw
+ *  app names. It is also faster than everything except terse. */
+export const SHIPPED_RECAP_VARIANT_ID = 'colleague'
 
 export function recapVariantById(id: string): RecapPromptVariant | null {
   return RECAP_VARIANTS.find((variant) => variant.id === id) ?? null

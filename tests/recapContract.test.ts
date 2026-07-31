@@ -11,9 +11,10 @@ import { JOB_DEFINITIONS } from '../src/main/services/aiOrchestration.ts'
 import { parseDaySummaryResultText } from '../src/main/lib/daySummaryParse.ts'
 import { RECAP_VARIANTS, SHIPPED_RECAP_VARIANT_ID, shippedRecapVariant } from '../src/main/ai/recapVariants.ts'
 
-// Measured reality, not a guess: 15s never completed on real days and served
-// the factual fallback instead. Aligned with the wrapped narrative's 90s.
-const MEASURED_RECAP_FLOOR_MS = 90_000
+// Measured through the recap lab against real days: 24-52s on the API, 33-77s
+// through the Claude CLI. The floor is double the worst observed run, because
+// the worst observed run is not the worst possible day.
+const MEASURED_RECAP_FLOOR_MS = 150_000
 
 test('the recap job is given enough time to finish on a real day', () => {
   const definition = JOB_DEFINITIONS.day_summary
@@ -39,14 +40,15 @@ test('the recap actually holds itself to that budget', async () => {
   )
 })
 
-test('the recap runs on the same budget as the wrapped narrative it is measured against', () => {
-  // Not an arbitrary coupling: both are a quality-tier call over a whole day's
-  // enriched evidence. If one moves on new measurements, the other should be
-  // re-measured rather than drifting apart by accident.
-  assert.equal(
-    JOB_DEFINITIONS.day_summary.timeoutMs,
-    JOB_DEFINITIONS.wrapped_narrative.timeoutMs,
-    'day_summary and wrapped_narrative budgets have drifted apart',
+test('the recap gets more room than the wrapped narrative, because it is slower in practice', () => {
+  // These were aligned on the assumption that a day's recap and a day's deck
+  // cost about the same. Measuring killed that: on a CLI provider the recap
+  // pays process start plus an agent loop per call, and ran past every
+  // wrapped-narrative budget. Kept as an assertion so re-aligning them is a
+  // decision someone makes, not something that happens quietly.
+  assert.ok(
+    JOB_DEFINITIONS.day_summary.timeoutMs > JOB_DEFINITIONS.wrapped_narrative.timeoutMs,
+    'the recap budget fell back to the wrapped narrative’s; it was measured slower than that',
   )
 })
 

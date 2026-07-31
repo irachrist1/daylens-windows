@@ -143,15 +143,16 @@ export const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'day_summary',
     screen: 'timeline_day',
     foreground: true,
-    // 15s was never measured against a real day and the recap simply never
-    // finished: consecutive real days served the factual fallback with "Day
-    // summary timed out" (DEV-292). Same failure wrapped_narrative had at 40s
-    // against a 54s reality. The recap runs on the person's CHOSEN model — the
-    // per-tier tables no longer decide anything — over the voice contract, a
-    // memory block, and a ten-block evidence scaffold, so it is a quality-tier
-    // call whatever this job's modelStrategy claims. Aligned with the wrapped
-    // narrative's 90s until the recap lab's measurements say otherwise.
-    timeoutMs: Number(process.env.DAYLENS_RECAP_TIMEOUT_MS) || 90_000,
+    // Measured, not guessed. 15s never finished and real days served the
+    // factual fallback with "Day summary timed out" (DEV-292). The recap lab
+    // then measured a 13-block day end to end: 24-52s through the API, 33-77s
+    // through the Claude CLI, whose process start and agent loop cost several
+    // times the API's latency. 150s is roughly double the worst run, because
+    // the worst run is not the worst day — and a recap that arrives late is
+    // still a recap, while one that expires is a fallback line. Deliberately
+    // NOT aligned with wrapped_narrative's 90s any more: a CLI-backed recap is
+    // slower than a deck on the API.
+    timeoutMs: Number(process.env.DAYLENS_RECAP_TIMEOUT_MS) || 150_000,
     cachePolicy: 'off',
     modelStrategy: 'balanced',
   },
