@@ -1,14 +1,11 @@
+import Link from "next/link";
 import { MarketingFooter, MarketingInnerNav } from "../components/MarketingChrome";
-import {
-  LINUX_STATUS_HREF,
-  UNIFIED_DESKTOP_ISSUES_URL,
-  UNIFIED_DESKTOP_REPO_URL,
-} from "../lib/platformLinks";
+import { LINUX_STATUS_HREF } from "../lib/platformLinks";
 
 export const metadata = {
   title: "Docs — Daylens",
   description:
-    "Everything you need to know about Daylens: timeline reconstruction, the Apps and AI surfaces, privacy, and platform status.",
+    "How Daylens remembers your workday, answers in plain language, and stays private on your laptop.",
 };
 
 const TOC = [
@@ -51,9 +48,9 @@ export default function DocsPage() {
               maxWidth: "44ch",
             }}
           >
-            Daylens is a local-first work-history product. These docs explain what is already real
-            today, what still needs validation, and where the public site intentionally stays
-            conservative.
+            Daylens is a private memory of what you do on your laptop — for you to ask in
+            plain language, and for the AI tools you already use. These docs explain what is
+            real today and where we stay conservative.
           </p>
         </div>
       </section>
@@ -139,7 +136,7 @@ export default function DocsPage() {
                 </p>
                 <ul className="lp-docs-bullets">
                   {[
-                    "The unified desktop repo is now the cross-platform source of truth for macOS, Windows, and Linux.",
+                    "Daylens is one cross-platform desktop product for macOS, Windows, and Linux.",
                     "macOS install, onboarding, and menu-bar polish are implemented, but the final packaged-app feel still needs human validation.",
                     "A deterministic daily, weekly, and monthly recap now exists inside the AI surface, but it is not yet fully shipped and proven.",
                     "Persistent AI threads, artifacts, focus flows, exports, and several settings refinements are in the product, with many still marked implemented pending verification.",
@@ -202,22 +199,25 @@ export default function DocsPage() {
               <section id="ai" style={{ scrollMarginTop: 80 }} className="lp-docs-section">
                 <h2 className="text-headline lp-docs-section-title">AI</h2>
                 <p className="lp-docs-body">
-                  The AI surface turns tracked local evidence into grounded questions and outputs.
-                  Starter prompts, freeform chat, tables, charts, artifact creation, and feedback all
-                  live here. The AI layer is orchestration over local data, not the primary runtime of
-                  the product.
+                  The AI surface is how Daylens memory becomes useful in conversation. Ask what you
+                  got done, where an afternoon went, or what you were last deep in — and get an
+                  answer grounded in the same facts as Timeline and Apps. You can also bring that
+                  context into the AI tools you already use when you opt in.
                 </p>
                 <p className="lp-docs-body">
-                  That also means the truthfulness bar is higher here. Deterministic recap cards and
-                  durable AI state are implemented now, while provider-backed packaged flows still
-                  need broader real-world proof before they should be treated as fully settled.
+                  Starter prompts, freeform chat, tables, charts, artifacts, and feedback all live
+                  here. The AI layer is orchestration over local data, not the primary runtime of the
+                  product. Deterministic recap cards and durable AI state are implemented now, while
+                  provider-backed packaged flows still need broader real-world proof before they
+                  should be treated as fully settled.
                 </p>
                 <div className="lp-docs-examples">
                   {[
-                    "How much time did I spend on Client X this week?",
-                    "What was I doing between 2 and 4 PM on Wednesday?",
-                    "Show me everything I touched for Project X.",
-                    "Create a summary report I can share with a client.",
+                    "What did I actually get done this week?",
+                    "What did I work on for Acme?",
+                    "Where did Tuesday afternoon go?",
+                    "What did I read before that meeting?",
+                    "Draft my weekly update report from what I got done this week.",
                   ].map((q) => (
                     <div key={q} className="lp-docs-example">
                       <span className="lp-docs-example-q">Q</span>
@@ -229,7 +229,8 @@ export default function DocsPage() {
                   <span className="lp-docs-infobox-label">Note:</span>
                   AI-powered answers depend on a configured provider and send activity summaries such
                   as app names, titles, durations, and related evidence needed to answer the query.
-                  They do not rely on screenshots or keystroke capture.
+                  They do not rely on screenshots or keystroke capture. Your activity database stays
+                  on your laptop; what leaves is what you choose to send when you ask.
                 </div>
               </section>
 
@@ -315,7 +316,6 @@ export default function DocsPage() {
                     ["No screenshots", "Daylens uses window, app, browser, and artifact evidence rather than grabbing screen images."],
                     ["No keylogging", "The product does not record what you type."],
                     ["Optional sync", "Workspace and web access flows are additive, not required for the core desktop experience."],
-                    ["Open source", "The public repos are available so behavior can be inspected instead of guessed at."],
                   ].map(([title, body]) => (
                     <div key={title as string} className="lp-docs-privacy-item">
                       <span className="lp-docs-check">✓</span>
@@ -354,7 +354,7 @@ export default function DocsPage() {
                     },
                     {
                       q: "Where is the source of truth?",
-                      a: "The unified desktop source of truth currently lives in the daylens repository, which carries the cross-platform product and release docs.",
+                      a: "Your local Daylens database on your machine. Optional sync and web access are additive; they do not replace the desktop history store.",
                     },
                   ].map(({ q, a }) => (
                     <details key={q} className="lp-docs-faq-item">
@@ -392,22 +392,9 @@ export default function DocsPage() {
                   Need the current implementation status rather than the product overview?
                 </p>
                 <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                  <a
-                    href={UNIFIED_DESKTOP_ISSUES_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="lp-btn-ghost-dark"
-                  >
-                    Review launch status →
-                  </a>
-                  <a
-                    href={UNIFIED_DESKTOP_REPO_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="lp-btn-ghost-dark"
-                  >
-                    Browse source →
-                  </a>
+                  <Link href="/roadmap" className="lp-btn-ghost-dark">
+                    See the roadmap →
+                  </Link>
                 </div>
               </div>
             </article>

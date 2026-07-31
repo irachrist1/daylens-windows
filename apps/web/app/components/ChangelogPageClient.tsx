@@ -218,16 +218,6 @@ export function ChangelogPageClient() {
                     </section>
                   ))}
 
-                  <div className="lp-ray-release-footer">
-                    <a
-                      href={release.linkUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="lp-ray-release-link"
-                    >
-                      {release.linkLabel}
-                    </a>
-                  </div>
                 </div>
               </article>
             ))}

@@ -9,7 +9,6 @@ import { assetPath } from "../lib/basePath";
 import {
   LINUX_STATUS_HREF,
   MAC_DOWNLOAD_HREF,
-  UNIFIED_DESKTOP_REPO_URL,
   WINDOWS_DOWNLOAD_HREF,
 } from "../lib/platformLinks";
 
@@ -405,19 +404,6 @@ export function LandingClient() {
               <article className="dlx-bento__cell">
                 <h3>It doesn&apos;t phone home.</h3>
                 <p>No analytics. No usage beacons. The only network call is the one you ask for.</p>
-              </article>
-
-              <article className="dlx-bento__cell dlx-bento__cell--code">
-                <h3>The repo is on GitHub.</h3>
-                <p>Audit it, fork it, file an issue. No lock-in, ever.</p>
-                <a
-                  href={UNIFIED_DESKTOP_REPO_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="dlx-bento__link"
-                >
-                  View on GitHub <ArrowIcon />
-                </a>
               </article>
             </div>
           </div>
