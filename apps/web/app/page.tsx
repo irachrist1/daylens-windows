@@ -1,32 +1,32 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { V2Landing } from "./landing/V2Landing";
+import { HackathonLanding } from "./hackathon/components/HackathonLanding";
 import { appPath, assetPath } from "@/app/lib/basePath";
 
 export const metadata: Metadata = {
-  title: "Daylens | See your whole day",
+  title: "Daylens — Your digital life, made searchable on demand",
   description:
-    "Daylens turns the work scattered across your computer into one clear, searchable memory of what you actually got done.",
+    "Daylens watches what you do on your laptop, keeps it private, and lets you ask anything in plain language — or bring that context into the AI tools you already use.",
   openGraph: {
-    title: "Daylens | See your whole day",
+    title: "Daylens — Your digital life, made searchable on demand",
     description:
-      "Turn the work scattered across your computer into one clear, searchable memory of what you actually got done.",
+      "Ask anything about what you did on your laptop. Bring that context into the AI tools you already use. Private by default.",
     url: "/daylens",
     images: [
       {
-        url: assetPath("/hackathon/01-timeline-day.png"),
+        url: assetPath("/hackathon/02-timeline-week.png"),
         width: 1280,
         height: 800,
-        alt: "Daylens today view",
+        alt: "Daylens week view",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Daylens | See your whole day",
+    title: "Daylens — Your digital life, made searchable on demand",
     description:
-      "A local-first memory for the work you do on your computer.",
-    images: [assetPath("/hackathon/01-timeline-day.png")],
+      "Your workday, answerable — for you and the AI tools you already use.",
+    images: [assetPath("/hackathon/02-timeline-week.png")],
   },
 };
 
@@ -40,5 +40,5 @@ export default async function LandingPage({
   if (params.token && /^[0-9a-f]{32}$/i.test(params.token)) {
     redirect(appPath(`/link?token=${params.token}`));
   }
-  return <V2Landing />;
+  return <HackathonLanding />;
 }
