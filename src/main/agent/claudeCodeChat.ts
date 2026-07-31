@@ -2,8 +2,7 @@
 // Claude Code runs the agent loop; Daylens supplies the tools and the prompt.
 //
 // Missing versus the in-app agent: citations, context-packet inspection,
-// memory writes, correction previews, token streaming. The answer arrives
-// whole.
+// memory writes, correction previews.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -26,22 +25,23 @@ export function claudeCodeChatAvailable(): boolean {
   }
 }
 
-interface ClaudeCodeJsonResult {
-  result?: unknown
-  session_id?: unknown
-  is_error?: unknown
-  subtype?: unknown
-}
-
-export async function runClaudeCodeChat(input: {
+export interface ClaudeCodeChatInput {
   threadId: string
   question: string
   systemPrompt: string
   model: string | null
   executablePath: string
+  /** Answer text as it is written. */
+  onDelta?: (delta: string) => void | Promise<void>
+  /** What the agent is doing while it gathers evidence. The answer only starts
+   *  once the tool calls are done, so without this the person watches a blank
+   *  for the longest part of the turn. */
+  onStatus?: (label: string) => void
   signal?: AbortSignal
   timeoutMs?: number
-}): Promise<string> {
+}
+
+export async function runClaudeCodeChat(input: ClaudeCodeChatInput): Promise<string> {
   const mcp = getMcpServerConfig()
   if (!mcp) throw new Error('The Daylens MCP server could not be located, so Claude Code has no tools to answer with.')
   if (input.signal?.aborted) throw abortError()
@@ -55,49 +55,71 @@ export async function runClaudeCodeChat(input: {
   const resumeSession = sessionByThread.get(input.threadId)
   const args = [
     '-p', input.question,
-    '--output-format', 'json',
+    // Deltas as they are written, so the answer appears instead of the person
+    // watching "Thinking" for half a minute. --verbose is required for
+    // stream-json under --print.
+    '--output-format', 'stream-json',
+    '--include-partial-messages',
+    '--verbose',
     '--mcp-config', configPath,
+    // Without these the turn loads every plugin, skill and MCP server on the
+    // machine: measured at 102k tokens of context for a one-sentence answer,
+    // and it blocks on third-party servers that are failing or unauthorised.
+    '--strict-mcp-config',
+    '--setting-sources', '',
     // The Daylens server and nothing else: no file edits, no shell, no network.
     '--allowedTools', 'mcp__daylens',
-    '--append-system-prompt', input.systemPrompt,
+    // Replaces Claude Code's coding-agent prompt rather than appending to it.
+    // Daylens' agent prompt is a complete operating contract, and the default
+    // is a large set of instructions about editing files this turn cannot do.
+    '--system-prompt', input.systemPrompt,
     ...(input.model ? ['--model', input.model] : []),
     ...(resumeSession ? ['--resume', resumeSession] : []),
   ]
 
   try {
-    const raw = await runCli(input.executablePath, args, input.signal, input.timeoutMs ?? 180_000)
-    let parsed: ClaudeCodeJsonResult
-    try {
-      parsed = JSON.parse(raw) as ClaudeCodeJsonResult
-    } catch {
-      // A CLI that answered in plain prose still answered.
-      return raw.trim()
-    }
-    if (typeof parsed.session_id === 'string' && parsed.session_id) {
-      sessionByThread.set(input.threadId, parsed.session_id)
-    }
-    const text = typeof parsed.result === 'string' ? parsed.result.trim() : ''
-    if (parsed.is_error === true || !text) {
-      throw new Error(
-        typeof parsed.subtype === 'string' && parsed.subtype
-          ? `Claude Code could not finish the answer (${parsed.subtype}).`
-          : 'Claude Code returned no answer.',
-      )
-    }
-    return text
+    return await runStreamingCli(input, args)
   } finally {
     fs.promises.unlink(configPath).catch(() => undefined)
   }
 }
 
-function runCli(
-  executablePath: string,
-  args: string[],
-  signal: AbortSignal | undefined,
-  timeoutMs: number,
-): Promise<string> {
+interface StreamLine {
+  type?: string
+  subtype?: string
+  session_id?: string
+  is_error?: boolean
+  result?: string
+  event?: { type?: string; delta?: { type?: string; text?: string } }
+  message?: { content?: Array<{ type?: string; name?: string }> }
+}
+
+const TOOL_STATUS: Record<string, string> = {
+  getDaySummary: 'Reading your day',
+  getWeekSummary: 'Reading your week',
+  getDayComparison: 'Comparing your days',
+  getAppUsage: 'Checking time in your apps',
+  searchSessions: 'Searching your timeline',
+  searchArtifacts: 'Looking through files and pages',
+  searchFileMentions: 'Looking for that file',
+  getBlockAtTime: 'Looking at that time of day',
+  getGitActivity: 'Checking what you committed',
+  getCalendarEvents: 'Checking your calendar',
+  getAttributionContext: 'Checking who that work was for',
+  listClients: 'Checking your clients',
+  getWindowTitleContext: 'Reading what was on screen',
+  getLongestFocusStretch: 'Finding your longest stretch',
+  getDistractionProfile: 'Looking at where focus broke',
+  getMostSurprisingFact: 'Looking for what stands out',
+}
+
+function statusForTool(toolName: string): string {
+  return TOOL_STATUS[toolName.replace(/^mcp__daylens__/, '')] ?? 'Looking through your day'
+}
+
+function runStreamingCli(input: ClaudeCodeChatInput, args: string[]): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(executablePath, args, {
+    const child = spawn(input.executablePath, args, {
       // Claude Code reads CLAUDE.md from its cwd; home keeps a chat answer from
       // being steered by whatever repository happens to be open.
       cwd: os.homedir(),
@@ -105,32 +127,80 @@ function runCli(
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
-    let stdout = ''
+    let streamed = ''
+    let finalResult: string | null = null
+    let failure: string | null = null
     let stderr = ''
+    let pending = ''
     let settled = false
-    const finish = (fn: () => void) => { if (!settled) { settled = true; cleanup(); fn() } }
 
+    const finish = (fn: () => void) => { if (!settled) { settled = true; cleanup(); fn() } }
     const timer = setTimeout(() => {
       child.kill('SIGTERM')
       finish(() => reject(new Error('Claude Code took too long to answer.')))
-    }, timeoutMs)
-
+    }, input.timeoutMs ?? 180_000)
     const onAbort = () => {
       child.kill('SIGTERM')
       finish(() => reject(abortError()))
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
-
+    input.signal?.addEventListener('abort', onAbort, { once: true })
     function cleanup() {
       clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
+      input.signal?.removeEventListener('abort', onAbort)
     }
 
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+    const handleLine = (line: string) => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+      let parsed: StreamLine
+      try {
+        parsed = JSON.parse(trimmed) as StreamLine
+      } catch {
+        return
+      }
+      if (parsed.session_id) sessionByThread.set(input.threadId, parsed.session_id)
+
+      if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta') {
+        const delta = parsed.event.delta
+        if (delta?.type === 'text_delta' && delta.text) {
+          streamed += delta.text
+          void input.onDelta?.(delta.text)
+        }
+        return
+      }
+      if (parsed.type === 'assistant' && input.onStatus) {
+        for (const part of parsed.message?.content ?? []) {
+          if (part.type === 'tool_use' && part.name) input.onStatus(statusForTool(part.name))
+        }
+        return
+      }
+      if (parsed.type === 'result') {
+        if (parsed.is_error) {
+          failure = parsed.subtype
+            ? `Claude Code could not finish the answer (${parsed.subtype}).`
+            : 'Claude Code returned no answer.'
+        } else if (typeof parsed.result === 'string') {
+          finalResult = parsed.result.trim()
+        }
+      }
+    }
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      pending += chunk.toString()
+      const lines = pending.split('\n')
+      pending = lines.pop() ?? ''
+      for (const line of lines) handleLine(line)
+    })
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
     child.on('error', (error) => finish(() => reject(error)))
     child.on('close', (code) => finish(() => {
-      if (code === 0) return resolve(stdout)
+      if (pending) handleLine(pending)
+      if (failure) return reject(new Error(failure))
+      // The streamed deltas are what the person already read; the result field
+      // is the same text. Preferring the streamed copy keeps the transcript and
+      // the screen identical.
+      const answer = streamed.trim() || finalResult || ''
+      if (code === 0 && answer) return resolve(answer)
       const detail = stderr.trim().split('\n').slice(-2).join(' ').slice(0, 300)
       reject(new Error(detail || `Claude Code exited with code ${code}.`))
     }))

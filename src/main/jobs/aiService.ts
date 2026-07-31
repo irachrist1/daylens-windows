@@ -289,6 +289,16 @@ function createChatStreamAccumulator(requestId: string | null | undefined, optio
         snapshot,
       }))
     },
+    /** A line saying what is happening, with no text added to the answer. */
+    async pushStatus(status: string) {
+      if (!status || !requestId || !options?.onStreamEvent) return
+      await Promise.resolve(options.onStreamEvent({
+        requestId,
+        delta: '',
+        snapshot,
+        status,
+      }))
+    },
     async streamText(text: string) {
       if (!text) return
       const nextText = snapshot && text.startsWith(snapshot)
@@ -3539,8 +3549,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   // Chat on the local Claude Code, driving Daylens' own read-only MCP tools.
   // It gets the same voice contract and operating rules as the in-app agent,
   // so the answer is held to the same grounding and honesty; what it does not
-  // get yet is citations, memory writes, correction previews, or streaming.
-  // The answer arrives whole.
+  // get yet is citations, memory writes, or correction previews.
   if (claudeCodeCanAnswer) {
     const claudeTool = await resolveCLITool('claude')
     if (!claudeTool) {
@@ -3569,8 +3578,12 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         }),
         model: agentConfig.model,
         executablePath: claudeTool.executablePath,
+        onDelta: (delta) => stream.push(delta),
+        onStatus: (label) => { void stream.pushStatus(label) },
         signal: getAmbientAbortSignal(),
       })
+      // Already on screen delta by delta; this only fills a gap if the CLI
+      // returned a final result the stream never carried.
       await stream.streamText(text)
       return persistTurn({
         assistantText: text,
