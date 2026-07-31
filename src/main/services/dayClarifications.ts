@@ -27,6 +27,14 @@ import { invalidateProjectionScope } from '../core/projections/invalidation'
 // day; a short block is folded, not interrogated.
 const MIN_UNNAMED_BLOCK_SECONDS = 30 * 60
 const MIN_MEETING_MINUTES = 15
+// A scheduled event is only askable once it is OVER. A meeting still ahead on
+// the calendar has trivially no supporting evidence, so without this the day
+// asks about every future event on it ("were you in the 3pm?" at 10am) and an
+// answer would write an attendance mark for a meeting that has not happened.
+// The pad past the end matches the matcher's MATCH_PAD_MS: the tail of a call
+// is still being flushed into the facts for a few minutes after it ends, and
+// asking inside that window means asking before the evidence arrives.
+const MEETING_ENDED_GRACE_MS = 10 * 60 * 1000
 // The person's attention is the scarce resource: at most a couple of questions
 // per day, the most material first.
 const MAX_CLARIFICATIONS = 2
@@ -103,6 +111,7 @@ function skipClarification(db: Database.Database, date: string, clarificationId:
 export function detectDayClarifications(
   db: Database.Database,
   payload: DayTimelinePayload,
+  nowMs: number = Date.now(),
 ): TimelineClarification[] {
   const skipped = getSkippedClarificationIds(db, payload.date)
   const [dayStartMs] = localDayBounds(payload.date)
@@ -112,6 +121,7 @@ export function detectDayClarifications(
   // person. A calendar row proves scheduling, not attendance — so ask.
   for (const meeting of payload.scheduledMeetings ?? []) {
     if (meeting.marked || meeting.attendance === 'matched') continue
+    if (meeting.endMs + MEETING_ENDED_GRACE_MS > nowMs) continue
     const minutes = (meeting.endMs - meeting.startMs) / 60_000
     if (minutes < MIN_MEETING_MINUTES) continue
     // Never interrogate a window the person clearly worked through (DEV-284).

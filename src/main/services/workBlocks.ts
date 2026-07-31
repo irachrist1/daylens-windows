@@ -90,11 +90,14 @@ import { getSecondaryDisplayVisibleSpansForRange } from '../core/projections/dis
 import { getExternalSignal } from './externalSignals'
 import {
   capturedMeetingSpansFromBlocks,
+  capturedMeetingSpansFromSessions,
   getMeetingAttendanceMarks,
   matchDayMeetings,
+  meetingNoteSupportedEventKeys,
   scheduledMeetingsFromSignal,
   scheduledParticipantsForDay,
 } from './meetingResolution'
+import type { CapturedMeetingSpan } from './meetingResolution'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -6727,11 +6730,51 @@ export function getTimelineDayPayload(
   }
 }
 
-/** The day's scheduled calendar events resolved against its meeting blocks
- *  (DEV-189). Pure read of the stored calendar day signal — never collects;
- *  undefined when the day has no stored calendar signal, so payloads without
- *  a calendar source stay byte-identical to before. Captured-only meetings
- *  are not listed here: they already ARE blocks. */
+/** Meeting-app evidence for the day at SESSION granularity, each span tagged
+ *  with the meeting block it belongs to when one exists.
+ *
+ *  Block-dominant evidence alone is too coarse to answer "did this meeting
+ *  happen": forty minutes of Zoom inside a three-hour browser-dominated block
+ *  produces no meeting block at all, so a call the person visibly sat in
+ *  resolved as calendar-only and the day went on to interrogate them about it.
+ *  Sessions carry that time whatever block it landed in.
+ *
+ *  The block id still matters downstream — the Timeline draws no outline for a
+ *  meeting already represented by its own block — so each span keeps the
+ *  meeting block it most overlaps, and null when the evidence lived inside a
+ *  block that is not a meeting. Falls back to block-derived spans when the
+ *  corrected facts cannot be read. */
+function capturedMeetingEvidenceForDay(
+  db: Database.Database,
+  dateStr: string,
+  blocks: WorkContextBlock[],
+): CapturedMeetingSpan[] {
+  let spans: CapturedMeetingSpan[]
+  try {
+    const [fromMs, toMs] = localDayBounds(dateStr)
+    const facts = queryCorrectedActivityFactsForRange(db, fromMs, toMs)
+    spans = capturedMeetingSpansFromSessions(facts.sessions)
+  } catch {
+    return capturedMeetingSpansFromBlocks(blocks)
+  }
+  if (spans.length === 0) return capturedMeetingSpansFromBlocks(blocks)
+  const meetingBlocks = blocks.filter((block) => block.dominantCategory === 'meetings')
+  return spans.map((span) => {
+    let bestBlockId: string | null = null
+    let bestOverlap = 0
+    for (const block of meetingBlocks) {
+      const overlap = Math.min(block.endTime, span.endMs) - Math.max(block.startTime, span.startMs)
+      if (overlap > bestOverlap) { bestOverlap = overlap; bestBlockId = block.id }
+    }
+    return { ...span, blockId: bestBlockId }
+  })
+}
+
+/** The day's scheduled calendar events resolved against its captured meeting
+ *  evidence (DEV-189). Pure read of the stored calendar day signal — never
+ *  collects; undefined when the day has no stored calendar signal, so payloads
+ *  without a calendar source stay byte-identical to before. Captured-only
+ *  meetings are not listed here: they already ARE blocks. */
 function resolveScheduledMeetingsForDay(
   db: Database.Database,
   dateStr: string,
@@ -6741,9 +6784,17 @@ function resolveScheduledMeetingsForDay(
     const calendar = getExternalSignal<CalendarSignal>(db, dateStr, 'calendar')?.payload ?? null
     const scheduled = scheduledMeetingsFromSignal(dateStr, calendar)
     if (scheduled.length === 0) return undefined
-    const report = matchDayMeetings(scheduled, capturedMeetingSpansFromBlocks(blocks), {
+    // Notes are one of the spec's occurrence supports (timeline.md §Meetings:
+    // "device activity, call presence, Granola, transcript, or explicit
+    // confirmation"). The day-level report has always passed them; this path
+    // did not, so a meeting documented in Granola but taken away from the
+    // laptop still read as unattended here.
+    let noteSupported: Set<string> | undefined
+    try { noteSupported = meetingNoteSupportedEventKeys(db, dateStr, scheduled) } catch { /* no ledger */ }
+    const report = matchDayMeetings(scheduled, capturedMeetingEvidenceForDay(db, dateStr, blocks), {
       marks: getMeetingAttendanceMarks(db, dateStr),
       participants: scheduledParticipantsForDay(db, dateStr),
+      noteSupported,
     })
     return report.meetings
       .filter((meeting) => meeting.attendance !== 'captured_only')
