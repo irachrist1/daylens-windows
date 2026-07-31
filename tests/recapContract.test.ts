@@ -1,0 +1,107 @@
+// The contract around the day recap (DEV-292).
+//
+// The prose itself cannot be unit-tested for quality — that is what the recap
+// lab and the eval family are for. What can be locked down is everything
+// around it: that the job is given enough time to finish, that the response
+// shape carries only what something renders, and that a failure still says so.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { JOB_DEFINITIONS } from '../src/main/services/aiOrchestration.ts'
+import { parseDaySummaryResultText } from '../src/main/lib/daySummaryParse.ts'
+import { RECAP_VARIANTS, SHIPPED_RECAP_VARIANT_ID, shippedRecapVariant } from '../src/main/ai/recapVariants.ts'
+
+// Measured reality, not a guess: 15s never completed on real days and served
+// the factual fallback instead. Aligned with the wrapped narrative's 90s.
+const MEASURED_RECAP_FLOOR_MS = 90_000
+
+test('the recap job is given enough time to finish on a real day', () => {
+  const definition = JOB_DEFINITIONS.day_summary
+  assert.ok(
+    definition.timeoutMs >= MEASURED_RECAP_FLOOR_MS,
+    `day_summary budget is ${definition.timeoutMs}ms; below the measured floor of ${MEASURED_RECAP_FLOOR_MS}ms the recap silently serves the factual fallback`,
+  )
+})
+
+test('the recap actually holds itself to that budget', async () => {
+  // executeTextAIJob does NOT enforce a job's declared timeoutMs — the caller
+  // must impose the belt. Deleting that belt leaves the recap able to hang
+  // forever while the definitions table still reads like it is bounded, which
+  // no other test would notice.
+  const source = await readFile(new URL('../src/main/jobs/aiService.ts', import.meta.url), 'utf8')
+  const recapCall = source.slice(source.indexOf('export async function generateDaySummary'))
+  const body = recapCall.slice(0, recapCall.indexOf('\nfunction ', 1))
+  assert.match(body, /withTimeout\(/, 'the recap call has no timeout belt: a hung provider would hang the panel')
+  assert.match(
+    body,
+    /jobTimeoutMs\('day_summary'\)/,
+    'the belt must read the budget from the job definition, not repeat a literal that can drift',
+  )
+})
+
+test('the recap runs on the same budget as the wrapped narrative it is measured against', () => {
+  // Not an arbitrary coupling: both are a quality-tier call over a whole day's
+  // enriched evidence. If one moves on new measurements, the other should be
+  // re-measured rather than drifting apart by accident.
+  assert.equal(
+    JOB_DEFINITIONS.day_summary.timeoutMs,
+    JOB_DEFINITIONS.wrapped_narrative.timeoutMs,
+    'day_summary and wrapped_narrative budgets have drifted apart',
+  )
+})
+
+test('a recap result carries only the summary — nothing generates output no surface renders', () => {
+  const parsed = parseDaySummaryResultText(JSON.stringify({
+    summary: 'Most of the morning went to the capture relay rewrite.',
+    questionSuggestions: ['What did I get done?', 'Which files mattered?', 'Summarize this'],
+  }))
+  assert.ok(parsed)
+  assert.equal(parsed.summary, 'Most of the morning went to the capture relay rewrite.')
+  assert.deepEqual(
+    Object.keys(parsed).sort(),
+    ['summary'],
+    'a model that still volunteers suggestions must not put them back on the result',
+  )
+})
+
+test('a recap answered as plain prose is kept, not degraded to the fallback', () => {
+  const prose = 'You spent most of the afternoon on the recap lab, with a short stretch in your browser.'
+  assert.deepEqual(parseDaySummaryResultText(prose), { summary: prose })
+})
+
+test('a truncated reply still yields the recap when the summary field survived', () => {
+  const truncated = '{"summary": "The day was mostly the timeline rewrite.", "extra": '
+  assert.deepEqual(parseDaySummaryResultText(truncated), { summary: 'The day was mostly the timeline rewrite.' })
+})
+
+test('an unusable reply produces no recap, so the caller can degrade honestly', () => {
+  assert.equal(parseDaySummaryResultText(''), null)
+  assert.equal(parseDaySummaryResultText('{"summary": ""}'), null)
+  assert.equal(parseDaySummaryResultText('{"notASummary": "hello"}'), null)
+})
+
+test('every recap variant is shippable: distinct id, a description, and real directives', () => {
+  const ids = RECAP_VARIANTS.map((variant) => variant.id)
+  assert.equal(new Set(ids).size, ids.length, `duplicate variant ids: ${ids.join(', ')}`)
+  for (const variant of RECAP_VARIANTS) {
+    assert.ok(variant.description.trim(), `${variant.id} has no description — the lab prints it to explain the choice`)
+    assert.ok(variant.directives.length >= 3, `${variant.id} has too few directives to be a real candidate`)
+    const message = variant.userMessage('2026-07-29', '{"blocks":[]}')
+    assert.match(message, /2026-07-29/, `${variant.id} drops the date from its user message`)
+    assert.match(message, /"blocks"/, `${variant.id} drops the day evidence from its user message`)
+  }
+})
+
+test('the shipped variant names something that exists', () => {
+  assert.equal(shippedRecapVariant().id, SHIPPED_RECAP_VARIANT_ID)
+})
+
+test('no variant asks for output nothing renders', () => {
+  for (const variant of RECAP_VARIANTS) {
+    const prompt = [...variant.directives, variant.userMessage('2026-07-29', '{}')].join('\n')
+    assert.ok(
+      !/questionSuggestions|next-query chip/i.test(prompt),
+      `${variant.id} still asks for the suggested questions no surface displays`,
+    )
+  }
+})

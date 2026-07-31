@@ -92,7 +92,15 @@ interface AIJobDefinition {
 // pure surcharge and every former repeated_payload job now runs cachePolicy 'off'.
 // stable_prefix stays only on conversational jobs, where a growing multi-turn
 // prefix can genuinely be re-read.
-const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
+// Exported so a job's budget is assertable: a timeout regression is invisible
+// in every other test, and shows up in production only as a surface quietly
+// serving its fallback (DEV-292).
+//
+// WARNING: timeoutMs on these definitions is NOT enforced here. executeTextAIJob
+// never reads it — each caller must impose its own belt, and several do not.
+// Read a budget through jobTimeoutMs() so a caller's belt and the number
+// documented here cannot drift apart.
+export const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
   block_label_preview: {
     jobType: 'block_label_preview',
     screen: 'timeline_day',
@@ -135,7 +143,15 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'day_summary',
     screen: 'timeline_day',
     foreground: true,
-    timeoutMs: 15_000,
+    // 15s was never measured against a real day and the recap simply never
+    // finished: consecutive real days served the factual fallback with "Day
+    // summary timed out" (DEV-292). Same failure wrapped_narrative had at 40s
+    // against a 54s reality. The recap runs on the person's CHOSEN model — the
+    // per-tier tables no longer decide anything — over the voice contract, a
+    // memory block, and a ten-block evidence scaffold, so it is a quality-tier
+    // call whatever this job's modelStrategy claims. Aligned with the wrapped
+    // narrative's 90s until the recap lab's measurements say otherwise.
+    timeoutMs: Number(process.env.DAYLENS_RECAP_TIMEOUT_MS) || 90_000,
     cachePolicy: 'off',
     modelStrategy: 'balanced',
   },
@@ -325,6 +341,13 @@ const GOOGLE_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
   economy: 'gemini-3.1-flash-lite',   // GA, cheapest/highest-RPM — keeps R1 budget low
   balanced: 'gemini-3.1-flash-lite',
   quality: 'gemini-3.5-flash',        // GA flagship
+}
+
+/** The wall-clock budget a job's caller should hold it to. The definitions are
+ *  where a budget is documented and reasoned about; this is how a caller gets
+ *  the number, so the belt it actually imposes and the table cannot disagree. */
+export function jobTimeoutMs(jobType: AIJobType): number {
+  return JOB_DEFINITIONS[jobType].timeoutMs
 }
 
 export function modelForProvider(

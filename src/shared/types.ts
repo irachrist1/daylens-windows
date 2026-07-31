@@ -662,7 +662,6 @@ export interface FocusReflectionSavePayload {
 
 export interface AIDaySummaryResult {
   summary: string
-  questionSuggestions: string[]
   /** True when this is the deterministic factual fallback shown because the AI
    *  recap could not be generated (unavailable / timed out / unparseable) — so
    *  the UI can say so plainly instead of passing a template off as the recap

@@ -39,7 +39,8 @@ import { activityCategoryLabel } from '@shared/activityCategories'
 import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
 import { userProfileDirective } from '@shared/userProfile'
-import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
+import { parseDaySummaryResultText } from '../lib/daySummaryParse'
+import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariants'
 import {
   resolveDayContext,
 } from '../core/query/attributionResolvers'
@@ -115,7 +116,7 @@ import {
   type ProviderTextResponse,
   type ResolvedProviderConfig,
 } from '../services/aiOrchestration'
-import { resolveProviderConfigsForJob, recordChatAgentUsage } from '../services/aiOrchestration'
+import { resolveProviderConfigsForJob, recordChatAgentUsage, jobTimeoutMs } from '../services/aiOrchestration'
 import { withProviderCallCount, withProviderRateLimit } from '../services/aiRateLimiter'
 import { friendlyProviderError } from '../services/providerErrors'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
@@ -1778,11 +1779,6 @@ function fallbackDaySummary(payload: DayTimelinePayload, degraded = false): AIDa
   if (payload.totalSeconds === 0) {
     return {
       summary: 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and focus patterns.',
-      questionSuggestions: [
-        'What kinds of questions will you be able to answer once I have more history?',
-        'How should I use Daylens if I am not tracking clients?',
-        'What should I pay attention to the first few days of tracking?',
-      ],
     }
   }
 
@@ -1803,11 +1799,6 @@ function fallbackDaySummary(payload: DayTimelinePayload, degraded = false): AIDa
 
   return {
     summary: summaryParts.filter((part): part is string => Boolean(part)).join(' '),
-    questionSuggestions: [
-      'What did I actually get done today?',
-      'Which files, docs, or pages did I touch today?',
-      payload.blocks.length >= 3 ? 'Where did my focus break down today?' : 'What should I pick back up next?',
-    ],
     ...(degraded ? { degraded: true } : {}),
   }
 }
@@ -1950,8 +1941,8 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
   })
 }
 
-function parseDaySummaryResult(raw: string, fallbackQuestions: string[]): AIDaySummaryResult | null {
-  return parseDaySummaryResultText(raw, fallbackQuestions)
+function parseDaySummaryResult(raw: string): AIDaySummaryResult | null {
+  return parseDaySummaryResultText(raw)
 }
 
 function currentLocalDateString(): string {
@@ -1959,7 +1950,18 @@ function currentLocalDateString(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryResult> {
+export async function generateDaySummary(
+  dateStr: string,
+  options: {
+    /** Which recap prompt to run. Defaults to the shipped one; the recap lab
+     *  passes each candidate so variants are compared through the exact path
+     *  the app uses, not a parallel copy of it. */
+    variant?: RecapPromptVariant
+    /** The lab needs a fresh call every time; the app wants the cache. */
+    bypassCache?: boolean
+  } = {},
+): Promise<AIDaySummaryResult> {
+  const variant = options.variant ?? shippedRecapVariant()
   const db = getDb()
   const liveSession = dateStr === currentLocalDateString() ? getCurrentSession() : null
   // Read the day exactly as the timeline shows it (DEV-247): analysis:false, so
@@ -1975,53 +1977,25 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
 
   const [memoryFromMs, memoryToMs] = localDateBoundsFromString(dateStr)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}`
-  const cached = daySummaryCache.get(cacheKey)
+  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variant.id}`
+  const cached = options.bypassCache ? undefined : daySummaryCache.get(cacheKey)
   if (cached) return cached
 
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     memoryPrompt,
     userProfileDirective(getSettings()),
-    'You are Daylens, writing the opening daily briefing for a desktop work-intelligence app.',
-    'Do not use emoji in any part of your response.',
-    'Turn deterministic local work evidence into a concise, useful summary.',
-    'Focus on what the person was actually working on, what moved forward, and what deserves follow-up.',
-    'Prefer the structured workIntent signal over raw homepage, feed, or generic tab labels when they conflict.',
-    'Treat generic feed/home usage as context unless the evidence clearly says it was the main task.',
-    'Name the actual work and the entities involved (the projects, clients, people, and repositories in "entities"), not the tools that hosted it.',
-    'The "meetings" list is scheduled calendar context. A scheduled time proves only what was planned. Say a meeting happened only when its "presence" field confirms it (you attended, or tracked activity overlaps it). Never assert attendance from a calendar row alone, and respect a meeting marked skipped/moved/unrelated.',
-    'Follow the evidence authority order: the person’s own confirmations and corrections outrank device observation, which outranks a connector/calendar fact, which outranks inference. State uncertainty plainly rather than guessing.',
-    'Never use raw app names as the subject of a sentence. Instead, describe what the app is used for: Warp or Terminal → "your terminal", a browser (Chrome, Safari, Arc, Firefox) → "your browser", VS Code or Cursor → "your editor", Figma → "your design tool", Slack or Teams → "your messaging app", X.com or Twitter → "social browsing" or a specific activity from the page title. Use the specific app name only when a more descriptive phrase would be unclear.',
-    'Use window titles and page titles as evidence for what the user was doing. Do not use the app name as a proxy for the activity. When a page or thread title is available, prefer describing the specific content over naming the platform.',
-    'Ignore badge-count prefixes like "(4)" when interpreting page or tab titles.',
-    'Mention exact file, document, page, repo, or artifact names only when they appear verbatim in the evidence.',
-    'Do not write like a dashboard, analytics panel, or generic AI recap.',
-    'Avoid filler like "based on the provided data", "top apps", or "productive/unproductive".',
-    'Use specific time ranges and named work blocks when they make the story clearer.',
-    'If the evidence is thin or ambiguous, say so plainly and stay modest.',
-    'The summary must be declarative and must not ask the user a question.',
-    'Return strict JSON with keys "summary" and "questionSuggestions".',
-    '"summary" must be 2-4 sentences.',
-    '"questionSuggestions" must contain exactly 3 clickable next-query chips spoken by the user to Daylens.',
-    'Write questionSuggestions as first-person user queries or direct requests to the assistant, not as questions back to the user.',
-    'Good examples: "What did I actually get done today?", "Which files or pages mattered most today?", "Summarize today as a short report I could share".',
-    'Bad examples: "Are you building a model right now?", "Did task planning settle into place?", "Is this still in discovery phase?".',
-    'Never ask the user to confirm intent, progress, or motivation.',
+    ...variant.directives,
   ].filter(Boolean).join('\n')
 
-  const userMessage = [
-    `Date: ${dateStr}`,
-    '',
-    'Write the opening AI summary card and three suggested next-query chips for this day.',
-    'The user should feel like Daylens understood the work, not like it stitched together a template.',
-    'The chips will be rendered as buttons under an "Ask Daylens" label, so they must read like things the user would click to ask next.',
-    '',
-    'Structured day evidence (JSON):',
-    buildDaySummaryScaffold(payload),
-  ].join('\n')
+  const userMessage = variant.userMessage(dateStr, buildDaySummaryScaffold(payload))
 
   try {
+    // The belt has to live here: executeTextAIJob does not enforce the budget
+    // on its own job definition. It is read from there so the number a caller
+    // holds a job to is the number the table documents, never a second literal
+    // that drifts. The old 15s literal expired mid-call on a real day and the
+    // recap served the factual fallback instead (DEV-292).
     const { text } = await withTimeout(
       executeTextAIJob(
         {
@@ -2033,11 +2007,11 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
         },
         sendWithProvider,
       ),
-      15_000,
+      jobTimeoutMs('day_summary'),
       'Day summary timed out',
     )
 
-    const parsed = parseDaySummaryResult(text, fallback.questionSuggestions)
+    const parsed = parseDaySummaryResult(text)
     if (parsed) {
       daySummaryCache.set(cacheKey, parsed)
       return parsed
