@@ -2,16 +2,17 @@ name: Verify macOS Runtime
 
 # macOS minutes bill at 10x, so this full packaging + smoke run stays off
 # PRs entirely. The Linux verify (1x billing) still runs on PRs and catches
-# most packaging breakage; macOS coverage comes from merges to main, the
-# nightly schedule below, and manual dispatch.
+# most packaging breakage; macOS coverage comes from merges to main and
+# manual dispatch.
+#
+# No nightly cron. A 10x-billed nightly that fails on every run costs ~45
+# billed minutes a day and produces no signal, which is exactly what it did
+# from 2026-07-21 to 2026-08-02 on the private mirror. Re-add a schedule only
+# once the smoke test passes here, and prefer weekly over nightly.
 on:
   push:
     branches:
       - main
-  schedule:
-    # Nightly safety net at a quiet hour (03:17 UTC), staggered 30 min
-    # apart from the Windows verify to avoid a self-inflicted burst.
-    - cron: '17 3 * * *'
   workflow_dispatch:
 
 # Queue-latest per ref: cancel superseded runs everywhere, including main.
