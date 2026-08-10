@@ -862,7 +862,10 @@ export function weightedCategoryDistributionFor(
   if (pools.size > 0) {
     let credits: ReturnType<typeof getReconciledWebsiteVisitsForRange> = []
     try {
-      credits = getReconciledWebsiteVisitsForRange(db, blockStart, blockEnd)
+      // Pass this block's own sessions: without them the reconciler falls back
+      // to app_sessions, which canonical-evidence installs no longer write, so
+      // it sees no foreground and credits almost nothing.
+      credits = getReconciledWebsiteVisitsForRange(db, blockStart, blockEnd, sessions)
     } catch (err) {
       console.warn('[timeline] weighted category distribution: visit reconciliation failed', err)
     }
@@ -1338,7 +1341,13 @@ function websiteAwareLabel(block: WorkContextBlock): string {
 
   const labels = block.websites.slice(0, 3).map((site) => shortDomainLabel(site.domain))
   if (labels.length === 1) return labels[0]
-  if (labels.length >= 2) return `${labels[0]} + ${labels[1]}`
+  // Two site names joined by "+" is not a name for anything a person did, and
+  // it does active harm: because it is not in GENERIC_LABELS it reads as a
+  // *specific* rule label, so userVisibleLabelForBlock returns it before ever
+  // reaching the inferred intent subject just below — the block that should
+  // have read "Time tracking competitive research" read "Toggl + Rize", and
+  // "Campus + App" beat the real subject the same way. Staying generic here
+  // lets the subject win.
   return block.ruleBasedLabel
 }
 
@@ -2406,7 +2415,10 @@ function buildTimelineContext(db: Database.Database, sessions: AppSession[]): Ti
   if (sessions.length === 0) return { sessionKind: new Map() }
   const startTime = Math.min(...sessions.map((session) => session.startTime))
   const endTime = Math.max(...sessions.map((session) => sessionEndMs(session)))
-  const websiteCredits = getReconciledWebsiteVisitsForRange(db, startTime, endTime)
+  // These sessions ARE the foreground ownership for this span. Omitting them
+  // sent the reconciler to app_sessions, dead on canonical-evidence installs,
+  // so every session's kind resolved from near-zero page credit.
+  const websiteCredits = getReconciledWebsiteVisitsForRange(db, startTime, endTime, sessions)
 
   // Resolve raw kinds, then let neutral (bare-browsing) sessions inherit the
   // nearest concrete neighbour so a contentless tab-flip never forces a kind
@@ -2507,6 +2519,14 @@ function buildPageCandidates(
   // take no longer applies — the parameter stays for call-site compatibility
   // with the many context-threading callers elsewhere in this file.
   _context?: TimelineBuildContext,
+  // The block's own sessions, used as foreground ownership for reconciliation.
+  // Callers that have them MUST pass them: left to its own devices the
+  // reconciler reads app_sessions, which canonical-evidence installs no longer
+  // write, so it sees no foreground and a page the user sat on for an hour
+  // enters the block's evidence with seconds of credit — or misses the cut.
+  // Taking them from the caller rather than re-reading here also keeps this
+  // agreeing with the session set the rest of the block pipeline used.
+  sessions?: readonly AppSession[],
 ): ArtifactCandidate[] {
   const grouped = new Map<string, {
     canonicalKey: string
@@ -2529,7 +2549,13 @@ function buildPageCandidates(
   // browser was never foreground at all, so a visit with zero reconciled
   // overlap contributes nothing and must not enter the block's evidence —
   // it never shows up as a page the user "was in".
-  for (const { visit, freeIntervals } of getReconciledWebsiteVisitsForRange(db, startTime, endTime)) {
+  // The fresh read this span needs is the CORRECTED one. Letting the reconciler
+  // fall back to its own app_sessions read means no foreground on a canonical-
+  // evidence install, so a page the user sat on for an hour enters the block's
+  // evidence with a few seconds of credit — or misses the cut entirely.
+  for (const { visit, freeIntervals } of getReconciledWebsiteVisitsForRange(
+    db, startTime, endTime, sessions, { allowUntrackedGaps: true },
+  )) {
     // Domain policy gate: adult-host pages are filtered at source so they
     // never become artifact candidates, never get promoted to block labels,
     // and never appear in any app's topArtifacts list. The raw visit row
@@ -3032,7 +3058,7 @@ function buildBlockFromCandidate(
     }
     mergedTopApps.push(backgroundApp)
   }
-  const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context)
+  const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context, candidate.sessions)
   const windowCandidates = buildWindowArtifactCandidates(candidate.sessions)
   const visitPageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
   // Supplement website_visits pages with real-time tab evidence from focus_events.
@@ -3300,6 +3326,7 @@ function candidatePageArtifacts(candidate: CandidateBlock, db: Database.Database
     candidate.sessions[0]?.startTime ?? 0,
     candidate.sessions.length > 0 ? sessionEndMs(candidate.sessions[candidate.sessions.length - 1]) : 0,
     context,
+    candidate.sessions,
   )
     .flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
     .slice(0, 6)
@@ -4843,7 +4870,13 @@ function finalizedLabelForBlock(
 
   const artifactLabel = clearsLabelVoice(preferredArtifactLabel(block), 'interpreted')
   const workflowLabel = clearsLabelVoice(usefulBlockLabel(block, block.workflowRefs[0]?.label))
-  const ruleLabel = clearsLabelVoice(usefulBlockLabel(block, block.ruleBasedLabel))
+  // 'floor', not 'invariants': for a browsing-dominant block the rule label IS
+  // a captured window title (labelForCandidate -> bestTitleLabelForSessions),
+  // so it has to face the no-verbatim-window-title rule like any other floor.
+  // Checked at 'invariants' it bypassed exactly the rule written to stop it,
+  // and Dia's tab-bar titles became block headlines: "Campus + App",
+  // "X (Twitter) + Factory", "Netflix + YouTube".
+  const ruleLabel = clearsLabelVoice(usefulBlockLabel(block, block.ruleBasedLabel), 'floor')
   const rawAiLabel = clearsLabelVoice(usefulBlockLabel(block, block.aiLabel), 'interpreted')
   // F1: the AI labeler can also lift a YouTube tab title verbatim into the
   // block headline when it sees that page in the evidence. Reject any
@@ -6267,10 +6300,14 @@ interface GapCauseInterval {
   endTime: number
 }
 
+// These name what Daylens actually observed — the state of the machine. It
+// cannot see where the user went, so it must not imply it. "Asleep" over a
+// 90-minute afternoon gap read as a claim about Christian, who was out of the
+// office having a conversation; the Mac was the thing that was asleep.
 const GAP_KIND_LABELS: Record<string, string> = {
-  asleep: 'Asleep',
-  locked: 'Locked',
-  idle: 'Idle',
+  asleep: 'Computer asleep',
+  locked: 'Screen locked',
+  idle: 'No activity',
   passive: 'Passive',
   paused: 'Tracking paused',
   untracked: 'No data captured',
@@ -6543,7 +6580,9 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
     const websiteLabels = block.websites
       .map((site) => shortDomainLabel(site.domain))
       .filter((label, index, labels) => labels.indexOf(label) === index)
-    if (websiteLabels.length >= 2) return `${websiteLabels[0]} + ${websiteLabels[1]}`
+    // One site can name a block; two joined by "+" cannot (see websiteAwareLabel).
+    // Reached only after the intent subject above declined, so the category
+    // floor below is the honest answer rather than a manufactured pairing.
     if (websiteLabels.length === 1) return websiteLabels[0]
   }
 
