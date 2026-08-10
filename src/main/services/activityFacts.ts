@@ -602,7 +602,7 @@ export function getCorrectedPageFactsForRange(
       }
 
       const pageIdentity = visit.normalizedUrl ?? visit.pageKey ?? visit.url ?? visit.pageTitle ?? ''
-      const key = `${visit.domain} ${pageIdentity}`
+      const key = `${visit.domain}\u0000${pageIdentity}`
       let entry = byPage.get(key)
       if (!entry) {
         entry = {

@@ -438,8 +438,9 @@ test('gaps classify by their activity-event cause', () => {
     gaps.some((gap) => gap.kind === 'locked' && gap.startTime === localMs(11, 0)),
     `lock-covered gap should read Locked: ${JSON.stringify(gaps)}`,
   )
-  assert.equal(gaps.find((gap) => gap.kind === 'asleep')?.label, 'Asleep')
-  assert.equal(gaps.find((gap) => gap.kind === 'locked')?.label, 'Locked')
+  // Names the machine's state, never the user's whereabouts (see GAP_KIND_LABELS).
+  assert.equal(gaps.find((gap) => gap.kind === 'asleep')?.label, 'Computer asleep')
+  assert.equal(gaps.find((gap) => gap.kind === 'locked')?.label, 'Screen locked')
   db.close()
 })
 

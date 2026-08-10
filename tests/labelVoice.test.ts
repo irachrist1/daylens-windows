@@ -268,3 +268,29 @@ test('real-day review names each failing label with rule, tier, and reason', () 
     labelVoiceMarkdownLines(clean).some((line) => line.includes('meets the recorded voice')),
   )
 })
+
+// Both of these headlined real blocks on a real day before the rules existed.
+test('an email address is never a label', () => {
+  // Lifted out of a Microsoft Teams calendar window title, this named two of
+  // one day's ten blocks. The bare-domain rule missed it: the "@" stops the
+  // whole string matching a domain.
+  assert.equal(rawLabelForm('christian.tonny@rw.Andersen.com'), 'email address')
+  assert.ok(failedRules('christian.tonny@rw.Andersen.com').includes('no-raw-artifact-forms'))
+  assert.ok(failedRules('Replying to christian.tonny@rw.Andersen.com').includes('no-raw-artifact-forms'))
+})
+
+test('two site names joined by a plus are not a label', () => {
+  // The browsing floor built these by joining the block's two biggest sites.
+  // "Campus + App" is campus.datacamp.com and app.datacamp.com.
+  for (const mashup of ['Campus + App', 'Toggl + Rize', 'Netflix + YouTube', 'X (Twitter) + Factory', 'Coursera + Datacamp']) {
+    assert.equal(rawLabelForm(mashup), 'browser-tab mashup', `${mashup} must be rejected`)
+  }
+})
+
+test('a written phrase containing a plus still passes', () => {
+  // The rule keys on the shape of joined proper names, so ordinary prose that
+  // happens to use "+" is untouched.
+  for (const label of ['Design + build the onboarding', 'Planning + writing the roadmap', 'Rize AI time tracking']) {
+    assert.equal(rawLabelForm(label), null, `${label} must survive`)
+  }
+})
