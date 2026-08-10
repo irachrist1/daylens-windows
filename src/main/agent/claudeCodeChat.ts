@@ -15,6 +15,18 @@ import { abortError } from '../lib/aiCancellation'
  *  In memory only: losing it costs context, never correctness. */
 const sessionByThread = new Map<string, string>()
 
+// Claude Code's own tools, none of which a question about the person's day
+// needs. Listing them by name is unavoidable — there is no "MCP only" switch —
+// so a future Claude Code release can add a tool this list misses. That costs
+// context and a wasted turn, never access: --allowedTools still denies it.
+const BUILT_IN_TOOLS = [
+  'Task', 'Artifact', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'DesignSync',
+  'Edit', 'EnterWorktree', 'ExitWorktree', 'Glob', 'Grep', 'Monitor', 'NotebookEdit',
+  'PushNotification', 'Read', 'RemoteTrigger', 'ReportFindings', 'ScheduleWakeup',
+  'SendMessage', 'Skill', 'TaskOutput', 'TaskStop', 'TodoWrite', 'ToolSearch',
+  'WebFetch', 'WebSearch', 'Write',
+]
+
 /** True when this machine can answer chat through Claude Code: the CLI is the
  *  chosen provider and the MCP server it would drive is resolvable. */
 export function claudeCodeChatAvailable(): boolean {
@@ -67,8 +79,14 @@ export async function runClaudeCodeChat(input: ClaudeCodeChatInput): Promise<str
     // and it blocks on third-party servers that are failing or unauthorised.
     '--strict-mcp-config',
     '--setting-sources', '',
-    // The Daylens server and nothing else: no file edits, no shell, no network.
+    '--disable-slash-commands',
+    // The safety boundary: a tool outside this is denied at execution, which a
+    // write probe confirms.
     '--allowedTools', 'mcp__daylens',
+    // Denying them as well is about cost, not safety. Permission denial stops
+    // the call but the tool is still described to the model, which spends the
+    // turn reaching for a Write it cannot have.
+    '--disallowedTools', BUILT_IN_TOOLS.join(','),
     // Replaces Claude Code's coding-agent prompt rather than appending to it.
     // Daylens' agent prompt is a complete operating contract, and the default
     // is a large set of instructions about editing files this turn cannot do.
