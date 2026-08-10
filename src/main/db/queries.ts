@@ -2636,7 +2636,17 @@ export function getBrowserActivityBreakdown(
   // draws from is shared with every other visit inside the same browser, and
   // filtering before reconciling would let a page fill time another visit had
   // already claimed (same rule as getTopPagesForDomains).
-  const credits = reconcileWebsiteVisits(db, fromMs, toMs)
+  //
+  // The caller's sessions MUST reach the reconciler. Without them it falls back
+  // to getSessionsForRange, which reads app_sessions — the legacy table that
+  // installs on the canonical focus_events evidence source stopped writing. It
+  // returns zero rows for any recent day, so the reconciler sees no foreground
+  // at all: every browser's claim pool collapses to the stretches no absence
+  // signal covers, and page credit all but vanishes. Measured on a real day,
+  // Dia's 4h04m broke down into 55m of named pages and 3h09m of invented
+  // "No page recorded". Passing the caller's corrected sessions restores the
+  // real foreground and the breakdown reconciles with the app header.
+  const credits = reconcileWebsiteVisits(db, fromMs, toMs, undefined, options.sessions)
   if (credits.length === 0) return { domains: [], attributedSeconds: 0 }
 
   // This browser's own foreground windows, duration-bounded so the credited
@@ -2835,7 +2845,17 @@ function reconcileWebsiteVisits(
   // passes shared-query sessions here so page totals can never exceed the
   // browser total it reports; raw callers keep the legacy session read.
   foregroundSessions?: readonly AppSession[],
+  // Whether a visit may also be credited inside an honest capture gap — a
+  // stretch with no session at all and no absence signal. Supplying sessions
+  // used to imply "no", because the only callers that supplied them were the
+  // corrected read model, where page totals must never exceed the browser
+  // total. Block evidence needs both: real foreground from the caller's
+  // sessions AND the gap allowance, so a browser Daylens never saw as a
+  // session still counts while it was demonstrably the only thing running.
+  // Defaults to the old coupling, so every existing caller is unchanged.
+  options: { allowUntrackedGaps?: boolean } = {},
 ): ReconciledVisitCredit[] {
+  const allowUntrackedGaps = options.allowUntrackedGaps ?? !foregroundSessions
   const whereExtra = browserBundleId ? ' AND browser_bundle_id = ?' : ''
   const params: (number | string)[] = browserBundleId
     ? [fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs, fromMs, browserBundleId]
@@ -3073,9 +3093,9 @@ function reconcileWebsiteVisits(
     // browser's own total). The raw path keeps the untracked-gap allowance
     // for legacy surfaces that reconcile spotty early capture.
     const foregroundOnly = mergeIntervals(foregroundPieces)
-    const allowed = foregroundSessions
-      ? foregroundOnly
-      : mergeIntervals([...foregroundPieces, ...untracked])
+    const allowed = allowUntrackedGaps
+      ? mergeIntervals([...foregroundPieces, ...untracked])
+      : foregroundOnly
     // History-corroborated fill (capture spec: page detail attaches to an
     // unverifiable-mode browser only via its own non-private history, and an
     // active page interval is clipped to its owning foreground interval). A
@@ -3401,8 +3421,9 @@ export function getReconciledWebsiteVisitsForRange(
   // Corrected-read callers pass shared-query sessions so page credit clips to
   // the same foreground ownership their app totals are built from.
   foregroundSessions?: readonly AppSession[],
+  options: { allowUntrackedGaps?: boolean } = {},
 ): ReconciledPageVisit[] {
-  return reconcileWebsiteVisits(db, fromMs, toMs, undefined, foregroundSessions).map(({ visit, freeIntervals }) => ({
+  return reconcileWebsiteVisits(db, fromMs, toMs, undefined, foregroundSessions, options).map(({ visit, freeIntervals }) => ({
     visit: {
       id: visit.id,
       domain: visit.domain,
