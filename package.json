@@ -10,7 +10,9 @@
     "services/billing"
   ],
   "scripts": {
+    "prestart": "node scripts/patch-dev-electron-icon.mjs",
     "start": "electron-forge start",
+    "icons": "electron scripts/render-icons.js",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
@@ -48,6 +50,8 @@
     "billing:sandbox": "node services/billing/sandbox/run.mjs",
     "billing:e2e": "node services/billing/sandbox/run.mjs",
     "timeline": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/ai-behaviour/show-timeline.ts",
+    "diag:domains": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./scripts/diag-domain-attribution.ts",
+    "diag:timeline": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./scripts/diag-timeline-day.ts",
     "trace": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/ai-behaviour/show-trace.ts",
     "moment:bench": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/moment-bench/run.ts",
     "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
