@@ -3313,6 +3313,95 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 70,
+    description:
+      'memory_records gains the page record kind plus domain/url columns, so browser activity has a canonical representation and exact browser retrieval can read the corrected memory boundary instead of raw website_visits. record_kind is constrained by a CHECK and SQLite cannot alter one in place, so the table is rebuilt; memory_record_entities and memory_record_vectors both cascade from it and are backed up and restored around the drop (the production pragma is foreign_keys ON). Supplied facts are copied through: they exist by explicit confirmation, are not part of any day projection, and nothing would ever recreate them.',
+    up: () => {
+      const db = getDb()
+      const existing = getTableSql('memory_records') ?? ''
+      if (!existing || /'page'/.test(existing)) return
+
+      db.exec(`
+        -- The FTS vtable's content view selects FROM memory_records, and the
+        -- triggers that maintain it hang off that table. Both must go before
+        -- the drop: a view left pointing at a missing table makes every later
+        -- statement that touches the vtable fail, and ALTER TABLE ... RENAME
+        -- would try to rewrite a reference it cannot resolve. Recreated by
+        -- ensureMemorySearchSchema once the new table is in place.
+        DROP TABLE IF EXISTS memory_records_fts;
+        DROP VIEW IF EXISTS memory_records_fts_content;
+
+        CREATE TABLE memory_record_entities_v70_backup AS SELECT * FROM memory_record_entities;
+        CREATE TABLE memory_record_vectors_v70_backup AS SELECT * FROM memory_record_vectors;
+        DELETE FROM memory_record_entities;
+        DELETE FROM memory_record_vectors;
+
+        CREATE TABLE memory_records_v70 (
+          id                TEXT PRIMARY KEY,
+          record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'page', 'supplied_fact', 'connected_activity')),
+          memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+          statement         TEXT NOT NULL,
+          exact_text        TEXT NOT NULL DEFAULT '',
+          semantic_text     TEXT,
+          date              TEXT NOT NULL,
+          start_ms          INTEGER NOT NULL,
+          end_ms            INTEGER NOT NULL,
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          title             TEXT,
+          domain            TEXT,
+          url               TEXT,
+          primary_entity_id TEXT,
+          source_refs_json  TEXT NOT NULL DEFAULT '[]',
+          confidence        TEXT NOT NULL DEFAULT 'observed',
+          provenance        TEXT NOT NULL DEFAULT 'capture',
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          embedding_model   TEXT,
+          embedding_version INTEGER,
+          created_at        INTEGER NOT NULL,
+          deleted_at        INTEGER
+        );
+
+        INSERT INTO memory_records_v70 (
+          id, record_kind, memory_type, statement, exact_text, semantic_text,
+          date, start_ms, end_ms, app_bundle_id, app_name, title,
+          primary_entity_id, source_refs_json, confidence, provenance,
+          sensitivity, embedding_model, embedding_version, created_at, deleted_at
+        )
+        SELECT
+          id, record_kind, memory_type, statement, exact_text, semantic_text,
+          date, start_ms, end_ms, app_bundle_id, app_name, title,
+          primary_entity_id, source_refs_json, confidence, provenance,
+          sensitivity, embedding_model, embedding_version, created_at, deleted_at
+        FROM memory_records;
+
+        DROP TABLE memory_records;
+        ALTER TABLE memory_records_v70 RENAME TO memory_records;
+
+        CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_domain ON memory_records (domain);
+
+        INSERT INTO memory_record_entities (record_id, entity_id)
+          SELECT record_id, entity_id FROM memory_record_entities_v70_backup
+          WHERE record_id IN (SELECT id FROM memory_records);
+        INSERT INTO memory_record_vectors (vec_rowid, record_id, date, model, model_version, dims, created_at)
+          SELECT vec_rowid, record_id, date, model, model_version, dims, created_at
+          FROM memory_record_vectors_v70_backup
+          WHERE record_id IN (SELECT id FROM memory_records);
+
+        DROP TABLE memory_record_entities_v70_backup;
+        DROP TABLE memory_record_vectors_v70_backup;
+      `)
+
+      // The rebuild changed every rowid, so the external-content FTS index is
+      // stale against the new table. This helper drops the vtable and its
+      // content view in the order FTS5's reserved shadow names require, then
+      // recreates and reindexes.
+      ensureMemorySearchSchema(db)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0

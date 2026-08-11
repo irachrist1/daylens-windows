@@ -15,6 +15,7 @@ import { getReconciledDomainIntervals } from '../db/queries'
 import {
   confirmSuppliedFact,
   deleteSuppliedFact,
+  findMemoryProposalRejection,
   getSuppliedFact,
   isSuppliedFactId,
   listSuppliedFacts,
@@ -43,8 +44,10 @@ interface WorkMemoryFact {
 // the Claude "Work context / Personal context" split). Deterministic and
 // derived — never stored, never a durability signal. Grouping is purely how the
 // view reads; getting it slightly wrong only moves a sentence to another heading.
-const PREFERENCE_RE = /\b(prefer|prefers|like|likes|favou?rite|enjoys?|rather|dark mode|light mode|concise|simple|straight-to-the-point|tone|style)\b/i
-const WORK_RE = /\b(work|works|working|workplace|job|role|company|employer|client|clients|project|projects|team|colleague|colleagues|office|deadline|manager|report to|engineer|operations|consult|account|business|professional)\b/i
+const PREFERENCE_RE =
+  /\b(prefer|prefers|like|likes|favou?rite|enjoys?|rather|dark mode|light mode|concise|simple|straight-to-the-point|tone|style)\b/i
+const WORK_RE =
+  /\b(work|works|working|workplace|job|role|company|employer|client|clients|project|projects|team|colleague|colleagues|office|deadline|manager|report to|engineer|operations|consult|account|business|professional)\b/i
 
 export function classifyWorkMemoryFact(text: string, topicKey?: string | null): WorkMemoryCategory {
   // Drafted facts carry a stable topic_key — categorize by that, not keywords.
@@ -120,7 +123,10 @@ interface FactRow {
 
 // Older databases (pre-DEV-107) won't have the source column until the v37
 // migration runs; default to 'evidence' so reads never throw on a stale row.
-function rowSource(row: { source?: string | null; origin: WorkMemoryFactOrigin }): WorkMemoryFactSource {
+function rowSource(row: {
+  source?: string | null
+  origin: WorkMemoryFactOrigin
+}): WorkMemoryFactSource {
   if (row.source === 'chat' || row.source === 'hand' || row.source === 'evidence') return row.source
   return row.origin === 'user' ? 'hand' : 'evidence'
 }
@@ -138,7 +144,11 @@ function normalizeFactText(text: string): string {
 }
 
 function wordSet(text: string): Set<string> {
-  return new Set(normalizeFactText(text).split(' ').filter((w) => w.length > 2))
+  return new Set(
+    normalizeFactText(text)
+      .split(' ')
+      .filter((w) => w.length > 2),
+  )
 }
 
 function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
@@ -151,17 +161,13 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   return union > 0 ? intersection / union : 0
 }
 
-function findDuplicateFact(
-  db: Database.Database,
-  text: string,
-  scope: string,
-): boolean {
+function findDuplicateFact(db: Database.Database, text: string, scope: string): boolean {
   const hasScope = hasColumn(db, 'work_memory_facts', 'scope')
   const scopeClause = hasScope ? `AND scope = ?` : ''
   const params = hasScope ? [scope] : []
-  const rows = db.prepare(
-    `SELECT fact_text FROM work_memory_facts WHERE status = 'active' ${scopeClause}`,
-  ).all(...params) as { fact_text: string }[]
+  const rows = db
+    .prepare(`SELECT fact_text FROM work_memory_facts WHERE status = 'active' ${scopeClause}`)
+    .all(...params) as { fact_text: string }[]
   // Supplied facts (DEV-185) count as already-known too, so a rebuild or a
   // chat add cannot duplicate something the person already confirmed.
   const existing = [
@@ -197,19 +203,32 @@ function hasColumn(db: Database.Database, table: string, column: string): boolea
 // without a client scope; a client scope reads only that client's facts. Older
 // DBs without the `scope` column only have general memory, so a client read
 // returns nothing there.
-function readFactsForScope(db: Database.Database, scope: string): WorkMemoryFact[] {
+function readFactsForScope(
+  db: Database.Database,
+  scope: string,
+  confirmedOnly = false,
+): WorkMemoryFact[] {
   const sourceCol = hasColumn(db, 'work_memory_facts', 'source') ? 'source' : `NULL AS source`
   const hasScope = hasColumn(db, 'work_memory_facts', 'scope')
   if (!hasScope && scope !== GENERAL_SCOPE) return []
   const scopeClause = hasScope ? `AND scope = ?` : ''
   const params = hasScope ? [scope] : []
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT id, fact_text, origin, ${sourceCol}, status, topic_key, sort_order
     FROM work_memory_facts
     WHERE status = 'active' ${scopeClause}
     ORDER BY sort_order ASC, created_at ASC
-  `).all(...params) as FactRow[]
-  const drafted = rows.map((row) => ({
+  `,
+    )
+    .all(...params) as FactRow[]
+  // Active rows in work_memory_facts span two origins: 'drafted' (evidence-
+  // derived proposals awaiting confirmation) and 'user' (pre-DEV-185 hand-added
+  // facts still living in this table — confirmed, not proposals). Both ride the
+  // Manage-memory view; only 'drafted' is suppressed from AI context.
+  const activeRows = confirmedOnly ? rows.filter((row) => row.origin !== 'drafted') : rows
+  const drafted = activeRows.map((row) => ({
     id: row.id,
     text: row.fact_text,
     origin: row.origin,
@@ -224,7 +243,7 @@ function readFactsForScope(db: Database.Database, scope: string): WorkMemoryFact
       id: fact.id,
       text: fact.statement,
       origin: 'user' as const,
-      source: fact.source === 'chat' ? 'chat' as const : 'hand' as const,
+      source: fact.source === 'chat' ? ('chat' as const) : ('hand' as const),
       category: classifyWorkMemoryFact(fact.statement),
       supplied: true,
     }))
@@ -232,22 +251,33 @@ function readFactsForScope(db: Database.Database, scope: string): WorkMemoryFact
   return [...drafted, ...supplied]
 }
 
-export function getWorkMemoryProfile(db: Database.Database): WorkMemoryProfile {
+export function getWorkMemoryProfile(
+  db: Database.Database,
+  confirmedOnly = false,
+): WorkMemoryProfile {
   if (!ready(db)) return { facts: [] }
-  return { facts: readFactsForScope(db, GENERAL_SCOPE) }
+  return { facts: readFactsForScope(db, GENERAL_SCOPE, confirmedOnly) }
 }
 
 // One client's scoped memory — only pulled in when the question is about that
 // client (memory.md §2.2). Editing/forgetting works by fact id, so the general
 // updateWorkMemoryFact / forgetWorkMemoryFact handle client facts too.
-export function getClientMemory(db: Database.Database, clientId: string): WorkMemoryFact[] {
+export function getClientMemory(
+  db: Database.Database,
+  clientId: string,
+  confirmedOnly = false,
+): WorkMemoryFact[] {
   if (!ready(db) || !clientId) return []
-  return readFactsForScope(db, clientScope(clientId))
+  return readFactsForScope(db, clientScope(clientId), confirmedOnly)
 }
 
 // Hand-editing a fact makes it a user correction — origin flips to 'user' so a
 // later rebuild never overwrites it.
-export function updateWorkMemoryFact(db: Database.Database, id: string, text: string): WorkMemoryProfile {
+export function updateWorkMemoryFact(
+  db: Database.Database,
+  id: string,
+  text: string,
+): WorkMemoryProfile {
   if (!ready(db)) return { facts: [] }
   const trimmed = text.trim()
   if (!trimmed) return getWorkMemoryProfile(db)
@@ -262,9 +292,11 @@ export function updateWorkMemoryFact(db: Database.Database, id: string, text: st
 // supplied fact — explicitly confirmed, retrievable through search.
 export function confirmDraftedWorkMemoryFact(db: Database.Database, id: string): WorkMemoryProfile {
   if (!ready(db)) return { facts: [] }
-  const row = db.prepare(
-    `SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ? AND status = 'active'`,
-  ).get(id) as FactRow | undefined
+  const row = db
+    .prepare(
+      `SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ? AND status = 'active'`,
+    )
+    .get(id) as FactRow | undefined
   if (!row || row.origin !== 'drafted') return getWorkMemoryProfile(db)
   const scope = factScope(db, row.id)
   promoteToSupplied(db, row, row.fact_text, 'hand', scope, 'Confirmed from a drafted suggestion')
@@ -286,7 +318,11 @@ export function addWorkMemoryFact(db: Database.Database, text: string): WorkMemo
 // Add a fact by hand to one client's scoped memory (memory.md §2.2). Edits and
 // deletes still go through updateWorkMemoryFact / forgetWorkMemoryFact (by id),
 // so the durability rules are identical to general memory.
-export function addClientMemoryFact(db: Database.Database, clientId: string, text: string): WorkMemoryFact[] {
+export function addClientMemoryFact(
+  db: Database.Database,
+  clientId: string,
+  text: string,
+): WorkMemoryFact[] {
   if (!ready(db) || !clientId) return getClientMemory(db, clientId)
   const trimmed = text.trim()
   if (!trimmed) return getClientMemory(db, clientId)
@@ -307,14 +343,19 @@ export function forgetWorkMemoryFact(db: Database.Database, id: string): ForgetR
   if (!ready(db)) return { facts: [], changeSummary: 'Nothing to forget.' }
   if (isSuppliedFactId(id)) {
     const deleted = deleteSuppliedFact(db, id)
-    if (!deleted) return { facts: getWorkMemoryProfile(db).facts, changeSummary: 'Nothing to forget.' }
+    if (!deleted)
+      return { facts: getWorkMemoryProfile(db).facts, changeSummary: 'Nothing to forget.' }
     recordAudit(db, 'forgot', deleted.statement, 'hand', deleted.scope)
     return {
       facts: getWorkMemoryProfile(db).facts,
       changeSummary: `Forgot "${truncate(deleted.statement)}".`,
     }
   }
-  const row = db.prepare(`SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ?`).get(id) as FactRow | undefined
+  const row = db
+    .prepare(
+      `SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ?`,
+    )
+    .get(id) as FactRow | undefined
   if (!row) return { facts: getWorkMemoryProfile(db).facts, changeSummary: 'Nothing to forget.' }
 
   applyDelete(db, row)
@@ -341,11 +382,18 @@ function hasSourceColumn(db: Database.Database): boolean {
 
 function factScope(db: Database.Database, id: string): string {
   if (!hasColumn(db, 'work_memory_facts', 'scope')) return GENERAL_SCOPE
-  const row = db.prepare(`SELECT scope FROM work_memory_facts WHERE id = ?`).get(id) as { scope: string } | undefined
+  const row = db.prepare(`SELECT scope FROM work_memory_facts WHERE id = ?`).get(id) as
+    | { scope: string }
+    | undefined
   return row?.scope ?? GENERAL_SCOPE
 }
 
-function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand', scope: string = GENERAL_SCOPE): string | null {
+function applyAdd(
+  db: Database.Database,
+  text: string,
+  source: 'chat' | 'hand',
+  scope: string = GENERAL_SCOPE,
+): string | null {
   if (findDuplicateFact(db, text, scope)) return null
   if (suppliedMemoryAvailable(db)) {
     const fact = confirmSuppliedFact(db, {
@@ -358,17 +406,23 @@ function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand', 
   }
   // Pre-migration fallback: the legacy user-origin row.
   const id = newId()
-  const max = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`).get() as { m: number }
+  const max = db
+    .prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`)
+    .get() as { m: number }
   if (hasSourceColumn(db)) {
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, source, scope, sort_order, created_at, updated_at)
       VALUES (?, ?, 'user', 'active', NULL, ?, ?, ?, ?, ?)
-    `).run(id, text, source, scope, (max.m ?? 0) + 1, now(), now())
+    `,
+    ).run(id, text, source, scope, (max.m ?? 0) + 1, now(), now())
   } else {
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, sort_order, created_at, updated_at)
       VALUES (?, ?, 'user', 'active', NULL, ?, ?, ?)
-    `).run(id, text, (max.m ?? 0) + 1, now(), now())
+    `,
+    ).run(id, text, (max.m ?? 0) + 1, now(), now())
   }
   return id
 }
@@ -388,7 +442,9 @@ function promoteToSupplied(
   if (!suppliedMemoryAvailable(db)) return null
   const promote = db.transaction(() => {
     if (row.topic_key) {
-      db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(now(), row.id)
+      db.prepare(
+        `UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`,
+      ).run(now(), row.id)
     } else {
       db.prepare(`DELETE FROM work_memory_facts WHERE id = ?`).run(row.id)
     }
@@ -401,24 +457,39 @@ function promoteToSupplied(
 // place; a drafted row is confirmed with the edited text (the correction rule
 // — a rebuild never overwrites it). The legacy in-place path remains only for
 // pre-migration databases.
-function applyUpdate(db: Database.Database, id: string, text: string, source: 'chat' | 'hand'): void {
+function applyUpdate(
+  db: Database.Database,
+  id: string,
+  text: string,
+  source: 'chat' | 'hand',
+): void {
   if (isSuppliedFactId(id)) {
     updateSuppliedFact(db, id, text, source)
     return
   }
-  const row = db.prepare(`SELECT id, topic_key FROM work_memory_facts WHERE id = ?`)
-    .get(id) as Pick<FactRow, 'id' | 'topic_key'> | undefined
+  const row = db.prepare(`SELECT id, topic_key FROM work_memory_facts WHERE id = ?`).get(id) as
+    | Pick<FactRow, 'id' | 'topic_key'>
+    | undefined
   if (!row) return
   if (suppliedMemoryAvailable(db)) {
-    promoteToSupplied(db, row, text, source, factScope(db, id), 'Confirmed by editing a drafted fact')
+    promoteToSupplied(
+      db,
+      row,
+      text,
+      source,
+      factScope(db, id),
+      'Confirmed by editing a drafted fact',
+    )
     return
   }
   if (hasSourceColumn(db)) {
-    db.prepare(`UPDATE work_memory_facts SET fact_text = ?, origin = 'user', source = ?, updated_at = ? WHERE id = ?`)
-      .run(text, source, now(), id)
+    db.prepare(
+      `UPDATE work_memory_facts SET fact_text = ?, origin = 'user', source = ?, updated_at = ? WHERE id = ?`,
+    ).run(text, source, now(), id)
   } else {
-    db.prepare(`UPDATE work_memory_facts SET fact_text = ?, origin = 'user', updated_at = ? WHERE id = ?`)
-      .run(text, now(), id)
+    db.prepare(
+      `UPDATE work_memory_facts SET fact_text = ?, origin = 'user', updated_at = ? WHERE id = ?`,
+    ).run(text, now(), id)
   }
 }
 
@@ -432,7 +503,10 @@ function applyDelete(db: Database.Database, row: Pick<FactRow, 'id' | 'topic_key
     return
   }
   if (row.topic_key) {
-    db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(now(), row.id)
+    db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(
+      now(),
+      row.id,
+    )
   } else {
     db.prepare(`DELETE FROM work_memory_facts WHERE id = ?`).run(row.id)
   }
@@ -489,9 +563,9 @@ export function applyMemoryWriteOps(
           applied.push({ action: 'delete', text: deleted.statement })
           continue
         }
-        const row = db.prepare(
-          `SELECT id, fact_text, topic_key FROM work_memory_facts WHERE id = ?`,
-        ).get(op.targetId) as Pick<FactRow, 'id' | 'fact_text' | 'topic_key'> | undefined
+        const row = db
+          .prepare(`SELECT id, fact_text, topic_key FROM work_memory_facts WHERE id = ?`)
+          .get(op.targetId) as Pick<FactRow, 'id' | 'fact_text' | 'topic_key'> | undefined
         if (!row) continue
         applyDelete(db, row)
         recordAudit(db, 'forgot', row.fact_text, source, scope)
@@ -533,20 +607,39 @@ function recordAudit(
   scope: string = GENERAL_SCOPE,
 ): void {
   if (!tableExists(db, 'memory_audit')) return
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO memory_audit (id, action, fact_text, source, scope, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(`mau_${crypto.randomBytes(8).toString('hex')}`, action, text.slice(0, 280), source, scope, now())
+  `,
+  ).run(
+    `mau_${crypto.randomBytes(8).toString('hex')}`,
+    action,
+    text.slice(0, 280),
+    source,
+    scope,
+    now(),
+  )
 }
 
 export function getMemoryAudit(db: Database.Database, limit = 12): MemoryAuditEntry[] {
   if (!tableExists(db, 'memory_audit')) return []
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT id, action, fact_text, source, created_at
     FROM memory_audit
     ORDER BY created_at DESC
     LIMIT ?
-  `).all(limit) as Array<{ id: string; action: MemoryAuditEntry['action']; fact_text: string; source: 'chat' | 'hand'; created_at: number }>
+  `,
+    )
+    .all(limit) as Array<{
+    id: string
+    action: MemoryAuditEntry['action']
+    fact_text: string
+    source: 'chat' | 'hand'
+    created_at: number
+  }>
   return rows.map((row) => ({
     id: row.id,
     action: row.action,
@@ -574,7 +667,15 @@ const CATEGORY_PHRASE: Partial<Record<AppCategory, string>> = {
   aiTools: 'AI tools',
 }
 
-const BACKGROUND_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'reddit.com', 'netflix.com', 'instagram.com', 'tiktok.com']
+const BACKGROUND_DOMAINS = [
+  'youtube.com',
+  'x.com',
+  'twitter.com',
+  'reddit.com',
+  'netflix.com',
+  'instagram.com',
+  'tiktok.com',
+]
 
 // Build the deterministic draft from the user's real app/site usage. Small,
 // plain sentences grounded in evidence — never a number on noise.
@@ -583,23 +684,36 @@ function draftFactsFromEvidence(db: Database.Database): DraftFact[] {
   const lookback = now() - 30 * 86_400_000
 
   // Top apps by time → the names for the sentence (group by app only).
-  const topApps = db.prepare(`
+  // Guard on table existence: a database that has work_memory_facts but not yet
+  // app_sessions (no capture run) yields no app-based draft rather than a throw.
+  if (!tableExists(db, 'app_sessions')) {
+    return facts
+  }
+  const topApps = db
+    .prepare(
+      `
     SELECT app_name AS appName, SUM(duration_sec) AS total
     FROM app_sessions
     WHERE start_time >= ? AND app_name IS NOT NULL AND app_name != ''
     GROUP BY app_name
     ORDER BY total DESC
     LIMIT 5
-  `).all(lookback) as Array<{ appName: string; total: number }>
+  `,
+    )
+    .all(lookback) as Array<{ appName: string; total: number }>
 
   // Dominant category → grouped by category (not a non-grouped column), so the
   // phrase reflects real totals rather than an arbitrary per-app category value.
-  const categoryTotals = db.prepare(`
+  const categoryTotals = db
+    .prepare(
+      `
     SELECT category, SUM(duration_sec) AS total
     FROM app_sessions
     WHERE start_time >= ? AND category IS NOT NULL
     GROUP BY category
-  `).all(lookback) as Array<{ category: AppCategory; total: number }>
+  `,
+    )
+    .all(lookback) as Array<{ category: AppCategory; total: number }>
 
   const focusApps = topApps.filter((row) => (row.total ?? 0) > 1800)
   if (focusApps.length > 0) {
@@ -614,29 +728,41 @@ function draftFactsFromEvidence(db: Database.Database): DraftFact[] {
 
   // Background sites — what the user treats as not-focus. Reconciled credits
   // so background-tab history accrual can't inflate a domain's ranking (invariant 7).
-  const bgByDomain = new Map<string, number>()
-  for (const interval of getReconciledDomainIntervals(db, lookback, now())) {
-    const domain = interval.domain.replace(/^www\./, '')
-    if (BACKGROUND_DOMAINS.some((bg) => domain === bg || domain.endsWith(`.${bg}`))) {
-      bgByDomain.set(domain, (bgByDomain.get(domain) ?? 0) + (interval.end - interval.start) / 1000)
+  // Guard on table existence: website_visits may not exist before capture runs.
+  if (tableExists(db, 'website_visits')) {
+    const bgByDomain = new Map<string, number>()
+    for (const interval of getReconciledDomainIntervals(db, lookback, now())) {
+      const domain = interval.domain.replace(/^www\./, '')
+      if (BACKGROUND_DOMAINS.some((bg) => domain === bg || domain.endsWith(`.${bg}`))) {
+        bgByDomain.set(
+          domain,
+          (bgByDomain.get(domain) ?? 0) + (interval.end - interval.start) / 1000,
+        )
+      }
+    }
+    const background = [...bgByDomain.entries()]
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 3)
+      .map(([domain]) => domain)
+    const uniqueBackground = [...new Set(background)].slice(0, 3)
+    if (uniqueBackground.length > 0) {
+      facts.push({
+        topicKey: 'background',
+        text: `You treat ${joinNames(uniqueBackground.map(prettyDomain))} as background, not focus.`,
+      })
     }
   }
-  const background = [...bgByDomain.entries()]
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 3)
-    .map(([domain]) => domain)
-  const uniqueBackground = [...new Set(background)].slice(0, 3)
-  if (uniqueBackground.length > 0) {
-    facts.push({
-      topicKey: 'background',
-      text: `You treat ${joinNames(uniqueBackground.map(prettyDomain))} as background, not focus.`,
-    })
-  }
 
-  return facts
+  // A rejected proposal (declined in chat) is not re-drafted from evidence.
+  // The rejection key normalizes statement text, so the same plain-language
+  // sentence matches whether it was proposed by the agent or reconstructed
+  // from evidence. WO-18 / AC-SM-012.3.
+  return facts.filter((draft) => !findMemoryProposalRejection(db, draft.text))
 }
 
-function mostCommonCategory(rows: Array<{ category: AppCategory; total: number }>): AppCategory | null {
+function mostCommonCategory(
+  rows: Array<{ category: AppCategory; total: number }>,
+): AppCategory | null {
   const totals = new Map<AppCategory, number>()
   for (const row of rows) {
     if (!row.category || row.category === 'uncategorized' || row.category === 'system') continue
@@ -645,7 +771,10 @@ function mostCommonCategory(rows: Array<{ category: AppCategory; total: number }
   let best: AppCategory | null = null
   let bestTotal = 0
   for (const [category, total] of totals) {
-    if (total > bestTotal) { best = category; bestTotal = total }
+    if (total > bestTotal) {
+      best = category
+      bestTotal = total
+    }
   }
   return best
 }
@@ -667,20 +796,48 @@ function joinNames(names: string[]): string {
 export function rebuildWorkMemory(db: Database.Database): RebuildResult {
   if (!ready(db)) return { facts: [], added: [], changeSummary: 'Work memory is unavailable.' }
 
-  const existing = db.prepare(`SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts`).all() as FactRow[]
-  const tombstonedTopics = new Set(existing.filter((row) => row.status === 'deleted').map((row) => row.topic_key).filter(Boolean) as string[])
-  const draftedTopics = new Map(existing.filter((row) => row.origin === 'drafted' && row.status === 'active').map((row) => [row.topic_key ?? '', row]))
+  const existing = db
+    .prepare(`SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts`)
+    .all() as FactRow[]
+  const tombstonedTopics = new Set(
+    existing
+      .filter((row) => row.status === 'deleted')
+      .map((row) => row.topic_key)
+      .filter(Boolean) as string[],
+  )
+  const draftedTopics = new Map(
+    existing
+      .filter((row) => row.origin === 'drafted' && row.status === 'active')
+      .map((row) => [row.topic_key ?? '', row]),
+  )
+
+  // A draft that matches a rejected proposal is suppressed, not just skipped on
+  // the next draft — tombstone the stored row so the profile stops showing it
+  // and the topic can never be re-drafted. WO-18 / AC-SM-012.3.
+  for (const row of existing.filter((row) => row.origin === 'drafted' && row.status === 'active')) {
+    if (findMemoryProposalRejection(db, row.fact_text)) {
+      db.prepare(
+        `UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`,
+      ).run(now(), row.id)
+      if (row.topic_key) tombstonedTopics.add(row.topic_key)
+      draftedTopics.delete(row.topic_key ?? '')
+    }
+  }
 
   const drafts = draftFactsFromEvidence(db)
   const added: string[] = []
-  const maxOrderRow = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`).get() as { m: number }
+  const maxOrderRow = db
+    .prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`)
+    .get() as { m: number }
   let nextOrder = (maxOrderRow.m ?? 0) + 1
 
   const insert = db.prepare(`
     INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, sort_order, created_at, updated_at)
     VALUES (?, ?, 'drafted', 'active', ?, ?, ?, ?)
   `)
-  const refresh = db.prepare(`UPDATE work_memory_facts SET fact_text = ?, updated_at = ? WHERE id = ?`)
+  const refresh = db.prepare(
+    `UPDATE work_memory_facts SET fact_text = ?, updated_at = ? WHERE id = ?`,
+  )
 
   for (const draft of drafts) {
     if (tombstonedTopics.has(draft.topicKey)) continue // purposely forgotten — stay gone
@@ -694,9 +851,10 @@ export function rebuildWorkMemory(db: Database.Database): RebuildResult {
   }
 
   const facts = getWorkMemoryProfile(db).facts
-  const changeSummary = added.length > 0
-    ? `Rebuilt — added: ${added.map((text) => truncate(text, 50)).join('; ')}.`
-    : 'Rebuilt — nothing new to add; your profile already matches your recent activity.'
+  const changeSummary =
+    added.length > 0
+      ? `Rebuilt — added: ${added.map((text) => truncate(text, 50)).join('; ')}.`
+      : 'Rebuilt — nothing new to add; your profile already matches your recent activity.'
   return { facts, added, changeSummary }
 }
 
@@ -705,13 +863,18 @@ export function rebuildWorkMemory(db: Database.Database): RebuildResult {
 // than silently absorbing it (memory.md §2.1). Forgotten topics carry a
 // tombstone row (topic_key present, status='deleted'), so they're excluded and
 // never proposed again.
-export function proposeUnstoredMemoryFact(db: Database.Database): { topicKey: string; text: string } | null {
+export function proposeUnstoredMemoryFact(
+  db: Database.Database,
+): { topicKey: string; text: string } | null {
   if (!ready(db)) return null
   const drafts = draftFactsFromEvidence(db)
   if (drafts.length === 0) return null
   const known = new Set(
-    (db.prepare(`SELECT topic_key FROM work_memory_facts WHERE topic_key IS NOT NULL`)
-      .all() as Array<{ topic_key: string }>).map((row) => row.topic_key),
+    (
+      db
+        .prepare(`SELECT topic_key FROM work_memory_facts WHERE topic_key IS NOT NULL`)
+        .all() as Array<{ topic_key: string }>
+    ).map((row) => row.topic_key),
   )
   for (const draft of drafts) {
     if (!known.has(draft.topicKey)) return { topicKey: draft.topicKey, text: draft.text }
@@ -720,9 +883,10 @@ export function proposeUnstoredMemoryFact(db: Database.Database): { topicKey: st
 }
 
 // The profile handed to every AI surface as context (naming, recaps, chat,
-// wraps). Context only — it colors interpretation, never invents activity.
+// wraps). Only confirmed facts ride this block — drafts are proposals shown in
+// the Manage-memory view, not AI context (WO-18 / AC-SM-012.1).
 export function workMemoryPromptBlock(db: Database.Database): string {
-  const { facts } = getWorkMemoryProfile(db)
+  const { facts } = getWorkMemoryProfile(db, true)
   if (facts.length === 0) return ''
   return [
     'What Daylens knows about this user (context only — never invent activity beyond the real evidence):',
@@ -734,8 +898,12 @@ export function workMemoryPromptBlock(db: Database.Database): string {
 // only when the question is about that client (memory.md §2.2 / invariant 4).
 // Context only: it colors how Daylens reads that client's tracked activity, the
 // hours still come from the attribution evidence.
-export function clientMemoryPromptBlock(db: Database.Database, clientId: string, clientName: string): string {
-  const facts = getClientMemory(db, clientId)
+export function clientMemoryPromptBlock(
+  db: Database.Database,
+  clientId: string,
+  clientName: string,
+): string {
+  const facts = getClientMemory(db, clientId, true)
   if (facts.length === 0) return ''
   return [
     `What Daylens knows about ${clientName} (context only — never invent activity beyond the real evidence):`,
@@ -762,12 +930,16 @@ function matchClientsInText(db: Database.Database, text: string): ClientScopeMat
   if (!ready(db) || !text.trim()) return []
   if (!tableExists(db, 'clients') || !tableExists(db, 'client_aliases')) return []
   const lower = ` ${text.toLowerCase()} `
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT c.id AS client_id, c.name AS client_name, ca.alias AS alias
     FROM clients c
     JOIN client_aliases ca ON ca.client_id = c.id
     WHERE c.status = 'active'
-  `).all() as ScopeMatchRow[]
+  `,
+    )
+    .all() as ScopeMatchRow[]
 
   const seen = new Set<string>()
   const matches: ClientScopeMatch[] = []
@@ -786,7 +958,10 @@ function matchClientsInText(db: Database.Database, text: string): ClientScopeMat
 // The single client a memory instruction is about, or null for general memory.
 // "remember Acme's deadline is the 30th" → Acme's scope. If the text names more
 // than one client we stay general rather than guess which scope to write to.
-export function findClientScopeForWrite(db: Database.Database, text: string): ClientScopeMatch | null {
+export function findClientScopeForWrite(
+  db: Database.Database,
+  text: string,
+): ClientScopeMatch | null {
   const matches = matchClientsInText(db, text)
   return matches.length === 1 ? matches[0] : null
 }
@@ -832,18 +1007,25 @@ export interface ScopedMemoryProfile {
   clients: ClientMemoryGroup[]
 }
 
-export function getScopedMemoryProfile(db: Database.Database): ScopedMemoryProfile {
+export function getScopedMemoryProfile(
+  db: Database.Database,
+  confirmedOnly = false,
+): ScopedMemoryProfile {
   if (!ready(db)) return { general: [], clients: [] }
-  const general = readFactsForScope(db, GENERAL_SCOPE)
+  const general = readFactsForScope(db, GENERAL_SCOPE, confirmedOnly)
   if (!tableExists(db, 'clients')) return { general, clients: [] }
-  const clientRows = db.prepare(`
+  const clientRows = db
+    .prepare(
+      `
     SELECT id, name, color FROM clients WHERE status = 'active' ORDER BY name ASC
-  `).all() as Array<{ id: string; name: string; color: string | null }>
+  `,
+    )
+    .all() as Array<{ id: string; name: string; color: string | null }>
   const clients = clientRows.map((row) => ({
     clientId: row.id,
     clientName: row.name,
     color: row.color,
-    facts: getClientMemory(db, row.id),
+    facts: getClientMemory(db, row.id, confirmedOnly),
   }))
   return { general, clients }
 }

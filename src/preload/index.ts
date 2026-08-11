@@ -121,6 +121,16 @@ export interface SearchOptions {
   startDate?: string
   endDate?: string
   limit?: number
+  // The scopes a person can narrow a search to. Whatever is set here restricts
+  // every eligible retrieval path; a path whose tables cannot express a set
+  // filter returns nothing rather than rows that ignore it.
+  applications?: string[]
+  websites?: string[]
+  projects?: string[]
+  clients?: string[]
+  people?: string[]
+  meetings?: string[]
+  sources?: ('observed' | 'connected' | 'supplied' | 'inferred')[]
 }
 
 export type DaylensSearchResult =
@@ -194,6 +204,53 @@ export interface DaylensNaturalSearchResult {
   intent: string | null
   terms: string[]
   usedProvider: boolean
+}
+
+export type DaylensRetrievalPath = 'structured' | 'exact' | 'semantic'
+
+// One reconciled result: the activity, not one table's row for it. A result
+// carrying more than one `foundBy` was produced independently by that many
+// paths, and `representations` holds the raw rows behind it.
+export interface DaylensRetrievalResult {
+  id: string
+  kind: 'entity' | 'moment' | 'structured'
+  title: string
+  startTime: number
+  endTime: number
+  date: string
+  excerpt: string
+  sourceType: 'observed' | 'connected' | 'supplied' | 'inferred'
+  foundBy: DaylensRetrievalPath[]
+  matchExplanation: string
+  score: number
+  representations: DaylensSearchResult[]
+}
+
+export interface DaylensRetrievalResponse {
+  plan: {
+    query: string
+    scope: {
+      startDate?: string
+      endDate?: string
+      timeRangeSource: 'filter' | 'query-text' | 'none'
+      lexicalText: string
+      entities: Array<{
+        id: string
+        name: string
+        entityType: string
+        matchedAlias: string | null
+        groupIds: string[]
+      }>
+      // The query named something that resolved to more than one entity at the
+      // same strength; the candidates are kept separate rather than merged.
+      ambiguousEntity: boolean
+    }
+    paths: DaylensRetrievalPath[]
+    unavailable: Array<{ path: DaylensRetrievalPath; reason: string }>
+  }
+  results: DaylensRetrievalResult[]
+  // An eligible path could not run. The query still succeeded.
+  degraded: boolean
 }
 
 // DEV-180: local semantic-search status for the Settings surface — which
@@ -387,6 +444,11 @@ const api = {
       ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
   },
   search: {
+    // The unified boundary: the planner scopes, retrieves, reconciles, and
+    // ranks, and hands back one ordered result set plus the plan that produced
+    // it. The single-path calls below remain for surfaces not yet migrated.
+    unified: (query: string, opts?: SearchOptions): Promise<DaylensRetrievalResponse> =>
+      ipcRenderer.invoke('search:unified', { query, opts }),
     all: (query: string, opts?: SearchOptions): Promise<DaylensSearchResult[]> =>
       ipcRenderer.invoke('search:all', { query, opts }),
     sessions: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'session' }>[]> =>

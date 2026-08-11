@@ -379,7 +379,31 @@ function parseJsonObject<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
-export interface SearchOptions {
+export type SearchSourceType = 'observed' | 'connected' | 'supplied' | 'inferred'
+
+/**
+ * The scopes a person can narrow a search to. Every eligible retrieval path is
+ * restricted by whichever of these are set; an unset filter means the full
+ * eligible local history.
+ *
+ * Project, client, person, and meeting are all entity ids drawn from one table.
+ * They stay four named fields because a caller narrowing to a client should not
+ * have to know it shares a namespace with meetings; they funnel into a single id
+ * set at the SQL boundary.
+ */
+export interface SearchFilters {
+  /** Bundle ids or display names. */
+  applications?: string[]
+  /** Domains. */
+  websites?: string[]
+  projects?: string[]
+  clients?: string[]
+  people?: string[]
+  meetings?: string[]
+  sources?: SearchSourceType[]
+}
+
+export interface SearchOptions extends SearchFilters {
   startDate?: string
   endDate?: string
   limit?: number
@@ -392,7 +416,115 @@ export interface SearchOptions {
   maxStartMs?: number
 }
 
-export type SearchSourceType = 'observed' | 'connected' | 'supplied' | 'inferred'
+/** The entity-shaped filters, flattened to the id set the SQL actually uses. */
+function filterEntityIds(opts: SearchFilters): string[] {
+  const ids = [
+    ...(opts.projects ?? []),
+    ...(opts.clients ?? []),
+    ...(opts.people ?? []),
+    ...(opts.meetings ?? []),
+  ].filter(Boolean)
+  return [...new Set(ids)]
+}
+
+function hasValues(values: readonly string[] | undefined): values is readonly string[] {
+  return Array.isArray(values) && values.length > 0
+}
+
+/** Which filter kinds a reader's tables can actually express. */
+interface ExpressibleFilters {
+  applications?: boolean
+  websites?: boolean
+  entities?: boolean
+  /** The reader can only ever return rows of these memory types. */
+  sourceTypes: readonly SearchSourceType[]
+}
+
+/**
+ * A reader that cannot express a filter the person set must return nothing
+ * rather than rows that ignore it.
+ *
+ * This is the only safe direction. If an unexpressive reader returned its rows
+ * unfiltered, narrowing a search to a website would still bring back sessions
+ * and artifacts, so the filter would silently fail to constrain anything. An
+ * omission is visible and recoverable; a leak is neither.
+ */
+function readerIneligible(opts: SearchOptions, can: ExpressibleFilters): boolean {
+  if (hasValues(opts.applications) && !can.applications) return true
+  if (hasValues(opts.websites) && !can.websites) return true
+  if (filterEntityIds(opts).length > 0 && !can.entities) return true
+  if (hasValues(opts.sources)) {
+    const overlap = can.sourceTypes.some((type) => opts.sources?.includes(type))
+    if (!overlap) return true
+  }
+  return false
+}
+
+interface FilterSql {
+  sql: string
+  params: unknown[]
+}
+
+const NO_FILTER: FilterSql = { sql: '', params: [] }
+
+const MEMORY_SOURCE_TYPES: readonly SearchSourceType[] = ['observed', 'connected', 'supplied', 'inferred']
+/** Readers over raw capture tables can only ever return directly observed rows. */
+const OBSERVED_ONLY: readonly SearchSourceType[] = ['observed']
+
+function marks(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+/** Filter clauses over a `memory_records`-shaped reader. */
+function memoryRecordFilterSql(opts: SearchOptions): FilterSql {
+  const clauses: string[] = []
+  const params: unknown[] = []
+
+  if (hasValues(opts.applications)) {
+    clauses.push(`AND (memory_records.app_bundle_id IN (${marks(opts.applications.length)})
+      OR LOWER(memory_records.app_name) IN (${marks(opts.applications.length)}))`)
+    params.push(...opts.applications, ...opts.applications.map((name) => name.toLowerCase()))
+  }
+  if (hasValues(opts.sources)) {
+    clauses.push(`AND memory_records.memory_type IN (${marks(opts.sources.length)})`)
+    params.push(...opts.sources)
+  }
+  const entityIds = filterEntityIds(opts)
+  if (entityIds.length > 0) {
+    clauses.push(`AND EXISTS (
+      SELECT 1 FROM memory_record_entities scope_tags
+      WHERE scope_tags.record_id = memory_records.id
+        AND scope_tags.entity_id IN (${marks(entityIds.length)})
+    )`)
+    params.push(...entityIds)
+  }
+  return { sql: clauses.join('\n      '), params }
+}
+
+/** Filter clauses over the legacy `app_sessions` reader. */
+function appSessionFilterSql(opts: SearchOptions): FilterSql {
+  if (!hasValues(opts.applications)) return NO_FILTER
+  return {
+    sql: `AND (app_sessions.bundle_id IN (${marks(opts.applications.length)})
+      OR LOWER(app_sessions.app_name) IN (${marks(opts.applications.length)}))`,
+    params: [...opts.applications, ...opts.applications.map((name) => name.toLowerCase())],
+  }
+}
+
+/** Filter clauses over the `website_visits` reader. */
+function websiteVisitFilterSql(opts: SearchOptions): FilterSql {
+  const clauses: string[] = []
+  const params: unknown[] = []
+  if (hasValues(opts.websites)) {
+    clauses.push(`AND LOWER(website_visits.domain) IN (${marks(opts.websites.length)})`)
+    params.push(...opts.websites.map((domain) => domain.toLowerCase()))
+  }
+  if (hasValues(opts.applications)) {
+    clauses.push(`AND website_visits.browser_bundle_id IN (${marks(opts.applications.length)})`)
+    params.push(...opts.applications)
+  }
+  return { sql: clauses.join('\n      '), params }
+}
 
 export interface SessionSearchResult {
   type: 'session'
@@ -918,7 +1050,18 @@ export function searchSessions(
   const { fromMs, toMs, limit } = searchBounds(opts)
   const memoryAvailable = memorySearchAvailable(db)
 
-  const memoryResults: SessionSearchResult[] = !memoryAvailable ? [] : (db.prepare(`
+  // The canonical arm can express every filter kind except website; the legacy
+  // arm carries no entity tags and is direct capture only.
+  const memoryEligible = !readerIneligible(opts, {
+    applications: true, entities: true, sourceTypes: MEMORY_SOURCE_TYPES,
+  })
+  const legacyEligible = !readerIneligible(opts, {
+    applications: true, sourceTypes: OBSERVED_ONLY,
+  })
+  const memoryFilters = memoryRecordFilterSql(opts)
+  const legacyFilters = appSessionFilterSql(opts)
+
+  const memoryResults: SessionSearchResult[] = !memoryAvailable || !memoryEligible ? [] : (db.prepare(`
     SELECT
       memory_records.rowid AS id,
       memory_records.record_kind,
@@ -936,13 +1079,20 @@ export function searchSessions(
     JOIN memory_records ON memory_records.rowid = memory_records_fts.rowid
     LEFT JOIN entities ON entities.id = memory_records.primary_entity_id
     WHERE memory_records_fts MATCH ?
+      -- Page records are the browser reader's to return; surfacing them here
+      -- too would report one domain twice for the same query.
+      AND memory_records.record_kind != 'page'
       AND memory_records.deleted_at IS NULL
       AND memory_records.start_ms >= ?
       AND memory_records.start_ms < ?
       ${MEMORY_RECORD_CORRECTION_FILTERS}
+      ${memoryFilters.sql}
     ORDER BY memory_records.start_ms DESC
     LIMIT ?
-  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as MemoryMomentRow[])
+  `).all(
+    SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs,
+    ...memoryFilters.params, limit,
+  ) as MemoryMomentRow[])
     .map(mapMemoryMomentRow)
 
   // Legacy fallback, restricted to days without a memory-index projection.
@@ -952,7 +1102,7 @@ export function searchSessions(
         WHERE memory_index_days.date = strftime('%Y-%m-%d', app_sessions.start_time / 1000, 'unixepoch', 'localtime')
       )`
     : ''
-  const legacyRows = db.prepare(`
+  const legacyRows = !legacyEligible ? [] : db.prepare(`
     SELECT
       app_sessions.id,
       app_sessions.bundle_id,
@@ -982,9 +1132,13 @@ export function searchSessions(
           AND app_sessions.start_time >= exclusion.span_start_ms
           AND app_sessions.start_time < exclusion.span_end_ms
       )
+      ${legacyFilters.sql}
     ORDER BY app_sessions.start_time DESC
     LIMIT ?
-  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
+  `).all(
+    SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs,
+    ...legacyFilters.params, limit,
+  ) as {
     id: number
     bundle_id: string
     app_name: string
@@ -1024,8 +1178,10 @@ export function searchEntityMoments(
   opts: SearchOptions = {},
 ): SessionSearchResult[] {
   if (entityIds.length === 0 || !memorySearchAvailable(db)) return []
+  if (readerIneligible(opts, { applications: true, entities: true, sourceTypes: MEMORY_SOURCE_TYPES })) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
-  const marks = entityIds.map(() => '?').join(', ')
+  const filters = memoryRecordFilterSql(opts)
+  const idMarks = entityIds.map(() => '?').join(', ')
   const rows = db.prepare(`
     SELECT
       memory_records.rowid AS id,
@@ -1043,15 +1199,16 @@ export function searchEntityMoments(
     FROM memory_record_entities tags
     JOIN memory_records ON memory_records.id = tags.record_id
     LEFT JOIN entities ON entities.id = memory_records.primary_entity_id
-    WHERE tags.entity_id IN (${marks})
+    WHERE tags.entity_id IN (${idMarks})
       AND memory_records.deleted_at IS NULL
       AND memory_records.start_ms >= ?
       AND memory_records.start_ms < ?
       ${MEMORY_RECORD_CORRECTION_FILTERS}
+      ${filters.sql}
     GROUP BY memory_records.rowid
     ORDER BY memory_records.start_ms DESC
     LIMIT ?
-  `).all(...entityIds, fromMs, toMs, limit) as MemoryMomentRow[]
+  `).all(...entityIds, fromMs, toMs, ...filters.params, limit) as MemoryMomentRow[]
   return rows.map(mapMemoryMomentRow)
 }
 
@@ -1080,11 +1237,13 @@ export function searchSemanticMoments(
   opts: SearchOptions = {},
 ): SessionSearchResult[] {
   if (!memorySearchAvailable(db)) return []
+  if (readerIneligible(opts, { applications: true, entities: true, sourceTypes: MEMORY_SOURCE_TYPES })) return []
   const vecReady = db.prepare(
     `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_semantic_vec'`,
   ).get() != null
   if (!vecReady) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
+  const filters = memoryRecordFilterSql(opts)
   // Over-fetch neighbours: date bounds, correction filters, and the model
   // check trim the candidate set after the k-NN.
   const k = Math.min(Math.max(limit * 4, 16), 256)
@@ -1122,6 +1281,7 @@ export function searchSemanticMoments(
       AND memory_records.start_ms >= ?
       AND memory_records.start_ms < ?
       ${MEMORY_RECORD_CORRECTION_FILTERS}
+      ${filters.sql}
     ORDER BY hits.distance ASC
     LIMIT ?
   `).all(
@@ -1132,6 +1292,7 @@ export function searchSemanticMoments(
     SEMANTIC_MAX_DISTANCE,
     fromMs,
     toMs,
+    ...filters.params,
     limit,
   ) as Array<MemoryMomentRow & { distance: number }>
   return rows.map((row) => ({
@@ -1167,6 +1328,7 @@ export function searchBlocks(
 ): BlockSearchResult[] {
   const ftsQuery = toFtsQuery(query)
   if (!ftsQuery) return []
+  if (readerIneligible(opts, { sourceTypes: OBSERVED_ONLY })) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
 
   const indexedRows = db.prepare(`
@@ -1257,7 +1419,76 @@ export function searchBrowser(
 ): BrowserSearchResult[] {
   const ftsQuery = toFtsQuery(query)
   if (!ftsQuery) return []
+  if (readerIneligible(opts, { applications: true, websites: true, sourceTypes: OBSERVED_ONLY })) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
+  const filters = websiteVisitFilterSql(opts)
+  const memoryAvailable = memorySearchAvailable(db)
+
+  // Canonical arm: the day's corrected browsing, projected per domain. An
+  // ignored span or an excluded site never became a record, so a correction
+  // propagates here by re-projection rather than by a hand-copied filter.
+  const memoryFilters = memoryRecordFilterSql(opts)
+  const memoryDomainFilter = hasValues(opts.websites)
+    ? `AND LOWER(memory_records.domain) IN (${marks(opts.websites.length)})`
+    : ''
+  const memoryDomainParams = hasValues(opts.websites)
+    ? opts.websites.map((domain) => domain.toLowerCase())
+    : []
+
+  const memoryResults: BrowserSearchResult[] = !memoryAvailable ? [] : (db.prepare(`
+    SELECT
+      memory_records.rowid AS id,
+      memory_records.domain,
+      memory_records.title AS page_title,
+      memory_records.url,
+      memory_records.start_ms,
+      memory_records.end_ms,
+      memory_records.date,
+      snippet(memory_records_fts, -1, ?, ?, '...', 18) AS excerpt
+    FROM memory_records_fts
+    JOIN memory_records ON memory_records.rowid = memory_records_fts.rowid
+    WHERE memory_records_fts MATCH ?
+      AND memory_records.record_kind = 'page'
+      AND memory_records.deleted_at IS NULL
+      AND memory_records.start_ms >= ?
+      AND memory_records.start_ms < ?
+      ${MEMORY_RECORD_CORRECTION_FILTERS}
+      ${memoryFilters.sql}
+      ${memoryDomainFilter}
+    ORDER BY memory_records.start_ms DESC
+    LIMIT ?
+  `).all(
+    SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs,
+    ...memoryFilters.params, ...memoryDomainParams, limit,
+  ) as Array<{
+    id: number
+    domain: string | null
+    page_title: string | null
+    url: string | null
+    start_ms: number
+    end_ms: number
+    date: string
+    excerpt: string | null
+  }>).map((row) => ({
+    type: 'browser',
+    id: row.id,
+    domain: row.domain ?? '',
+    pageTitle: row.page_title,
+    url: row.url,
+    startTime: row.start_ms,
+    endTime: row.end_ms,
+    date: row.date,
+    excerpt: row.excerpt ?? row.page_title ?? row.domain ?? '',
+  }))
+
+  // Legacy arm, restricted to days with no projection, so an indexed day
+  // answers exactly once and a not-yet-backfilled day still answers.
+  const unindexedDayFilter = memoryAvailable
+    ? `AND NOT EXISTS (
+        SELECT 1 FROM memory_index_days
+        WHERE memory_index_days.date = strftime('%Y-%m-%d', website_visits.visit_time / 1000, 'unixepoch', 'localtime')
+      )`
+    : ''
 
   const rows = db.prepare(`
     SELECT
@@ -1288,9 +1519,14 @@ export function searchBrowser(
           AND website_visits.visit_time >= exclusion.span_start_ms
           AND website_visits.visit_time < exclusion.span_end_ms
       )
+      ${unindexedDayFilter}
+      ${filters.sql}
     ORDER BY website_visits.visit_time DESC
     LIMIT ?
-  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
+  `).all(
+    SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs,
+    ...filters.params, limit,
+  ) as {
     id: number
     domain: string
     page_title: string | null
@@ -1300,7 +1536,7 @@ export function searchBrowser(
     excerpt: string | null
   }[]
 
-  return rows.map((row) => ({
+  const legacyResults: BrowserSearchResult[] = rows.map((row) => ({
     type: 'browser',
     id: row.id,
     domain: row.domain,
@@ -1311,6 +1547,10 @@ export function searchBrowser(
     date: localDateString(new Date(row.visit_time)),
     excerpt: row.excerpt ?? row.page_title ?? row.url ?? row.domain,
   }))
+
+  return [...memoryResults, ...legacyResults]
+    .sort((left, right) => right.startTime - left.startTime)
+    .slice(0, limit)
 }
 
 export function searchArtifacts(
@@ -1320,8 +1560,17 @@ export function searchArtifacts(
 ): ArtifactSearchResult[] {
   const ftsQuery = toFtsQuery(query)
   if (!ftsQuery) return []
+  if (readerIneligible(opts, { sourceTypes: OBSERVED_ONLY })) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
 
+  // NOT routed through memory_records, deliberately. The canonical `artifact`
+  // record kind projects `artifacts`/`artifact_mentions` — documents observed
+  // in window titles — while this reader searches `ai_artifacts`, the files the
+  // assistant produced in a thread. They are different things, and pointing
+  // this reader at the canonical arm would make every AI artifact unfindable on
+  // any indexed day. What was genuinely broken here is the correction filter:
+  // this reader had none at all, so an artifact created inside a span the
+  // person marked ignored was still returned.
   const rows = db.prepare(`
     SELECT
       ai_artifacts.id,
@@ -1334,6 +1583,13 @@ export function searchArtifacts(
     WHERE ai_artifacts_fts MATCH ?
       AND ai_artifacts.created_at >= ?
       AND ai_artifacts.created_at < ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM timeline_block_reviews review
+        WHERE review.review_state = 'ignored'
+          AND ai_artifacts.created_at >= json_extract(review.original_block_json, '$.startTime')
+          AND ai_artifacts.created_at < json_extract(review.original_block_json, '$.endTime')
+      )
     ORDER BY ai_artifacts.created_at DESC
     LIMIT ?
   `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
