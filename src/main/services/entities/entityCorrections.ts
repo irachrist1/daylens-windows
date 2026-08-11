@@ -29,6 +29,7 @@ import {
   resolveMergeChain,
   type EntityRow,
 } from './entityRepository'
+import { refreshEntitySearchTagsForMany } from './entitySearchTags'
 
 export type EntityCorrectionCommand =
   | { kind: 'entity-rename'; entityId: string; name: string }
@@ -366,5 +367,6 @@ export function applyEntityCorrection(
     `).run(correctionId, localDateString(), command.kind, description, JSON.stringify(snapshot), Date.now())
   })
   commit()
+  refreshEntitySearchTagsForMany(db, affectedEntityIds(command))
   return { correctionId, description }
 }

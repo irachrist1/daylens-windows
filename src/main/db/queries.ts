@@ -34,6 +34,7 @@ import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 import { activityCategoryLabel, canonicalAppCategory } from '@shared/activityCategories'
 import { REAL_ABSENCE_MIN_MS } from '../lib/absenceGuard'
+import { adoptWebsiteVisitWrite } from '../services/entities/entityAdoption'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
   return resolveCanonicalApp(bundleId, fallbackName).displayName
@@ -2476,7 +2477,7 @@ export function insertWebsiteVisit(
         source
       )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `  ).run(
     visit.domain,
     visit.pageTitle,
     url,
@@ -2490,6 +2491,15 @@ export function insertWebsiteVisit(
     pageKey,
     visit.source,
   )
+  if (result.changes > 0) {
+    const visitId = Number(result.lastInsertRowid)
+    adoptWebsiteVisitWrite(db, {
+      domain: visit.domain,
+      title: visit.pageTitle,
+      visitId: Number.isFinite(visitId) ? visitId : null,
+      observedAt: visit.visitTime,
+    })
+  }
   return result.changes > 0
 }
 

@@ -16,6 +16,11 @@ import {
   type EntityRow,
   type ResolveByLabelResult,
 } from '../../services/entities/entityRepository'
+import {
+  ensureSuppliedClientEntity,
+  ensureSuppliedProjectEntity,
+} from '../../services/entities/entityAdoption'
+import { refreshEntitySearchTags } from '../../services/entities/entitySearchTags'
 
 // ─── Shared row types ────────────────────────────────────────────────────────
 
@@ -1639,8 +1644,16 @@ export function createProject(
       INSERT INTO project_aliases (id, project_id, alias, alias_normalized, source, created_at)
       VALUES (?, ?, ?, ?, 'user', ?)
     `).run(randomUUID(), id, name, normalizeAlias(name), now)
+    ensureSuppliedProjectEntity(db, {
+      id,
+      name,
+      clientId: payload.clientId ?? null,
+      observedAt: now,
+      aliases: [{ alias: name, source: 'user' }],
+    })
   })
   tx()
+  refreshEntitySearchTags(db, id)
   return { id, client_id: payload.clientId ?? null, name }
 }
 
@@ -1760,8 +1773,13 @@ export function createClient(
     // Also seed short aliases ("Andersen" for "Andersen in Rwanda") so chat
     // references resolve the scope without the full name (memory.md §2.2).
     seedClientAliasTokens(db, id, name, now)
+    const aliases = (db.prepare(`
+      SELECT alias, source FROM client_aliases WHERE client_id = ?
+    `).all(id) as Array<{ alias: string; source: string }>)
+    ensureSuppliedClientEntity(db, { id, name, observedAt: now, aliases })
   })
   tx()
+  refreshEntitySearchTags(db, id)
 
   return { id, name, color, status: 'active', created_at: now, updated_at: now, projectCount: 0 }
 }
@@ -1804,8 +1822,18 @@ export function updateClient(
       // Keep short aliases in sync with the new name (memory.md §2.2).
       seedClientAliasTokens(db, payload.id, finalName, now)
     }
+    const aliases = (db.prepare(`
+      SELECT alias, source FROM client_aliases WHERE client_id = ?
+    `).all(payload.id) as Array<{ alias: string; source: string }>)
+    ensureSuppliedClientEntity(db, {
+      id: payload.id,
+      name: finalName,
+      observedAt: now,
+      aliases,
+    })
   })
   tx()
+  if (renaming) refreshEntitySearchTags(db, payload.id)
 
   const projectCount = (db.prepare(`SELECT COUNT(*) AS cnt FROM projects WHERE client_id = ? AND status = 'active'`).get(payload.id) as { cnt: number }).cnt
   return {
