@@ -73,6 +73,33 @@ export function wrapMcpToolsWithGuards(tools: ToolSet): ToolSet {
   return wrapped
 }
 
+/** Produces a unique tool key from a server name and tool name. Normalizes
+ *  non-alphanumeric characters to `_`, truncates to 64 chars, and if the
+ *  result collides with an already-used key, appends a numeric suffix so two
+ *  tools from different servers never silently replace each other.
+ *  Pure so the collision behavior is testable without spawning subprocesses. */
+export function namespaceMcpToolName(
+  serverName: string,
+  toolName: string,
+  used: Set<string>,
+): string {
+  const base = `mcp_${serverName}_${toolName}`
+    .replace(/[^a-zA-Z0-9_]/g, '_')
+    .slice(0, 64)
+  if (!used.has(base)) {
+    used.add(base)
+    return base
+  }
+  let suffix = 2
+  let candidate: string
+  do {
+    candidate = `${base}_${suffix}`.slice(0, 64)
+    suffix++
+  } while (used.has(candidate))
+  used.add(candidate)
+  return candidate
+}
+
 /** Splits configured servers into those to attempt and those to skip. Pure so
  *  the decision is testable without spawning subprocesses. A server without
  *  `enabled` is treated as enabled — backward compatible with configs stored
@@ -126,6 +153,7 @@ export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpTo
   const clients: Array<{ close: () => Promise<void> }> = []
   const tools: ToolSet = {}
   const statuses: McpServerStatus[] = [...skipped]
+  const usedNames = new Set<string>()
 
   await Promise.all(connectable.map(async (server) => {
     const transport = new StdioMCPTransport({
@@ -142,8 +170,12 @@ export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpTo
       clients.push(client)
       const serverTools = wrapMcpToolsWithGuards(await client.tools())
       for (const [name, toolDef] of Object.entries(serverTools)) {
-        // Namespace to avoid collisions between servers and with built-ins.
-        tools[`mcp_${server.name}_${name}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 64)] = toolDef
+        const key = namespaceMcpToolName(server.name, name, usedNames)
+        const originalDescription = (toolDef as { description?: string }).description ?? ''
+        tools[key] = {
+          ...toolDef,
+          description: `[MCP:${server.name}] ${originalDescription}`.trim(),
+        } as ToolSet[string]
       }
       statuses.push({ name: server.name, status: 'connected' })
     } catch (error) {
