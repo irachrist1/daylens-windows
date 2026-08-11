@@ -39,7 +39,12 @@ function helperEvent(overrides: Record<string, unknown>): Record<string, unknown
   }
 }
 
-async function runRelay(events: Array<Record<string, unknown>>, spoolDir: string, controls: Record<string, unknown>): Promise<void> {
+async function runRelay(
+  events: Array<Record<string, unknown>>,
+  spoolDir: string,
+  controls: Record<string, unknown>,
+  expectAtLeast = 0,
+): Promise<void> {
   const relay = fork(
     path.join(projectRoot, 'packages', 'capture-relay', 'src', 'index.ts'),
     [],
@@ -57,8 +62,33 @@ async function runRelay(events: Array<Record<string, unknown>>, spoolDir: string
       serialization: 'json',
     },
   )
+  // The relay announces itself once its loader has booted and the helper is
+  // spawned. Waiting for that instead of a fixed delay is what makes this
+  // deterministic: under parallel load the boot alone can outlast any constant,
+  // and shutting down early leaves the spool empty and the assertions lying.
+  await new Promise<void>((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error('relay never reported ready')), 45_000)
+    relay.on('message', (message: { op?: string }) => {
+      if (message?.op === 'ready') {
+        clearTimeout(deadline)
+        resolve()
+      }
+    })
+  })
   relay.send({ op: 'controls', controls })
-  await new Promise((resolve) => setTimeout(resolve, 1_200))
+  // Then drain: wait until the spool has at least what this case expects and has
+  // stopped growing, so a slow helper cannot be mistaken for a gated one.
+  const settledAt = Date.now() + 20_000
+  let previous = -1
+  let stableFor = 0
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const count = readSpool(spoolDir).length
+    stableFor = count === previous ? stableFor + 1 : 0
+    previous = count
+    if (count >= expectAtLeast && stableFor >= 5) break
+    if (Date.now() > settledAt) break
+  }
   relay.send({ op: 'shutdown' })
   await new Promise<void>((resolve) => {
     relay.on('exit', () => resolve())
@@ -97,7 +127,7 @@ test('relay spools only gated events: incognito, excluded, and noise never reach
       helperEvent({ app_bundle_id: 'com.apple.loginwindow', app_name: 'loginwindow', window_title: null }),
       helperEvent({ app_bundle_id: 'com.excluded.app', app_name: 'Excluded' }),
       helperEvent({ app_bundle_id: 'com.apple.Safari', app_name: 'Safari', window_title: 'My bank statement' }),
-    ], spoolDir, { ...CONSENTED_CONTROLS, excludedApps: ['com.excluded.app'] })
+    ], spoolDir, { ...CONSENTED_CONTROLS, excludedApps: ['com.excluded.app'] }, 2)
 
     const spooled = readSpool(spoolDir)
     const names = spooled.map((event) => event.app_name)
