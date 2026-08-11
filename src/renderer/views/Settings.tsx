@@ -3930,7 +3930,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'mcp':
       content = (
-        <SectionPage title="MCP server" description="Let other AI apps — Claude Desktop, Cursor, Claude Code — read your Daylens activity so you can ask them about your work. Off by default, and everything stays on your machine.">
+        <SectionPage title="MCP server" description="Let other AI apps — Claude Desktop, Cursor, Claude Code — read your Daylens activity so you can ask them about your work. On by default, and everything stays on your machine.">
           <div>
             <SettingsRow
               first
@@ -4062,7 +4062,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 {!mcpConnection.config.isPackaged && (
                   <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>
                     Dev build — the paths above point at your source checkout. A packaged install runs the bundled
-                    server from inside the app and ships with this server off by default.
+                    server from inside the app and ships with this server on by default.
                   </div>
                 )}
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>

@@ -9,6 +9,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { getSettings } from './settings'
 import { isRealDayHarness } from '../lib/realDayHarness'
+import { minimalChildEnv } from '../lib/childEnv'
 
 export interface McpServerConfig {
   command: string
@@ -92,7 +93,7 @@ export function startMcpServer(): void {
 
   try {
     _proc = spawn(config.command, config.args, {
-      env: { ...process.env, ...config.env },
+      env: minimalChildEnv(config.env),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
   } catch (err) {
