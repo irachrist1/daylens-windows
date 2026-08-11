@@ -11,6 +11,7 @@ import { executeTool, execSearchSessionsWithMeaning } from '../services/aiTools'
 import { getLongestFocusStretch } from '../services/wrappedTools'
 import { getTimelineDayProjection } from '../core/query/projections'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { userAuthoredLabel } from '@shared/labelVoice'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { effectiveBlockKind, kindForCategory } from '@shared/workKind'
 import { formatClock as fmtClockMs } from '../../renderer/lib/dayWrapScenes'
@@ -220,6 +221,9 @@ function timeChunks(
       endTime: fmtMinuteOffset(offset + incrementMinutes),
       durationMinutes: incrementMinutes,
       blockLabel: coveringBlock ? userVisibleBlockLabel(coveringBlock) : null,
+      // The renderer drops a generated floor label so a captured title can name
+      // the work; it must not do that to a name the person typed themselves.
+      blockLabelIsUserAuthored: coveringBlock ? userAuthoredLabel(coveringBlock) !== null : false,
       activity,
       pages,
       gap,

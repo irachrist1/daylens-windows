@@ -162,3 +162,37 @@ so the output could not be recorded here. What the hermetic tests do prove is
 that the directive and the tone-keyed cache reach the prompt; what stays
 unverified by this lane is the model's response to them. Flagged for the final
 reviewer, who has the app and the database.
+
+## Round 2 — 2026-08-11, closing the manual check that could be closed
+
+Round 1 left "switch the tone, reopen the recap" entirely to a human. Most of it
+did not need one. The two things a person was being asked to confirm — that the
+prompt changes with the tone, and that the cached recap does not outlive the
+change — are pure functions of the composition, and the composition was only
+reachable by reading the file.
+
+`generateDaySummary` built its system prompt and its cache key inline, so the
+Round 1 tests could assert no more than "this file mentions `voiceDirective`". A
+dead call site would have passed. Both are now exported pure functions in the
+same prompt-building region this lane owns:
+
+- `buildDaySummarySystemPrompt(voice, parts)`
+- `daySummaryPromptCacheKey(payload, memoryPrompt, variantId, voice)`
+
+`generateDaySummary` calls both; behaviour is unchanged. Four tests now execute
+the composition instead of scanning for it: each tone lands its own directive,
+the three tones produce three distinct prompts, the interpretation rules and the
+user-authored-label rule ride every tone, and the three tones produce three
+distinct cache keys with a stable key per tone.
+
+The surviving source scan was rewritten to guard the new call sites, so it still
+fails if `generateDaySummary` ever rebuilds a prompt or a key inline without the
+voice.
+
+**What still needs a human:** only the model's response to the directives. That
+was always the irreducible part. Everything mechanical is now hermetic.
+
+```
+tests/toneAcrossSurfaces.test.ts    13 pass  (9 → 13)
+full suite                        2263 pass / 0 fail
+```

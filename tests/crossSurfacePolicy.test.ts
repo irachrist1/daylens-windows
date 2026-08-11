@@ -235,6 +235,7 @@ test('AC-VIC-004: a user-authored covering label reaches the time-chunk table ve
       endTime: '09:30',
       durationMinutes: 30,
       blockLabel: 'Ridgeline renewal',
+      blockLabelIsUserAuthored: true,
       activity: [{ appName: 'Chrome', windowTitle: 'Dashboard', seconds: 1800 }],
       pages: [],
       gap: null,

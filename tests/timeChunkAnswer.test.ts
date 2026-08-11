@@ -157,6 +157,7 @@ test('AC-VIC-004: a user-authored block label is kept even when it looks like ra
       durationMinutes: 30,
       // Person named the stretch themselves; the Timeline shows this verbatim.
       blockLabel: 'https://ridgeline.example/renewal',
+      blockLabelIsUserAuthored: true,
       activity: [{ appName: 'Chrome', windowTitle: 'Dashboard', seconds: 1800 }],
       pages: [],
       gap: null,
@@ -164,6 +165,29 @@ test('AC-VIC-004: a user-authored block label is kept even when it looks like ra
   })
   assert.ok(answer)
   assert.match(answer!, /https:\/\/ridgeline\.example\/renewal/)
+})
+
+test('AC-VIC-004: a user-authored label that reads as a category word still wins', () => {
+  const answer = renderTimeChunkAnswer({
+    found: true,
+    date: '2026-08-01',
+    incrementMinutes: 30,
+    chunks: [{
+      startTime: '21:00',
+      endTime: '21:30',
+      durationMinutes: 30,
+      // Renamed to the category word on purpose: the floor filter must not
+      // treat the person's choice as a naming failure.
+      blockLabel: 'Entertainment',
+      blockLabelIsUserAuthored: true,
+      activity: [{ appName: 'Chrome', windowTitle: 'Chelsea vs Arsenal highlights', seconds: 1800 }],
+      pages: [],
+      gap: null,
+    }],
+  })
+  assert.ok(answer)
+  assert.match(answer!, /Entertainment \(Chrome\)/)
+  assert.doesNotMatch(answer!, /Chelsea vs Arsenal highlights/)
 })
 
 test('a generic floor label does not bury a captured window title', () => {

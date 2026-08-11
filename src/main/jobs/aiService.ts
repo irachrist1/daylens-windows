@@ -108,6 +108,7 @@ import type {
   FocusSession,
   FocusStartPayload,
   LiveSession,
+  SummaryVoice,
   WorkContextBlock,
   WorkContextInsight,
 } from '@shared/types'
@@ -1865,6 +1866,45 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
 // once — the 10 longest, in chronological order, ranked so the model still
 // knows which dominated — and the JSON is compact. Rich supporting evidence
 // rides only on the top-4 by duration, matching what dominantBlocks carried.
+/**
+ * The recap's cache key. The tone is part of it because the recap IS the
+ * morning brief: without the tone in the key, changing it leaves the cached
+ * recap in the old voice for the life of the process and the toggle reads as
+ * dead (AC-VIC-002.1).
+ */
+export function daySummaryPromptCacheKey(
+  payload: DayTimelinePayload,
+  memoryPrompt: string,
+  variantId: string,
+  voice: SummaryVoice,
+): string {
+  return `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variantId}:${voice}`
+}
+
+/**
+ * The recap's system prompt. Composed here rather than inline in
+ * `generateDaySummary` so the tone and policy rules can be checked by running
+ * the composition, not by scanning this file for a call that might be dead.
+ */
+export function buildDaySummarySystemPrompt(
+  voice: SummaryVoice,
+  parts: {
+    memoryPrompt?: string
+    profileDirective?: string
+    variantDirectives?: readonly string[]
+  } = {},
+): string {
+  return [
+    VOICE_SYSTEM_PROMPT,
+    parts.memoryPrompt,
+    parts.profileDirective,
+    USER_AUTHORED_LABEL_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
+    ...(parts.variantDirectives ?? []),
+  ].filter(Boolean).join('\n')
+}
+
 export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
   const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
 
@@ -2036,19 +2076,15 @@ export async function generateDaySummary(
   // reads as dead.
   const settings = getSettings()
   const voice = normalizeSummaryVoice(settings.summaryVoice)
-  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variant.id}:${voice}`
+  const cacheKey = daySummaryPromptCacheKey(payload, memoryPrompt, variant.id, voice)
   const cached = options.bypassCache ? undefined : daySummaryCache.get(cacheKey)
   if (cached) return cached
 
-  const systemPrompt = [
-    VOICE_SYSTEM_PROMPT,
+  const systemPrompt = buildDaySummarySystemPrompt(voice, {
     memoryPrompt,
-    userProfileDirective(settings),
-    USER_AUTHORED_LABEL_RULE,
-    ...INTERPRETATION_DIRECTIVES,
-    voiceDirective(voice),
-    ...variant.directives,
-  ].filter(Boolean).join('\n')
+    profileDirective: userProfileDirective(settings),
+    variantDirectives: variant.directives,
+  })
 
   const userMessage = variant.userMessage(dateStr, buildDaySummaryScaffold(payload))
 
