@@ -1,4 +1,4 @@
-import { naturalizeLabel } from '@shared/blockLabel'
+import { isUsefulLabel, naturalizeLabel } from '@shared/blockLabel'
 import { rawLabelForm } from '@shared/labelVoice'
 
 interface TimeChunkActivity {
@@ -75,13 +75,16 @@ function describableTitle(value: string | null | undefined): string | null {
 
 /**
  * The covering Timeline label is already the resolved, user-visible wording
- * (`userVisibleBlockLabel`), including a user override. Trust it: applying
- * `rawLabelForm` here would strip a person's own name for the stretch
- * (AC-VIC-004), which this surface must not do.
+ * (`userVisibleBlockLabel`), including a user override. Trust a useful label
+ * verbatim: applying `rawLabelForm` here would strip a person's own name for
+ * the stretch (AC-VIC-004). A generic floor label ("Development", "Browsing")
+ * is not a description — leave the subject empty so captured titles can name
+ * the actual work instead of burying it under the category word.
  */
 function finalizedBlockLabel(value: string | null | undefined): string | null {
   const text = value?.trim()
   if (!text) return null
+  if (!isUsefulLabel(text)) return null
   return concise(text)
 }
 

@@ -2637,7 +2637,10 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
   const [memoryFromMs] = localDateBoundsFromString(weekStart)
   const [, memoryToMs] = localDateBoundsFromString(weekEnd)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt].join('\n'))
+  // Tone is part of the signature so a Settings voice change does not keep
+  // returning a card written in the previous voice (REQ-VIC-002).
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt, voice].join('\n'))
   if (!force) {
     const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
     if (existingSignature === inputSignature) {
@@ -2654,7 +2657,7 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
     USER_AUTHORED_LABEL_RULE,
     ...INTERPRETATION_DIRECTIVES,
-    voiceDirective(getSettings().summaryVoice),
+    voiceDirective(voice),
     'Use only the deterministic local evidence provided.',
     'Focus on the actual work threads, named artifacts, and where the week concentrated.',
     'Avoid dashboard filler or generic productivity language.',
@@ -2732,7 +2735,10 @@ async function generateAppNarrative(
     fromMs: memoryFromMs,
     toMs: memoryToMs,
   })
-  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt].join('\n'))
+  // Tone is part of the signature so a Settings voice change does not keep
+  // returning a card written in the previous voice (REQ-VIC-002).
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt, voice].join('\n'))
   // Force=true must bypass the signature short-circuit. Without this, clicking
   // Generate/Refresh on an app whose evidence has not changed since the last
   // cached narrative returns the same cached row without ever calling the AI,
@@ -2760,7 +2766,7 @@ async function generateAppNarrative(
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
     ...INTERPRETATION_DIRECTIVES,
-    voiceDirective(getSettings().summaryVoice),
+    voiceDirective(voice),
     'Explain what this tool was helping with and which artifacts, pages, or sites appeared there. Lead with the work (the domains and pages listed first); mention leisure only briefly if at all.',
     'Use only the deterministic evidence below.',
     'Do not write vanity metrics or generic app summaries.',
@@ -3866,13 +3872,25 @@ export async function getWeekReview(
   weekStartStr: string,
   force = false,
 ): Promise<AISurfaceSummary | null> {
+  if (force) return generateWeekReview(weekStartStr, true)
+
+  const bundle = buildWeekReviewBundle(weekStartStr)
+  if (!bundle) return null
   const scopeKey = `week:${weekStartStr}`
-  if (!force) {
-    const existing = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
-    if (existing && existing.scopeKey === scopeKey) return existing
-    return null
+  const { weekStart, weekEnd } = buildWeekDateRange(weekStartStr)
+  const [memoryFromMs] = localDateBoundsFromString(weekStart)
+  const [, memoryToMs] = localDateBoundsFromString(weekEnd)
+  const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt, voice].join('\n'))
+  const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
+  if (existingSignature === inputSignature) {
+    return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
   }
-  return generateWeekReview(weekStartStr, true)
+  // Evidence or tone moved: surface the stored card as stale rather than
+  // spending a provider call on a read, and rather than pretending the old
+  // voice is current.
+  return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey, { stale: true })
 }
 
 export async function getAppNarrative(
@@ -3880,14 +3898,37 @@ export async function getAppNarrative(
   daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
-  if (!force) {
-    const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
-    const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
+  if (force) return generateAppNarrative(canonicalAppId, daysOrDate, true)
+
+  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
+  const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
+  const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
+  const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)
+  const [memoryFromMs, memoryToMs] = isDate
+    ? localDateBoundsFromString(daysOrDate)
+    : (() => {
+      const [, todayToMs] = dayBounds(new Date())
+      if (days >= ALL_TIME_DAYS) return [0, todayToMs] as const
+      const end = new Date(todayToMs)
+      const fromMs = new Date(
+        end.getFullYear(),
+        end.getMonth(),
+        end.getDate() - days,
+      ).getTime()
+      return [fromMs, todayToMs] as const
+    })()
+  const memoryPrompt = buildDaylensMemoryPromptBlock({
+    fromMs: memoryFromMs,
+    toMs: memoryToMs,
+  })
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt, voice].join('\n'))
+  const existingSignature = getAISurfaceSummarySignature(getDb(), 'app_detail', scopeKey)
+  if (existingSignature === inputSignature) {
     const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
-    if (existing) return existing
-    return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
+    if (!appNarrativeHasStaleMetrics(existing)) return existing
   }
-  return generateAppNarrative(canonicalAppId, daysOrDate, true)
+  return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
 }
 
 export async function testCLITool(tool: CLITool): Promise<{ ok: true; output: string } | { ok: false; error: string }> {

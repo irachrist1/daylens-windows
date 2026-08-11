@@ -110,7 +110,7 @@ export function naturalizeLabel(value: string): string {
   return cleaned.trim()
 }
 
-function isUsefulLabel(value: string | null | undefined): value is string {
+export function isUsefulLabel(value: string | null | undefined): value is string {
   if (!value) return false
   const trimmed = value.trim()
   if (!trimmed) return false
