@@ -12,8 +12,9 @@
 // This function is the ONE chat entrypoint body — the IPC handler and the
 // terminal bench both reach it through sendMessage. Keep every
 // behavior deps-injected so the bench cannot diverge from the UI.
-import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
+import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type Database from 'better-sqlite3'
+import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind } from '@shared/types'
 import { statusForTool } from '@shared/agentTrail'
@@ -34,7 +35,9 @@ import { buildCorrectionTools, type CorrectionToolHooks } from './correctionTool
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import {
   buildContextPacket,
+  CONTEXT_POLICY_VERSION,
   contextPacketsAvailable,
+  DEFAULT_CONTEXT_BUDGET,
   recordContextPacket,
   renderContextPacketForAgent,
   type ContextPacket,
@@ -44,10 +47,79 @@ import { getCurrentTrace } from '../ai/trace'
 import { buildAgentSystemPrompt } from './systemPrompt'
 import { renderTimeChunkAnswer, wantsTimeChunkTable, type TimeChunkResult } from './timeChunkAnswer'
 import { sanitizeForRender } from '@shared/aiSanitize'
+import { pausedError } from '../lib/aiCancellation'
+import {
+  AISdkAgentRuntime,
+  type AgentToolInteraction,
+} from './agentRuntime'
 
 const MAX_STEPS = 14
 const MAX_OUTPUT_TOKENS = 8_000
 const MAX_TOOL_RESULT_CHARS = 60_000
+
+const PERSON_INPUT_TOOLS = new Set([
+  'ask_user',
+  'propose_memory',
+  'forget_memory',
+  'propose_correction',
+  'undo_correction',
+])
+
+const PERMISSION_TOOLS = new Set([
+  'read_file',
+  'run_command',
+])
+
+function toolInteractionsFor(tools: ToolSet): Record<string, AgentToolInteraction> {
+  const interactions: Record<string, AgentToolInteraction> = {}
+  for (const name of Object.keys(tools)) {
+    if (PERSON_INPUT_TOOLS.has(name)) interactions[name] = 'person_input'
+    else if (PERMISSION_TOOLS.has(name)) interactions[name] = 'permission'
+    else interactions[name] = 'tool'
+  }
+  return interactions
+}
+
+function emptyContextPacket(question: string, destination: string, now: Date): ContextPacket {
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return {
+    id: `ctx_empty_${now.getTime().toString(36)}`,
+    purpose: 'answer',
+    request: {
+      originalText: question,
+      timeRange: {
+        startDate: date,
+        endDate: date,
+        dates: [date],
+        resolution: 'default',
+      },
+      dates: [date],
+      entityIds: [],
+    },
+    person: {
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      confirmedPreferences: [],
+    },
+    items: [],
+    conflicts: [],
+    gaps: [],
+    permissions: [],
+    tools: [],
+    actionContext: null,
+    contextBudget: DEFAULT_CONTEXT_BUDGET,
+    disclosure: {
+      destination,
+      leftDevice: false,
+      policyVersion: CONTEXT_POLICY_VERSION,
+      itemCount: 0,
+      counts: {},
+      omissions: [{ kind: 'day_fact', count: 1, reason: 'unavailable' }],
+    },
+    policyVersion: CONTEXT_POLICY_VERSION,
+    contentFingerprint: 'empty',
+    assembledAt: now.getTime(),
+  }
+}
 
 interface PageVisitToolResult {
   pages?: Array<{ pageTitle?: string | null; url?: string | null; totalSeconds?: number; visitCount?: number }>
@@ -158,11 +230,11 @@ export async function runChatAgentTurn(
   // The exchange starts from the recorded context packet (DEV-182): assembled
   // deterministically from the corrected read models, persisted BEFORE any
   // request leaves the device, then rendered into the model prompt with
-  // per-item citation markers. Assembly failure degrades to a tools-only turn
-  // (the tool results still ride the same privacy boundaries) — it never
-  // blocks the answer.
+  // per-item citation markers. Assembly failure degrades to an empty packet so
+  // the provider-independent runtime still has a typed context boundary — it
+  // never blocks the answer.
   const destination = `${deps.config.provider}:${deps.config.model}`
-  let contextPacket: ContextPacket | null = null
+  let contextPacket: ContextPacket = emptyContextPacket(question, destination, now)
   let contextPacketRecorded = false
   try {
     contextPacket = await buildContextPacket(deps.db, {
@@ -180,12 +252,12 @@ export async function runChatAgentTurn(
     }
   } catch (error) {
     console.warn('[agent] context packet assembly failed; answering from tools only', error)
-    contextPacket = null
+    contextPacket = emptyContextPacket(question, destination, now)
   }
   // Packet statements count as evidence for the grounding verifiers: a time or
   // name the packet disclosed is cited, not hallucinated, even when the model
   // answered without re-fetching it through a tool.
-  const packetEvidence = contextPacket && contextPacket.items.length > 0
+  const packetEvidence = contextPacket.items.length > 0
     ? contextPacket.items.map((item) => item.statement).join('\n')
     : ''
 
@@ -293,14 +365,14 @@ export async function runChatAgentTurn(
       ...mcp.tools,
     }
 
-    const renderedPacket = contextPacket ? renderContextPacketForAgent(contextPacket) : ''
+    const renderedPacket = renderContextPacketForAgent(contextPacket)
     // The trace recorder (eval harness / DAYLENS_AI_TRACE_DIR) needs the packet
     // as evidence: facts the model quotes from it are grounded, not fabricated.
     if (renderedPacket) {
       getCurrentTrace()?.addEvent({
         kind: 'context_packet',
         rendered: renderedPacket,
-        itemCount: contextPacket?.items.length ?? 0,
+        itemCount: contextPacket.items.length,
       })
     }
     const system = [
@@ -321,112 +393,143 @@ export async function runChatAgentTurn(
       { role: 'user', content: question },
     ]
 
-    const streamTurn = async (turnMessages: ModelMessage[]): Promise<string> => {
-      const result = streamText({
-        model: deps.model ?? languageModelFor(deps.config),
-        system,
-        messages: turnMessages,
-        tools,
-        stopWhen: stepCountIs(MAX_STEPS),
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        abortSignal: deps.signal,
-      })
+    const runtime = new AISdkAgentRuntime(deps.model ?? languageModelFor(deps.config))
+    const toolInteractions = toolInteractionsFor(tools)
 
+    const streamTurn = async (turnMessages: ModelMessage[]): Promise<string> => {
       let finalText = ''
       let stepText = ''
       let stepUsedTool = false
-      // Tool calls issued in the current step, mirrored into the trace
-      // recorder's turn event on finish-step.
       let stepToolUses: Array<{ id: string; name: string; input: unknown }> = []
-      // Steps still running, keyed by tool call id, so the result (or error)
-      // settles the SAME trail row its call opened.
+      let stepUsage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number } | null = null
       const openSteps = new Map<string, AIAgentStep>()
+      const toolInputs = new Map<string, unknown>()
       const settleStep = async (toolCallId: string, state: 'done' | 'failed') => {
         const opened = openSteps.get(toolCallId)
         if (!opened) return
         openSteps.delete(toolCallId)
         await deps.onStreamEvent?.({ delta: '', snapshot: '', step: { ...opened, state } })
       }
-      for await (const part of result.fullStream) {
-        switch (part.type) {
-          case 'start-step':
+      const openToolStep = async (toolCallId: string, toolName: string, input: unknown) => {
+        stepUsedTool = true
+        toolInputs.set(toolCallId, input)
+        stepToolUses.push({ id: toolCallId, name: toolName, input })
+        const step: AIAgentStep = {
+          id: toolCallId,
+          label: statusForTool(toolName, input),
+          state: 'active',
+          startedAt: Date.now(),
+        }
+        openSteps.set(toolCallId, step)
+        await deps.onStreamEvent?.({ delta: '', snapshot: '', status: step.label, step })
+      }
+
+      for await (const event of runtime.run({
+        runId: `chat_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+        contextPacket,
+        tools,
+        toolInteractions,
+        output: { kind: 'text' },
+        limits: {
+          maxSteps: MAX_STEPS,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+        },
+        system,
+        messages: turnMessages,
+        signal: deps.signal,
+      })) {
+        switch (event.type) {
+          case 'step_started':
             stepCount += 1
             recordProviderCall()
             stepText = ''
             stepUsedTool = false
             stepToolUses = []
+            stepUsage = null
             break
-          case 'text-delta': {
-            stepText += part.text
+          case 'text':
+            stepText += event.text
             break
-          }
-          case 'tool-call': {
-            stepUsedTool = true
-            stepToolUses.push({ id: part.toolCallId, name: part.toolName, input: part.input })
-            const step: AIAgentStep = {
-              id: part.toolCallId,
-              label: statusForTool(part.toolName, part.input),
-              state: 'active',
-              startedAt: Date.now(),
-            }
-            openSteps.set(part.toolCallId, step)
-            await deps.onStreamEvent?.({ delta: '', snapshot: '', status: step.label, step })
+          case 'tool_request':
+          case 'permission_request':
+          case 'person_input_request':
+            await openToolStep(event.toolCallId, event.toolName, event.input)
             break
-          }
-          case 'tool-result': {
-            if (part.toolName === 'get_time_chunks') timeChunkResult = part.output as TimeChunkResult
-            if (part.toolName === 'list_page_visits') pageVisitResult = part.output as PageVisitToolResult
-            const output = JSON.stringify(part.output ?? null)
-            const truncated = output.length > MAX_TOOL_RESULT_CHARS
+          case 'tool_result': {
+            if (event.toolName === 'get_time_chunks') timeChunkResult = event.output as TimeChunkResult
+            if (event.toolName === 'list_page_visits') pageVisitResult = event.output as PageVisitToolResult
+            const input = toolInputs.get(event.toolCallId)
+            const failedReason = event.failed
+              && event.output
+              && typeof event.output === 'object'
+              && 'message' in event.output
+              && typeof (event.output as { message?: unknown }).message === 'string'
+              ? (event.output as { message: string }).message
+              : 'tool error'
+            const output = event.failed
+              ? JSON.stringify({ found: false, reason: failedReason })
+              : JSON.stringify(event.output ?? null)
+            const truncated = !event.failed && output.length > MAX_TOOL_RESULT_CHARS
             const bounded = truncated ? `${output.slice(0, MAX_TOOL_RESULT_CHARS)}…` : output
-            toolTrace.push({ tool: part.toolName, input: part.input, output: bounded })
-            toolResultStrings.push(evidenceWithFormattedTimes(bounded))
+            toolTrace.push({
+              tool: event.toolName,
+              input,
+              output: bounded,
+              ...(event.failed ? { failed: true } : {}),
+            })
+            if (!event.failed) toolResultStrings.push(evidenceWithFormattedTimes(bounded))
             getCurrentTrace()?.addEvent({
               kind: 'tool_result',
-              name: part.toolName,
-              input: part.input,
-              output: truncated ? bounded : part.output ?? null,
-              toolUseId: part.toolCallId,
-              durationMs: Math.max(0, Date.now() - (openSteps.get(part.toolCallId)?.startedAt ?? Date.now())),
+              name: event.toolName,
+              input,
+              output: event.failed
+                ? { found: false, reason: 'tool error' }
+                : truncated ? bounded : event.output ?? null,
+              toolUseId: event.toolCallId,
+              durationMs: Math.max(0, Date.now() - (openSteps.get(event.toolCallId)?.startedAt ?? Date.now())),
               truncated,
             })
-            await settleStep(part.toolCallId, 'done')
+            await settleStep(event.toolCallId, event.failed ? 'failed' : 'done')
             break
           }
-          case 'tool-error': {
-            const message = JSON.stringify({ found: false, reason: String((part as { error?: unknown }).error ?? 'tool error') })
-            toolTrace.push({ tool: part.toolName, input: part.input, output: message, failed: true })
-            getCurrentTrace()?.addEvent({
-              kind: 'tool_result',
-              name: part.toolName,
-              input: part.input,
-              output: { found: false, reason: 'tool error' },
-              toolUseId: part.toolCallId,
-              durationMs: Math.max(0, Date.now() - (openSteps.get(part.toolCallId)?.startedAt ?? Date.now())),
-              truncated: false,
+          case 'usage':
+            addUsage({
+              inputTokens: event.usage.inputTokens,
+              outputTokens: event.usage.outputTokens,
+              cachedInputTokens: event.usage.cacheReadTokens,
             })
-            await settleStep(part.toolCallId, 'failed')
+            stepUsage = {
+              inputTokens: event.usage.inputTokens,
+              outputTokens: event.usage.outputTokens,
+              cacheReadTokens: event.usage.cacheReadTokens,
+            }
             break
-          }
-          case 'finish-step':
-            addUsage(part.usage)
+          case 'step_completed':
             getCurrentTrace()?.addEvent({
               kind: 'turn',
               role: 'assistant',
               text: stepText.trim(),
               toolUses: stepToolUses,
-              usage: part.usage
-                ? {
-                    inputTokens: part.usage.inputTokens,
-                    outputTokens: part.usage.outputTokens,
-                    cacheReadTokens: part.usage.cachedInputTokens,
-                  }
-                : null,
+              usage: stepUsage,
             })
             if (!stepUsedTool && stepText.trim()) finalText = stepText.trim()
             break
-          case 'error':
-            throw part.error instanceof Error ? part.error : new Error(String(part.error))
+          case 'completion':
+            if (stepText.trim()) finalText = stepText.trim()
+            break
+          case 'cancellation': {
+            // Pending pause must surface as the product pause error so
+            // aiService can resume; cancel remains a plain AbortError.
+            if (event.pending) throw pausedError()
+            const abortError = new Error('The operation was aborted')
+            abortError.name = 'AbortError'
+            throw abortError
+          }
+          case 'failure': {
+            const failure = new Error(event.error.message)
+            failure.name = event.error.code
+            throw failure
+          }
           default:
             break
         }
