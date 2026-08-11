@@ -11,9 +11,11 @@ import { searchNatural } from '../services/naturalSearch'
 import { searchExact } from '../services/exactSearch'
 import { getSemanticSearchStatus, searchByMeaning } from '../services/semanticIndex'
 import { ensureDayMemoryIndexed } from '../services/memoryIndex'
+import { planRetrieval } from '../services/retrievalPlanner'
 import { localDateString } from '../lib/localDate'
 
 const SEARCH_CHANNELS = {
+  UNIFIED: 'search:unified',
   ALL: 'search:all',
   SESSIONS: 'search:sessions',
   BLOCKS: 'search:blocks',
@@ -46,6 +48,14 @@ function freshenLiveDayIndex(): void {
 }
 
 export function registerSearchHandlers(): void {
+  // The unified boundary: one query and one filter scope in, one reconciled and
+  // ranked result set out. The single-path channels below stay registered
+  // because live surfaces still call them; they return raw per-path rows.
+  ipcMain.handle(SEARCH_CHANNELS.UNIFIED, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
+    const { query, opts } = normalizePayload(payload)
+    return planRetrieval(getDb(), query, opts)
+  })
+
   // DEV-178: the palette's shared query is the exact retrieval path —
   // entities (alias-aware) + corrected memory records + FTS, one ranked list.
   ipcMain.handle(SEARCH_CHANNELS.ALL, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {

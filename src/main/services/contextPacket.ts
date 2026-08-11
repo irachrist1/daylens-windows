@@ -38,6 +38,7 @@ import { listFocusEventTimesInRange } from '../db/focusEventRepository'
 import { getSettings } from './settings'
 import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
 import { searchExact, resolveQueryEntityMatches } from './exactSearch'
+import type { SearchOptions } from '../db/queries'
 import { ensureDayMemoryIndexed } from './memoryIndex'
 import { searchByMeaning } from './semanticIndex'
 import { SEMANTIC_MODEL_ID } from './semanticEmbedder'
@@ -178,6 +179,9 @@ export interface BuildContextPacketInput {
   /** Injectable day payloads keyed by date, so a caller that already
    *  materialized the day (day analysis) disclosed EXACTLY what it sends. */
   dayPayloads?: Record<string, DayTimelinePayload>
+  /** The same filter scope the person-facing search carries. Assembling AI
+   *  context from a filtered query must not widen it back out. */
+  filters?: SearchOptions
 }
 
 // ─── Caps ────────────────────────────────────────────────────────────────────
@@ -507,7 +511,7 @@ function backedByHighSensitivityRecord(db: Database.Database, id: number): boole
 function exactSearchItems(
   db: Database.Database,
   question: string,
-  scope: { startDate?: string; endDate?: string },
+  scope: SearchOptions,
 ): { items: ContextPacketItem[]; omittedHighSensitivity: number } {
   let omittedHighSensitivity = 0
   try {
@@ -550,7 +554,7 @@ function exactSearchItems(
 async function semanticSearchItems(
   db: Database.Database,
   question: string,
-  scope: { startDate?: string; endDate?: string },
+  scope: SearchOptions,
   excludeIdentities: ReadonlySet<string>,
 ): Promise<ContextPacketItem[]> {
   try {
@@ -776,9 +780,11 @@ export async function buildContextPacket(
 
   // A question with an explicit day scope searches inside it; an open recall
   // question ("that TV page…") searches the whole local history.
-  const searchScope = explicitScope
-    ? { startDate: dates[0], endDate: dates[dates.length - 1] }
-    : {}
+  // The caller's filters are the floor; an explicit day scope narrows on top of
+  // them. A date the caller filtered to is never widened by the question text.
+  const searchScope: SearchOptions = explicitScope
+    ? { ...input.filters, startDate: dates[0], endDate: dates[dates.length - 1] }
+    : { ...input.filters }
 
   const dayResults = dates.map((date) => dayFactItems(db, date, input.dayPayloads?.[date]))
   const dayFacts = [
