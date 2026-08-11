@@ -17,6 +17,9 @@ interface TimeChunkRow {
   durationMinutes: number
   /** The covering timeline block's label: what the time WAS, not just the app. */
   blockLabel?: string | null
+  /** True when that label is the person's own wording (a rename override or a
+   *  corrected block), which no filter here may discard. */
+  blockLabelIsUserAuthored?: boolean
   activity: TimeChunkActivity[]
   pages: TimeChunkPage[]
   gap: { label: string; kind?: string | null } | null
@@ -75,16 +78,25 @@ function describableTitle(value: string | null | undefined): string | null {
 
 /**
  * The covering Timeline label is already the resolved, user-visible wording
- * (`userVisibleBlockLabel`), including a user override. Trust a useful label
- * verbatim: applying `rawLabelForm` here would strip a person's own name for
- * the stretch (AC-VIC-004). A generic floor label ("Development", "Browsing")
- * is not a description — leave the subject empty so captured titles can name
- * the actual work instead of burying it under the category word. The same holds
- * for the other floors ("Entertainment", "Cursor and Chrome — activity").
+ * (`userVisibleBlockLabel`). Trust a useful label verbatim: applying
+ * `rawLabelForm` here would strip a person's own name for the stretch
+ * (AC-VIC-004). A generic floor label ("Development", "Browsing") is not a
+ * description — leave the subject empty so captured titles can name the actual
+ * work instead of burying it under the category word. The same holds for the
+ * other floors ("Entertainment", "Cursor and Chrome — activity").
+ *
+ * Both filters read a wording Daylens generated. A label the person wrote is
+ * theirs and passes untouched, even when it happens to be the category word:
+ * someone who renamed a stretch to "Entertainment" chose that name, and
+ * replacing it with a captured title would overrule them.
  */
-function finalizedBlockLabel(value: string | null | undefined): string | null {
+function finalizedBlockLabel(
+  value: string | null | undefined,
+  userAuthored: boolean,
+): string | null {
   const text = value?.trim()
   if (!text) return null
+  if (userAuthored) return concise(text)
   if (!isUsefulLabel(text) || labelIsCategoryFloor(text)) return null
   return concise(text)
 }
@@ -148,7 +160,7 @@ function rowDescription(chunk: TimeChunkRow): string {
   // label the Timeline shows (including a user override), so it leads. When it
   // is present, window and page titles stay evidence — they do not compete as
   // a second subject beside the label the person is already looking at.
-  push(finalizedBlockLabel(chunk.blockLabel))
+  push(finalizedBlockLabel(chunk.blockLabel, chunk.blockLabelIsUserAuthored === true))
   if (subjects.length === 0) {
     for (const item of chunk.activity) push(describableTitle(item.windowTitle))
     for (const page of chunk.pages) push(describableTitle(page.pageTitle))
