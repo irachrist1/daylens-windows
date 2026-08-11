@@ -73,8 +73,13 @@ const OMISSION_KIND_PHRASES: Record<ContextItemKind, [singular: string, plural: 
 }
 
 const OMISSION_REASON_PHRASES: Record<ContextPacketOmission['reason'], string> = {
+  excluded: 'held back by an applicable exclusion',
+  deleted: 'held back because the supporting material was deleted',
+  unauthorized: 'held back because the required permission was not granted',
+  unavailable: 'held back because the supporting source was unavailable',
   'high-sensitivity': 'held back as high-sensitivity — sending it needs its own explicit permission',
   'tracking-excluded': 'held back by your tracking exclusions',
+  'context-budget': 'left for on-demand retrieval because the initial context budget was full',
 }
 
 /** "1 file excerpt was considered and not sent: held back as high-sensitivity…" */
@@ -258,7 +263,7 @@ export function assembleContextPacketInspection(
   return {
     packetId: packet.id,
     exchangeKind: stored.exchangeKind,
-    purpose: packet.purpose,
+    purpose: packet.purpose as ContextPacketInspection['purpose'],
     threadId: stored.threadId,
     messageId: stored.messageId,
     question: packet.request.originalText,
