@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import crypto from 'node:crypto'
 import {
   getActivityStateEventsForRange,
+  getLastActivityStateEventBefore,
   getBlockLabelOverride,
   getFocusSessionsForDateRange,
   getReconciledWebsiteVisitsForRange,
@@ -59,7 +60,7 @@ import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@sh
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
-import { isDisqualifiedWorkSubject } from '@shared/workNameGuards'
+import { isDisqualifiedWorkSubject, workNameGuardLabelViolation } from '@shared/workNameGuards'
 import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForCategory, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
@@ -89,11 +90,14 @@ import { getSecondaryDisplayVisibleSpansForRange } from '../core/projections/dis
 import { getExternalSignal } from './externalSignals'
 import {
   capturedMeetingSpansFromBlocks,
+  capturedMeetingSpansFromSessions,
   getMeetingAttendanceMarks,
   matchDayMeetings,
+  meetingNoteSupportedEventKeys,
   scheduledMeetingsFromSignal,
   scheduledParticipantsForDay,
 } from './meetingResolution'
+import type { CapturedMeetingSpan } from './meetingResolution'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -209,6 +213,44 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // (a video playing, a meeting on screen — idle_start heldForMediaPlayback)
 // is evidence of presence, NOT a gap, and counts as coverage.
 const TIMELINE_EVIDENCE_SEAM_MS = 30 * 60_000
+// The evidence mint floor (v13): a floor-sized candidate (span at or above the
+// 15-minute calendar floor) must hold at least this much observed session
+// evidence once the machine-state ledger's real absences (idle / locked /
+// asleep — never passive media presence) are subtracted, or it is not a block.
+// A single spurious activation event during a 00:34→02:59 idle dead zone used
+// to mint a 72-minute "Building the Daylens app" block over ~1 minute of real
+// evidence. Sub-floor candidates are the 15-minute floor's job, not this one's.
+const TIMELINE_MIN_MINT_EVIDENCE_MS = 5 * 60_000
+// How far back the mint floor looks for the machine-state event in force when
+// its scan window opens (a still-open idle/lock/sleep cause from before the
+// first session). Bounded for cost; a cause older than this that never closed
+// would have been closed by any wake/unlock/idle_end the boot produced.
+const ABSENCE_SEED_LOOKBACK_MS = 24 * 60 * 60_000
+// v12: the hard evidence seam — no block may span a 30-minute unobserved hole
+// (TIMELINE_EVIDENCE_SEAM_MS above: measured against captured evidence, the
+// block floor re-applied after the split, meeting formations exempt). Days
+// persisted under v11 can still hold seam-bridging blocks, so the bump marks
+// them stale.
+//
+// Bump policy — what happens to a historical day stamped with an older version:
+// - An un-processed day already rebuilds from sessions on its next analysis
+//   read and renders coarse until then (DEV-268); the bump changes nothing.
+// - A processed (AI/user-labeled or corrected) day heals ON READ, in
+//   healStaleShapePersistedDay: opening the day re-derives its deterministic
+//   segmentation once, corrections re-apply (invariant 8), AI labels re-attach
+//   where their stretch of work survived, and stretches whose label stranded
+//   fall to deterministic labels — the same re-analysis targets
+//   shouldReanalyzeBlockWithAI already handles. The heal itself never spends
+//   an AI call and never mass-invalidates wraps: the day's frozen snapshot
+//   refreezes deterministically, and stored wrap narratives converge through
+//   the factsHash mechanism only when the day's facts genuinely moved.
+// - A heal that would discard curated work (sessions can no longer re-derive
+//   the day, or no analysis/correction survives re-segmentation, or a
+//   corrected label would strand) keeps the sealed shape;
+//   refreshStaleBlockCategoryFacts still refreshes its deterministic category
+//   facts and stamps it current, so the attempt runs once per bump and
+//   explicit Re-analyze stays the path that reshapes it.
+//
 // v11: the duration ceiling is gone (DEV-232). Blocks split only on a real
 // absence, sleep, idle, a meeting, or a kind change — never at 3/5/6 hours. The
 // bump reconstructs already-captured, un-processed days that were fragmented by
@@ -252,7 +294,17 @@ const TIMELINE_EVIDENCE_SEAM_MS = 30 * 60_000
 // browsing) — the bump makes refreshStaleBlockCategoryFacts recompute the
 // persisted category facts of every already-processed day in place, so old
 // blocks pick up their real colors immediately (labels/boundaries untouched).
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v11'
+// v13: the evidence mint floor — no non-meeting block is minted whose span
+// holds under TIMELINE_MIN_MINT_EVIDENCE_MS (5 min) of observed session
+// evidence once stretches the machine-state ledger marks as a real absence
+// (idle / locked / asleep — never passive media presence) are subtracted. A
+// single spurious activation event during an idle dead zone used to mint a
+// 72-minute "work" block out of one minute of real evidence. Also: mixed-era
+// evidence reads keep pre-cutover legacy sessions (a whole working day used
+// to vanish on the canonical-capture cutover day), and the canonical session
+// fold no longer lets the previous app's trailing deactivation kill the newly
+// activated session (titleless native apps lost nearly all their time).
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v13'
 
 // A block spanning this many hours is only worth a second look when most of the
 // span is untracked time (see flagSuspiciousUnbrokenBlocks) — the signature of
@@ -810,7 +862,10 @@ export function weightedCategoryDistributionFor(
   if (pools.size > 0) {
     let credits: ReturnType<typeof getReconciledWebsiteVisitsForRange> = []
     try {
-      credits = getReconciledWebsiteVisitsForRange(db, blockStart, blockEnd)
+      // Pass this block's own sessions: without them the reconciler falls back
+      // to app_sessions, which canonical-evidence installs no longer write, so
+      // it sees no foreground and credits almost nothing.
+      credits = getReconciledWebsiteVisitsForRange(db, blockStart, blockEnd, sessions)
     } catch (err) {
       console.warn('[timeline] weighted category distribution: visit reconciliation failed', err)
     }
@@ -1286,7 +1341,13 @@ function websiteAwareLabel(block: WorkContextBlock): string {
 
   const labels = block.websites.slice(0, 3).map((site) => shortDomainLabel(site.domain))
   if (labels.length === 1) return labels[0]
-  if (labels.length >= 2) return `${labels[0]} + ${labels[1]}`
+  // Two site names joined by "+" is not a name for anything a person did, and
+  // it does active harm: because it is not in GENERIC_LABELS it reads as a
+  // *specific* rule label, so userVisibleLabelForBlock returns it before ever
+  // reaching the inferred intent subject just below — the block that should
+  // have read "Time tracking competitive research" read "Toggl + Rize", and
+  // "Campus + App" beat the real subject the same way. Staying generic here
+  // lets the subject win.
   return block.ruleBasedLabel
 }
 
@@ -2354,7 +2415,10 @@ function buildTimelineContext(db: Database.Database, sessions: AppSession[]): Ti
   if (sessions.length === 0) return { sessionKind: new Map() }
   const startTime = Math.min(...sessions.map((session) => session.startTime))
   const endTime = Math.max(...sessions.map((session) => sessionEndMs(session)))
-  const websiteCredits = getReconciledWebsiteVisitsForRange(db, startTime, endTime)
+  // These sessions ARE the foreground ownership for this span. Omitting them
+  // sent the reconciler to app_sessions, dead on canonical-evidence installs,
+  // so every session's kind resolved from near-zero page credit.
+  const websiteCredits = getReconciledWebsiteVisitsForRange(db, startTime, endTime, sessions)
 
   // Resolve raw kinds, then let neutral (bare-browsing) sessions inherit the
   // nearest concrete neighbour so a contentless tab-flip never forces a kind
@@ -2455,6 +2519,14 @@ function buildPageCandidates(
   // take no longer applies — the parameter stays for call-site compatibility
   // with the many context-threading callers elsewhere in this file.
   _context?: TimelineBuildContext,
+  // The block's own sessions, used as foreground ownership for reconciliation.
+  // Callers that have them MUST pass them: left to its own devices the
+  // reconciler reads app_sessions, which canonical-evidence installs no longer
+  // write, so it sees no foreground and a page the user sat on for an hour
+  // enters the block's evidence with seconds of credit — or misses the cut.
+  // Taking them from the caller rather than re-reading here also keeps this
+  // agreeing with the session set the rest of the block pipeline used.
+  sessions?: readonly AppSession[],
 ): ArtifactCandidate[] {
   const grouped = new Map<string, {
     canonicalKey: string
@@ -2477,7 +2549,13 @@ function buildPageCandidates(
   // browser was never foreground at all, so a visit with zero reconciled
   // overlap contributes nothing and must not enter the block's evidence —
   // it never shows up as a page the user "was in".
-  for (const { visit, freeIntervals } of getReconciledWebsiteVisitsForRange(db, startTime, endTime)) {
+  // The fresh read this span needs is the CORRECTED one. Letting the reconciler
+  // fall back to its own app_sessions read means no foreground on a canonical-
+  // evidence install, so a page the user sat on for an hour enters the block's
+  // evidence with a few seconds of credit — or misses the cut entirely.
+  for (const { visit, freeIntervals } of getReconciledWebsiteVisitsForRange(
+    db, startTime, endTime, sessions, { allowUntrackedGaps: true },
+  )) {
     // Domain policy gate: adult-host pages are filtered at source so they
     // never become artifact candidates, never get promoted to block labels,
     // and never appear in any app's topArtifacts list. The raw visit row
@@ -2980,7 +3058,7 @@ function buildBlockFromCandidate(
     }
     mergedTopApps.push(backgroundApp)
   }
-  const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context)
+  const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context, candidate.sessions)
   const windowCandidates = buildWindowArtifactCandidates(candidate.sessions)
   const visitPageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
   // Supplement website_visits pages with real-time tab evidence from focus_events.
@@ -3248,6 +3326,7 @@ function candidatePageArtifacts(candidate: CandidateBlock, db: Database.Database
     candidate.sessions[0]?.startTime ?? 0,
     candidate.sessions.length > 0 ? sessionEndMs(candidate.sessions[candidate.sessions.length - 1]) : 0,
     context,
+    candidate.sessions,
   )
     .flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
     .slice(0, 6)
@@ -4300,6 +4379,93 @@ export function splitCandidatesAtEvidenceSeams(
   })
 }
 
+/** Hard machine-state absence intervals (idle / locked / asleep) across the
+ *  sessions' span — the stretches the activity ledger says nobody was there.
+ *  Passive media presence is deliberately NOT an absence (a playing video is
+ *  presence evidence), and neither is a tracking pause (nothing is known). */
+function hardAbsenceIntervals(db: Database.Database, sessions: AppSession[]): EvidenceInterval[] {
+  if (sessions.length === 0) return []
+  const fromMs = sessions[0].startTime
+  const toMs = sessions.reduce((max, session) => Math.max(max, sessionEndMs(session)), fromMs)
+  const events = getActivityStateEventsForRange(db, fromMs, toMs)
+  // Seed the cause automaton with the machine state already in force when the
+  // window opens: an idle_start from before the first session (00:34, sessions
+  // begin 01:01) never re-fires inside the window, yet its absence covers it
+  // when no end event ever arrived.
+  const seed = getLastActivityStateEventBefore(db, fromMs, ABSENCE_SEED_LOOKBACK_MS)
+  return gapCauseIntervals(seed ? [seed, ...events] : events, toMs)
+    .filter((cause) => cause.kind === 'idle' || cause.kind === 'locked' || cause.kind === 'asleep')
+    .map((cause) => ({ startMs: cause.startTime, endMs: cause.endTime }))
+    .sort((left, right) => left.startMs - right.startMs)
+}
+
+/** Union of the candidate's captured-evidence intervals, merged so overlapping
+ *  session rows (browser + focus evidence) never double-count. */
+function mergedEvidenceIntervals(sessions: readonly AppSession[]): EvidenceInterval[] {
+  const intervals = sessions
+    .map((session) => ({
+      startMs: session.startTime,
+      endMs: Math.max(session.startTime, evidenceSessionEndMs(session)),
+    }))
+    .filter((interval) => interval.endMs > interval.startMs)
+    .sort((left, right) => left.startMs - right.startMs)
+  const merged: EvidenceInterval[] = []
+  for (const interval of intervals) {
+    const last = merged[merged.length - 1]
+    if (last && interval.startMs <= last.endMs) last.endMs = Math.max(last.endMs, interval.endMs)
+    else merged.push({ ...interval })
+  }
+  return merged
+}
+
+/** Captured session evidence in ms with real-absence stretches subtracted.
+ *  gapCauseIntervals yields sequential non-overlapping causes, so each absence
+ *  subtracts at most once. */
+function observedEvidenceMs(candidate: CandidateBlock, absences: readonly EvidenceInterval[]): number {
+  let total = 0
+  for (const interval of mergedEvidenceIntervals(candidate.sessions)) {
+    total += interval.endMs - interval.startMs
+    for (const absence of absences) {
+      const overlap = Math.min(absence.endMs, interval.endMs) - Math.max(absence.startMs, interval.startMs)
+      if (overlap > 0) total -= overlap
+    }
+  }
+  return Math.max(0, total)
+}
+
+/** The evidence mint floor: no floor-sized non-meeting candidate is minted
+ *  whose span holds under TIMELINE_MIN_MINT_EVIDENCE_MS of observed session
+ *  evidence once real absences are subtracted (a projected session opened by
+ *  one spurious activation event inside an idle dead zone claims its whole
+ *  span as "activity"). Sub-floor candidates stay: the 15-minute floor already
+ *  folds or drops them. Meetings and spans the person explicitly fused are
+ *  exempt, like every other destructive pass (invariant 8). Exported for tests. */
+export function enforceEvidenceMintFloor(
+  candidates: CandidateBlock[],
+  db: Database.Database,
+  userMergedSpans: readonly MergedSpan[] = [],
+): CandidateBlock[] {
+  if (candidates.length === 0) return candidates
+  const absences = hardAbsenceIntervals(db, candidates.flatMap((candidate) => candidate.sessions))
+  if (absences.length === 0) return candidates
+  return candidates.filter((candidate) => {
+    if (candidate.formation === 'meeting') return true
+    if (candidate.sessions.length === 0) return true
+    if (candidateSpanMs(candidate) < TIMELINE_MIN_BLOCK_FLOOR_MS) return true
+    const startMs = candidate.sessions[0].startTime
+    const endMs = sessionEndMs(candidate.sessions[candidate.sessions.length - 1])
+    if (userMergedSpans.some((span) => span.startMs < endMs && span.endMs > startMs)) return true
+    const evidenceMs = observedEvidenceMs(candidate, absences)
+    if (evidenceMs >= TIMELINE_MIN_MINT_EVIDENCE_MS) return true
+    console.warn(
+      `[timeline] evidence mint floor: dropping a candidate spanning `
+      + `${formatAbsenceRange({ startMs, endMs })} that holds only `
+      + `${Math.round(evidenceMs / 1000)}s of observed evidence inside a real absence`,
+    )
+    return false
+  })
+}
+
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
   const context = buildTimelineContext(db, sessions)
   const corrections = loadBoundaryCorrections(db, dateStr)
@@ -4326,6 +4492,10 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
   // is a span the person explicitly fused (DEV-233): their merge outranks the
   // seam.
   const seamed = splitCandidatesAtEvidenceSeams(floored, db, corrections.mergedSpans)
+  // The mint floor runs on the seam-split result: a phantom candidate whose
+  // span the machine-state ledger marks as a real absence is dropped before
+  // the re-floor, so nothing folds into it.
+  const minted = enforceEvidenceMintFloor(seamed, db, corrections.mergedSpans)
   // The seam split can strand a sub-floor sliver (an envelope-stretched
   // candidate cut back to a 3-minute sitting on the far side of the hole), so
   // the floor re-runs over the split result. It cannot re-join what the seam
@@ -4333,7 +4503,7 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
   // seam is ≥30m of unobserved time — a stranded sliver folds into a
   // neighbour within its own evidence region or, isolated, is dropped. User
   // cuts are re-enforced last so no fold erases one (invariant 8).
-  const refloored = enforceUserCuts(enforceMinimumBlockFloor(seamed, db, context), corrections.cuts)
+  const refloored = enforceUserCuts(enforceMinimumBlockFloor(minted, db, context), corrections.cuts)
   return refloored.map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
@@ -4700,7 +4870,13 @@ function finalizedLabelForBlock(
 
   const artifactLabel = clearsLabelVoice(preferredArtifactLabel(block), 'interpreted')
   const workflowLabel = clearsLabelVoice(usefulBlockLabel(block, block.workflowRefs[0]?.label))
-  const ruleLabel = clearsLabelVoice(usefulBlockLabel(block, block.ruleBasedLabel))
+  // 'floor', not 'invariants': for a browsing-dominant block the rule label IS
+  // a captured window title (labelForCandidate -> bestTitleLabelForSessions),
+  // so it has to face the no-verbatim-window-title rule like any other floor.
+  // Checked at 'invariants' it bypassed exactly the rule written to stop it,
+  // and Dia's tab-bar titles became block headlines: "Campus + App",
+  // "X (Twitter) + Factory", "Netflix + YouTube".
+  const ruleLabel = clearsLabelVoice(usefulBlockLabel(block, block.ruleBasedLabel), 'floor')
   const rawAiLabel = clearsLabelVoice(usefulBlockLabel(block, block.aiLabel), 'interpreted')
   // F1: the AI labeler can also lift a YouTube tab title verbatim into the
   // block headline when it sees that page in the evidence. Reject any
@@ -5537,8 +5713,13 @@ export interface StoredBlockLabelContext {
 /**
  * True when a STORED block label would be rejected by today's work-name
  * guards. Covers the shapes the guards reject at build time:
- *  - the label itself is a disqualified work subject (a tool brand, a tool's
- *    own UI surface like "Cursor Agents", a command line, a joined tab title);
+ *  - the label fails the shared label-shape gate — the SAME
+ *    workNameGuardLabelViolation the generation validators enforce, in
+ *    storedLabel mode (disqualified subject, a tool-surface phrase anywhere
+ *    in the label, a tool brand with no other work object). storedLabel mode
+ *    skips the shouting heuristic: generation has a corrective retry while
+ *    this path DELETES, and an all-caps real name must never die over a
+ *    style hunch (same reasoning keeps the comma rule digit-gated);
  *  - a "Working on <subject>[ in <project>]" wrapper whose subject is
  *    disqualified — the ladder builds these and now guards the subject
  *    (isDisqualifiedWorkSubject) before wrapping it;
@@ -5552,7 +5733,7 @@ export function storedLabelViolatesWorkNameGuards(
 ): boolean {
   const trimmed = label?.trim()
   if (!trimmed) return false
-  if (isDisqualifiedWorkSubject(trimmed)) return true
+  if (workNameGuardLabelViolation(trimmed, { storedLabel: true }) !== null) return true
   const wrapped = /^working on (.+)$/i.exec(trimmed)
   if (wrapped) {
     const subject = wrapped[1]
@@ -5853,6 +6034,87 @@ function refreshStaleBlockCategoryFacts(db: Database.Database, blocks: WorkConte
   }
 }
 
+// Heuristic-bump heal-on-read (the TIMELINE_HEURISTIC_VERSION bump policy).
+// A processed day stamped with an older heuristic version re-derives its
+// deterministic segmentation ONCE, on the read that opened it — the same
+// rebuild-with-carried-labels pipeline the DEV-267 seal repair uses, so
+// corrections re-apply (ignored spans stay out, boundary corrections
+// re-anchor, corrected labels win) and AI labels re-attach wherever their
+// stretch of work survived the re-segmentation. No AI is ever spent here:
+// blocks whose label stranded fall to deterministic sources and become
+// ordinary re-analysis targets.
+//
+// Returns null — keep the sealed shape — when the heal cannot preserve the
+// curated work:
+// - the day's sessions can no longer re-derive what the blocks cover (raw
+//   rows pruned), so a rebuild would shrink the day;
+// - re-segmentation strands every AI/user/workflow label and the day has no
+//   corrections, which would revert an analyzed day (DEV-277);
+// - a user-corrected label fails to re-attach (invariant 8: corrections are
+//   law, a shape improvement never outranks one).
+// A declined heal is not retried: the caller's category-facts refresh stamps
+// the blocks current, and explicit Re-analyze remains the path that reshapes
+// such a day.
+function healStaleShapePersistedDay(
+  db: Database.Database,
+  dateStr: string,
+  persisted: WorkContextBlock[],
+  sessions: AppSession[],
+): WorkContextBlock[] | null {
+  const sessionActiveMs = sessions.reduce((sum, session) => sum + Math.max(0, session.durationSeconds * 1000), 0)
+  const coveredMs = persisted.reduce((sum, block) => sum + blockActiveSeconds(block) * 1000, 0)
+  if (coveredMs - sessionActiveMs > PARTIAL_SEAL_MAX_UNCOVERED_MS) return null
+
+  const repaired = rebuildDayBlocksWithCarriedLabels(db, dateStr, sessions)
+  if (repaired.length === 0) return null
+  const analysisSurvived = repaired.some((block) => !block.isLive
+    && (block.label.source === 'ai' || block.label.source === 'workflow' || block.label.source === 'user'))
+  if (!analysisSurvived && !persistedDayHasCorrections(db, dateStr)) return null
+  if (!correctionsSurviveRebuild(persisted, repaired)) return null
+
+  console.log(
+    `[timeline] ${dateStr} was shaped by ${persisted[0]?.heuristicVersion ?? 'an older heuristic'} — `
+    + `re-derived ${persisted.length} block${persisted.length === 1 ? '' : 's'} into ${repaired.length} `
+    + `under ${TIMELINE_HEURISTIC_VERSION}, carrying labels and corrections forward`,
+  )
+  // The range readers' frozen snapshot fast-path never re-checks a
+  // current-builder row; drop it so the healed day refreezes
+  // deterministically on the next period read. Dropped BEFORE the persist:
+  // a crash between the two then leaves stale-stamped blocks (the heal
+  // simply retries on the next open) and a missing snapshot (refrozen from
+  // the current blocks on the next range read) — both self-healing. The
+  // reverse order could seal the healed blocks while the old-shape snapshot
+  // survives forever behind isCurrentSnapshot. Stored wrap narratives are
+  // deliberately NOT dropped — their factsHash comparison regenerates a wrap
+  // lazily, and only when this day's facts genuinely moved.
+  deleteDaySnapshotRow(db, dateStr)
+  persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
+  return repaired
+}
+
+// Every persisted user label correction must still be in force on the rebuilt
+// day: a corrected label re-attaches through the review layer (block id or
+// session-set evidence key), so its text must appear on a rebuilt block
+// OVERLAPPING the corrected span — text alone is not enough, because two
+// blocks corrected to the same name ("Client X audit" at 9:00 and again at
+// 14:00) would let one surviving attachment vouch for the other's silent
+// loss. A category-only correction has no label text to look for — some
+// rebuilt block overlapping the corrected span must carry the corrected
+// state instead.
+function correctionsSurviveRebuild(persisted: WorkContextBlock[], repaired: WorkContextBlock[]): boolean {
+  for (const block of persisted) {
+    if (block.review?.state !== 'corrected') continue
+    const correctedLabel = block.review.correctedLabel?.trim() || block.label.override?.trim()
+    const overlaps = (candidate: WorkContextBlock): boolean =>
+      candidate.startTime < block.endTime && candidate.endTime > block.startTime
+    const survived = correctedLabel
+      ? repaired.some((candidate) => overlaps(candidate) && candidate.label.current === correctedLabel)
+      : repaired.some((candidate) => overlaps(candidate) && candidate.review?.state === 'corrected')
+    if (!survived) return false
+  }
+  return true
+}
+
 function withoutIgnoredSpans(sessions: AppSession[], spans: MergedSpan[]): AppSession[] {
   if (spans.length === 0) return sessions
   return sessions.filter((session) =>
@@ -5911,6 +6173,10 @@ function buildTimelineBlocksForDay(
   options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): WorkContextBlock[] {
   const shouldMaterialize = options.materialize ?? true
+  // Materializing is the caller's intent; this is the store's capability. The
+  // MCP server opens the day store read-only, where repair-on-read — which
+  // deliberately writes even on a passive read — threw mid-read instead.
+  const storeIsWritable = !db.readonly
   // forceRebuild (the absence-repair path in analyzeDay.ts): reconstruct the
   // day from its sessions through the full pipeline even when it is "processed".
   const forceRebuild = (options.forceRebuild ?? false) && shouldMaterialize
@@ -5954,21 +6220,34 @@ function buildTimelineBlocksForDay(
         const analysisSurvived = repaired.some((block) => !block.isLive
           && (block.label.source === 'ai' || block.label.source === 'workflow' || block.label.source === 'user'))
         if (analysisSurvived || persistedDayHasCorrections(db, dateStr)) {
-          persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
+          if (storeIsWritable) persistTimelineDayIfChanged(db, dateStr, sessions, repaired, true)
           flagSuspiciousUnbrokenBlocks(dateStr, repaired)
           return repaired
         }
         // No label or correction survived the rebuild — the day is effectively
         // un-analyzed again and falls through to the coarse read (DEV-268).
-        invalidateTimelineDay(db, dateStr)
+        if (storeIsWritable) invalidateTimelineDay(db, dateStr)
         forceMaterialize = true
       } else {
+        // Heuristic bump heal-on-read: a processed day whose blocks were
+        // shaped by an older segmentation heuristic re-derives once when
+        // opened, keeping corrections and surviving AI labels (the bump
+        // policy documented at TIMELINE_HEURISTIC_VERSION). When the heal
+        // declines, the sealed shape is kept and only its deterministic
+        // facts refresh below.
+        if (storeIsWritable && persisted.some((block) => block.heuristicVersion !== TIMELINE_HEURISTIC_VERSION)) {
+          const healed = healStaleShapePersistedDay(db, dateStr, persisted, sessions)
+          if (healed) {
+            flagSuspiciousUnbrokenBlocks(dateStr, healed)
+            return healed
+          }
+        }
         // A processed, well-covered day keeps its boundaries and labels forever,
         // but its CATEGORY facts were computed by whatever heuristic was current
         // at the time — and category colors every surface (timeline.md §3.4).
         // Refresh just those deterministic facts in place so old days converge
         // on today's categorization without an AI call or touching a label.
-        refreshStaleBlockCategoryFacts(db, persisted)
+        if (storeIsWritable) refreshStaleBlockCategoryFacts(db, persisted)
         flagSuspiciousUnbrokenBlocks(dateStr, persisted)
         return persisted
       }
@@ -5987,7 +6266,7 @@ function buildTimelineBlocksForDay(
 
   const computed = rebuildDayBlocksWithCarriedLabels(db, dateStr, sessions)
   flagSuspiciousUnbrokenBlocks(dateStr, computed)
-  if (shouldMaterialize) {
+  if (shouldMaterialize && storeIsWritable) {
     persistTimelineDayIfChanged(db, dateStr, sessions, computed, forceMaterialize)
   }
   return computed
@@ -6021,10 +6300,14 @@ interface GapCauseInterval {
   endTime: number
 }
 
+// These name what Daylens actually observed — the state of the machine. It
+// cannot see where the user went, so it must not imply it. "Asleep" over a
+// 90-minute afternoon gap read as a claim about Christian, who was out of the
+// office having a conversation; the Mac was the thing that was asleep.
 const GAP_KIND_LABELS: Record<string, string> = {
-  asleep: 'Asleep',
-  locked: 'Locked',
-  idle: 'Idle',
+  asleep: 'Computer asleep',
+  locked: 'Screen locked',
+  idle: 'No activity',
   passive: 'Passive',
   paused: 'Tracking paused',
   untracked: 'No data captured',
@@ -6297,7 +6580,9 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
     const websiteLabels = block.websites
       .map((site) => shortDomainLabel(site.domain))
       .filter((label, index, labels) => labels.indexOf(label) === index)
-    if (websiteLabels.length >= 2) return `${websiteLabels[0]} + ${websiteLabels[1]}`
+    // One site can name a block; two joined by "+" cannot (see websiteAwareLabel).
+    // Reached only after the intent subject above declined, so the category
+    // floor below is the honest answer rather than a manufactured pairing.
     if (websiteLabels.length === 1) return websiteLabels[0]
   }
 
@@ -6488,11 +6773,51 @@ export function getTimelineDayPayload(
   }
 }
 
-/** The day's scheduled calendar events resolved against its meeting blocks
- *  (DEV-189). Pure read of the stored calendar day signal — never collects;
- *  undefined when the day has no stored calendar signal, so payloads without
- *  a calendar source stay byte-identical to before. Captured-only meetings
- *  are not listed here: they already ARE blocks. */
+/** Meeting-app evidence for the day at SESSION granularity, each span tagged
+ *  with the meeting block it belongs to when one exists.
+ *
+ *  Block-dominant evidence alone is too coarse to answer "did this meeting
+ *  happen": forty minutes of Zoom inside a three-hour browser-dominated block
+ *  produces no meeting block at all, so a call the person visibly sat in
+ *  resolved as calendar-only and the day went on to interrogate them about it.
+ *  Sessions carry that time whatever block it landed in.
+ *
+ *  The block id still matters downstream — the Timeline draws no outline for a
+ *  meeting already represented by its own block — so each span keeps the
+ *  meeting block it most overlaps, and null when the evidence lived inside a
+ *  block that is not a meeting. Falls back to block-derived spans when the
+ *  corrected facts cannot be read. */
+function capturedMeetingEvidenceForDay(
+  db: Database.Database,
+  dateStr: string,
+  blocks: WorkContextBlock[],
+): CapturedMeetingSpan[] {
+  let spans: CapturedMeetingSpan[]
+  try {
+    const [fromMs, toMs] = localDayBounds(dateStr)
+    const facts = queryCorrectedActivityFactsForRange(db, fromMs, toMs)
+    spans = capturedMeetingSpansFromSessions(facts.sessions)
+  } catch {
+    return capturedMeetingSpansFromBlocks(blocks)
+  }
+  if (spans.length === 0) return capturedMeetingSpansFromBlocks(blocks)
+  const meetingBlocks = blocks.filter((block) => block.dominantCategory === 'meetings')
+  return spans.map((span) => {
+    let bestBlockId: string | null = null
+    let bestOverlap = 0
+    for (const block of meetingBlocks) {
+      const overlap = Math.min(block.endTime, span.endMs) - Math.max(block.startTime, span.startMs)
+      if (overlap > bestOverlap) { bestOverlap = overlap; bestBlockId = block.id }
+    }
+    return { ...span, blockId: bestBlockId }
+  })
+}
+
+/** The day's scheduled calendar events resolved against its captured meeting
+ *  evidence (DEV-189). Pure read of the stored calendar day signal — never
+ *  collects; undefined when the day has no stored calendar signal, so payloads
+ *  without a calendar source stay byte-identical to before. Captured-only
+ *  meetings are not listed here: they already ARE blocks. */
 function resolveScheduledMeetingsForDay(
   db: Database.Database,
   dateStr: string,
@@ -6502,9 +6827,17 @@ function resolveScheduledMeetingsForDay(
     const calendar = getExternalSignal<CalendarSignal>(db, dateStr, 'calendar')?.payload ?? null
     const scheduled = scheduledMeetingsFromSignal(dateStr, calendar)
     if (scheduled.length === 0) return undefined
-    const report = matchDayMeetings(scheduled, capturedMeetingSpansFromBlocks(blocks), {
+    // Notes are one of the spec's occurrence supports (timeline.md §Meetings:
+    // "device activity, call presence, Granola, transcript, or explicit
+    // confirmation"). The day-level report has always passed them; this path
+    // did not, so a meeting documented in Granola but taken away from the
+    // laptop still read as unattended here.
+    let noteSupported: Set<string> | undefined
+    try { noteSupported = meetingNoteSupportedEventKeys(db, dateStr, scheduled) } catch { /* no ledger */ }
+    const report = matchDayMeetings(scheduled, capturedMeetingEvidenceForDay(db, dateStr, blocks), {
       marks: getMeetingAttendanceMarks(db, dateStr),
       participants: scheduledParticipantsForDay(db, dateStr),
+      noteSupported,
     })
     return report.meetings
       .filter((meeting) => meeting.attendance !== 'captured_only')

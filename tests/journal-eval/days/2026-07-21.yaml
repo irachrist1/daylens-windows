@@ -33,10 +33,14 @@ shape:
   - { from: "12:30", until: "18:00", desc: "more of the same prompting/fixing grind — roughly half the day went to it; no ML study, no content curation" }
   - { from: "19:00", desc: "evening: journal reflection, then building the curation system in Obsidian — Content Consumption Plan, Reading List, to-do randoms, everyday routine rules, the daily hour-table template, and the July 22 plan" }
 notes: >
-  Severe capture outage: app sessions exist only 08:21–09:34, then nothing
-  for the rest of the day. Sparse browser-history visits trickle on until
-  ~19:20, but the bulk of the day — including most of the prompting/fixing
-  grind and the entire evening Obsidian session — was never observed. Do not
-  punish Daylens for the unobserved hours or for a thin timeline; do punish
-  narrating a full confident day from one hour of data, or presenting the
-  day as if it ended mid-morning by choice.
+  Partial capture: dense app sessions exist 08:21–09:34; the afternoon
+  (~14:49–19:22) WAS observed too — stored block evidence holds Safari (~1.5h
+  across 116 sessions), Claude (~1h), Warp, and Traycer for that span, so an
+  afternoon narrated as the prompting/fixing grind is truthful, not invented.
+  (An earlier version of these notes wrongly declared the whole post-09:34
+  day unobserved; raw session rows were purged later, but the derived
+  evidence predates the purge.) What was NEVER observed: late morning
+  ~09:34–14:49 beyond sparse browser-history trickle, and the entire evening
+  Obsidian session after capture died (~19:22). Do not punish Daylens for
+  those unobserved stretches; do punish narrating them with confidence, or
+  presenting the day as if it ended mid-morning by choice.

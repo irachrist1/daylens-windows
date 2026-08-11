@@ -160,3 +160,52 @@ test('real DB: every tool dispatches through executeWrappedTool sanitized', { sk
     db.close()
   }
 })
+
+// ─── Hermetic: run-level stretch semantics ────────────────────────────────────
+// The stretch must come from session evidence, not block bounds: a mixed block
+// with a real leisure detour in the middle yields the longest work RUN with its
+// own bounds, and a placeholder label ("Morning", "Active now") never ships as
+// the subject.
+test('hermetic: longest stretch is the work run inside a mixed block, never the block span', async () => {
+  const { createProductionTestDatabase } = await import('./support/testDatabase.ts')
+  const db = createProductionTestDatabase()
+  try {
+    const anchor = new Date()
+    anchor.setDate(anchor.getDate() - 3)
+    const date = `${anchor.getFullYear()}-${String(anchor.getMonth() + 1).padStart(2, '0')}-${String(anchor.getDate()).padStart(2, '0')}`
+    const at = (hour: number, minute = 0): number =>
+      new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), hour, minute, 0, 0).getTime()
+    const insert = db.prepare(`
+      INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+        category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+        capture_source, capture_version)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'test', 1)
+    `)
+    const seed = (app: string, startMs: number, endMs: number, category: string, title: string): void => {
+      insert.run(`com.test.${app.toLowerCase()}`, app, startMs, endMs,
+        Math.round((endMs - startMs) / 1000), category, title, app, app.toLowerCase(), `com.test.${app.toLowerCase()}`)
+    }
+    // One continuous sitting 9:00–13:00: work, a 15m Netflix detour, more work
+    // — then an afternoon of plain browsing (neutral, NOT work) that must
+    // neither count toward nor extend any run.
+    seed('Cursor', at(9, 0), at(10, 30), 'development', 'daylens - fixing tools')
+    seed('Safari', at(10, 30), at(10, 45), 'entertainment', 'Netflix')
+    seed('Cursor', at(10, 45), at(13, 0), 'development', 'daylens - fixing tools')
+    seed('Dia', at(13, 0), at(16, 0), 'browsing', 'Dia')
+
+    const result = getLongestFocusStretch({ date }, db)
+    assert.ok(result, 'expected a stretch from the seeded day')
+    // The 15m entertainment detour breaks the run: the honest answer is the
+    // 10:45–13:00 run (8100s), never the 9:00–13:00 block span (14400s), and
+    // never 9:00–16:00 with browsing chained in.
+    assert.equal(result!.durationSeconds, 8100)
+    assert.equal(result!.startClock, '10:45am')
+    assert.equal(result!.endClock, '1pm')
+    const placeholders = ['active now', 'earlier today', 'late night', 'morning', 'afternoon', 'evening', 'night']
+    if (result!.subject) {
+      assert.ok(!placeholders.includes(result!.subject.toLowerCase()), `placeholder subject shipped: ${result!.subject}`)
+    }
+  } finally {
+    db.close()
+  }
+})

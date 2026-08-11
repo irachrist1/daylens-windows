@@ -662,7 +662,6 @@ export interface FocusReflectionSavePayload {
 
 export interface AIDaySummaryResult {
   summary: string
-  questionSuggestions: string[]
   /** True when this is the deterministic factual fallback shown because the AI
    *  recap could not be generated (unavailable / timed out / unparseable) — so
    *  the UI can say so plainly instead of passing a template off as the recap
@@ -672,6 +671,10 @@ export interface AIDaySummaryResult {
   /** Why the AI recap could not be generated, in words the person can act on
    *  (provider error, timeout, unreadable reply). Only set when degraded. */
   degradedReason?: string
+  /** The failure is a wall only the person can clear — billing, credit, auth,
+   *  a model that no longer exists. Retrying cannot succeed until they act, so
+   *  the panel must not offer one as if it might. */
+  degradedNeedsAction?: boolean
 }
 
 export type AIAnswerKind =
@@ -1539,6 +1542,13 @@ export interface WorkflowPattern {
   lastSeenAt: number
 }
 
+// Product decision (DEV-239): a domain needs at least this much credited
+// foreground time in the selected range to earn its own row in the browser
+// breakdown. Anything under it is a drive-by (a redirect hop, a 1-2 second
+// glance) and folds into one "Everything else" line, keeping its seconds in
+// the reconciled total without cluttering the list. Default: 10 seconds.
+export const MIN_DOMAIN_ROW_SECONDS = 10
+
 export interface AppDetailPayload {
   canonicalAppId: string
   displayName: string
@@ -1569,6 +1579,17 @@ export interface AppDetailPayload {
       visitCount: number
       pages: PageRef[]
     }>
+    /**
+     * Domains whose credited time fell under the minimum-row threshold,
+     * folded into one line so drive-by 1-2 second visits never earn their
+     * own rows. Included in attributedSeconds; the reconciliation is now
+     * Σ domain.totalSeconds + everythingElse.totalSeconds = attributedSeconds.
+     */
+    everythingElse?: {
+      totalSeconds: number
+      domainCount: number
+      visitCount: number
+    }
   }
   blockAppearances: Array<{
     blockId: string
@@ -1782,6 +1803,13 @@ export interface GitRepoActivity {
   messages: string[]
   firstCommitClock: string | null
   lastCommitClock: string | null
+  /** How the commits spread across the day, by local part-of-day. Absent on
+   *  rows stored before the field existed. */
+  commitHourBuckets?: { overnight: number; morning: number; afternoon: number; evening: number }
+  /** Of commitCount, how many landed under an agent-runner author identity
+   *  (Claude, Cursor Agent, …) — the user's output via agents, never a
+   *  teammate's (unknown human authors are excluded entirely). */
+  agentCommitCount?: number
 }
 
 export interface GitPRActivity {
@@ -1943,6 +1971,13 @@ export type HistoryExportRunResult =
       incompleteSections: string[]
     }
 
+/** DEV-248: result of the per-slide wrap export. `canceled` means the person
+ *  dismissed the folder picker; otherwise every requested slide was written
+ *  (a partial write cleans up after itself and rejects instead). */
+export type WrapSlidesExportResult =
+  | { canceled: true }
+  | { canceled: false; dir: string; files: string[] }
+
 /** The day's external signals, RESOLVED for the wrap writer: sanitized,
  *  humanized, pre-formatted, and stripped of anything the model must never
  *  echo (raw paths, branches, clock times it can't ground). Each block is
@@ -1951,8 +1986,10 @@ export type HistoryExportRunResult =
 export interface DayEnrichment {
   /** What the day PRODUCED, from git + gh. */
   shipped: {
-    /** Commits per repo, humanized folder name, biggest first. */
-    commitsByProject: Array<{ project: string; commits: number }>
+    /** Commits per repo, humanized folder name, biggest first. `spread` is a
+     *  pre-formatted part-of-day telling ("14 overnight, 21 through the
+     *  morning") — null when the stored row predates commit-hour buckets. */
+    commitsByProject: Array<{ project: string; commits: number; spread?: string | null; viaAgents?: number | null }>
     /** Sanitized, humanized commit subjects / PR titles worth naming — never a
      *  raw path or branch (already stripped). Deduped, capped. */
     highlights: string[]
@@ -2683,6 +2720,14 @@ interface LinuxDesktopDiagnostics {
   secretServiceReachable: boolean | null
 }
 
+/** DEV-261: present while the recorder has stalled enough this session that
+ *  the day probably has holes — drives the persistent in-app banner. Null or
+ *  absent once stalls have stopped long enough to trust recording again. */
+export interface RecorderStallBannerState {
+  stallCount: number
+  longestStallSeconds: number
+}
+
 /** DEV-229: the permission watcher's live verdict on whether capture can
  *  actually read window titles — the OS grant flag AND a real-read proxy
  *  (titled share of recently persisted samples). 'blind' = flag revoked or
@@ -2693,6 +2738,8 @@ export interface CaptureVerificationState {
   axTrusted: boolean
   recentSamples: number
   recentSamplesWithTitle: number
+  /** DEV-261: repeated main-thread stalls ride the same banner channel. */
+  recorderStall?: RecorderStallBannerState | null
   checkedAt: number
 }
 
@@ -3099,6 +3146,7 @@ export const IPC = {
     LIST: 'entities:list',
     DETAIL: 'entities:detail',
     SUGGESTED_MERGES: 'entities:suggested-merges',
+    MERGE_ALL_DUPLICATES: 'entities:merge-all-duplicates',
     PREVIEW_CORRECTION: 'entities:preview-correction',
     APPLY_CORRECTION: 'entities:apply-correction',
     UNDO_CORRECTION: 'entities:undo-correction',
@@ -3136,6 +3184,9 @@ export const IPC = {
     RUN: 'export:run',
     VERIFY: 'export:verify',
     PROGRESS: 'export:progress',
+    // DEV-248: the wrap deck exports one PNG per slide into a folder the
+    // person picks once. One dialog, many files, never a glued mega-image.
+    WRAP_SLIDES: 'export:wrap-slides',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',

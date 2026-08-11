@@ -145,7 +145,9 @@ async function main(): Promise<void> {
         const verdict = await judgeDayShape(judgeKey, day, observed, rendering)
         score.shapeJudge = { score: verdict.score, max: 10, violations: verdict.violations, reasoning: verdict.reasoning }
       } catch (error) {
-        score.shapeJudge = { score: 0, max: 10, violations: [`judge error: ${String(error)}`], reasoning: 'judge call failed' }
+        // A judge transport/parse failure grades the SDK, not Daylens: the
+        // day is excluded from the mean (score null) instead of scored 0.
+        score.shapeJudge = { score: null, max: 10, violations: [`judge error: ${String(error)}`], reasoning: 'judge call failed' }
       }
     }
     results.push(score)
@@ -168,8 +170,15 @@ async function main(): Promise<void> {
     primaryWorkRate: rate(results, (s) => s.primaryWork),
     toolSurfaceCleanRate: rate(results, (s) => s.toolSurfaces),
     gapHonestyRate: rate(results, (s) => s.gapHonesty),
+    // Days whose judge call failed (score null) are excluded from the mean —
+    // a transport failure grades the SDK, not the product.
     shapeJudgeMean: useJudge
-      ? results.reduce((sum, s) => sum + (s.shapeJudge?.score ?? 0), 0) / results.length
+      ? (() => {
+          const judged = results.filter((s) => typeof s.shapeJudge?.score === 'number')
+          return judged.length > 0
+            ? judged.reduce((sum, s) => sum + (s.shapeJudge!.score as number), 0) / judged.length
+            : null
+        })()
       : null,
   }
 

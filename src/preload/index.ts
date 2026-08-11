@@ -40,6 +40,7 @@ import type {
   HistoryExportProgress,
   HistoryExportRunResult,
   HistoryExportVerification,
+  WrapSlidesExportResult,
   BillingUsageReport,
   SpendGuardrailsReport,
   IntercomIdentity,
@@ -544,6 +545,10 @@ const api = {
       ipcRenderer.invoke(IPC.ENTITIES.LIST, payload),
     detail: (entityId: string) => ipcRenderer.invoke(IPC.ENTITIES.DETAIL, entityId),
     suggestedMerges: () => ipcRenderer.invoke(IPC.ENTITIES.SUGGESTED_MERGES),
+    mergeAllDuplicates: (
+      payload: { excludedPairs?: Array<{ leftId: string; rightId: string }> } = {},
+    ): Promise<{ merged: number; failed: number; lastCorrectionId: string | null; lastDescription: string | null }> =>
+      ipcRenderer.invoke(IPC.ENTITIES.MERGE_ALL_DUPLICATES, payload),
     previewCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.PREVIEW_CORRECTION, command),
     applyCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.APPLY_CORRECTION, command),
     undoCorrection: (correctionId: string) => ipcRenderer.invoke(IPC.ENTITIES.UNDO_CORRECTION, correctionId),
@@ -603,6 +608,10 @@ const api = {
       ipcRenderer.on(IPC.EXPORT.PROGRESS, handler)
       return () => { ipcRenderer.removeListener(IPC.EXPORT.PROGRESS, handler) }
     },
+    // DEV-248: the wrap deck's per-slide export — one folder pick, one PNG per
+    // slide. Rejects (never resolves) when a write fails, so the deck can say so.
+    wrapSlides: (payload: { stem: string; files: Array<{ filename: string; bytes: Uint8Array }> }): Promise<WrapSlidesExportResult> =>
+      ipcRenderer.invoke(IPC.EXPORT.WRAP_SLIDES, payload),
   },
   contextPackets: {
     // DEV-181: the recorded, deterministic bundle behind an AI exchange.

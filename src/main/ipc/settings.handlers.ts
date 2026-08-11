@@ -13,6 +13,7 @@ import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
 import { detectFocusApps, discoverMcpServers } from '../services/enrichmentDiscovery'
+import { applyProviderChangeToSettings } from '../lib/providerRouting'
 import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings, EnrichmentSourcesState } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -58,7 +59,7 @@ export function registerSettingsHandlers(): void {
       && Boolean(previous.trackingPaused) !== Boolean(partial.trackingPaused)
     const trackingPauseAt = trackingPauseChanged ? Date.now() : null
 
-    await setSettings(partial)
+    await setSettings(applyProviderChangeToSettings(previous, partial))
 
     if (trackingPauseAt !== null) {
       recordTrackingPauseTransition(Boolean(partial.trackingPaused), 'settings', trackingPauseAt)

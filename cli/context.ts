@@ -138,6 +138,14 @@ export async function openHarness(options: OpenOptions = {}): Promise<HarnessCon
   const { initSettings } = await import('../src/main/services/settings')
   await initSettings()
   initDb()
+  // Same on-demand enrichment backfill the app registers at startup: wrapping
+  // or analyzing a historical day collects that day's git/calendar signals
+  // into the work copy. Skipped for --db fixtures — a fixture day must stay
+  // exactly what the fixture says it is.
+  if (!options.dbPath) {
+    const { ensureExternalSignalsForDate, registerExternalSignalBackfill } = await import('../src/main/services/externalSignals')
+    registerExternalSignalBackfill((date) => ensureExternalSignalsForDate(getDb(), date))
+  }
   opened = {
     userData,
     dbPath: path.join(userData, 'daylens.sqlite'),

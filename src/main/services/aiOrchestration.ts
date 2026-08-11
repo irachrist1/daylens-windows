@@ -92,7 +92,15 @@ interface AIJobDefinition {
 // pure surcharge and every former repeated_payload job now runs cachePolicy 'off'.
 // stable_prefix stays only on conversational jobs, where a growing multi-turn
 // prefix can genuinely be re-read.
-const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
+// Exported so a job's budget is assertable: a timeout regression is invisible
+// in every other test, and shows up in production only as a surface quietly
+// serving its fallback (DEV-292).
+//
+// WARNING: timeoutMs on these definitions is NOT enforced here. executeTextAIJob
+// never reads it — each caller must impose its own belt, and several do not.
+// Read a budget through jobTimeoutMs() so a caller's belt and the number
+// documented here cannot drift apart.
+export const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
   block_label_preview: {
     jobType: 'block_label_preview',
     screen: 'timeline_day',
@@ -135,7 +143,16 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'day_summary',
     screen: 'timeline_day',
     foreground: true,
-    timeoutMs: 15_000,
+    // Measured, not guessed. 15s never finished and real days served the
+    // factual fallback with "Day summary timed out" (DEV-292). The recap lab
+    // then measured a 13-block day end to end: 24-52s through the API, 33-77s
+    // through the Claude CLI, whose process start and agent loop cost several
+    // times the API's latency. 150s is roughly double the worst run, because
+    // the worst run is not the worst day — and a recap that arrives late is
+    // still a recap, while one that expires is a fallback line. Deliberately
+    // NOT aligned with wrapped_narrative's 90s any more: a CLI-backed recap is
+    // slower than a deck on the API.
+    timeoutMs: Number(process.env.DAYLENS_RECAP_TIMEOUT_MS) || 150_000,
     cachePolicy: 'off',
     modelStrategy: 'balanced',
   },
@@ -211,10 +228,12 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     foreground: true,
     // The deck rewrite made the response a full slide deck (one line per
     // slide + question + reflection), so the call needs more room than the
-    // old five-field arc did. A 16-slide Sonnet deck runs ~15-25s. Overridable
-    // for the offline benchmark, which tolerates a longer wait to measure
-    // content rather than latency.
-    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 40_000,
+    // old five-field arc did. A full day with git enrichment measured 54s on
+    // the quality model, and a 40s budget silently served the fallback deck
+    // on exactly the days most worth telling — this must stay aligned with
+    // NARRATIVE_TIMEOUT_MS (90s) in wrappedNarrative.ts. Overridable for the
+    // offline benchmark.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 90_000,
     cachePolicy: 'off',
     // The wrap is the showcase surface — "the most crafted
     // surface" — so it rides the QUALITY tier (Sonnet, not Haiku). On the
@@ -231,8 +250,9 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'wrapped_period_narrative',
     screen: 'timeline_week',
     foreground: true,
-    // A weekly deck is 20+ slides of prose; give it real time.
-    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 45_000,
+    // A weekly deck is 20+ slides of prose; give it real time. Aligned with
+    // the daily budget above for the same silent-fallback reason.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 100_000,
     cachePolicy: 'off',
     modelStrategy: 'quality',
   },
@@ -322,6 +342,13 @@ const GOOGLE_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
   economy: 'gemini-3.1-flash-lite',   // GA, cheapest/highest-RPM — keeps R1 budget low
   balanced: 'gemini-3.1-flash-lite',
   quality: 'gemini-3.5-flash',        // GA flagship
+}
+
+/** The wall-clock budget a job's caller should hold it to. The definitions are
+ *  where a budget is documented and reasoned about; this is how a caller gets
+ *  the number, so the belt it actually imposes and the table cannot disagree. */
+export function jobTimeoutMs(jobType: AIJobType): number {
+  return JOB_DEFINITIONS[jobType].timeoutMs
 }
 
 export function modelForProvider(

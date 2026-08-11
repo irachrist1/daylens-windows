@@ -71,8 +71,8 @@ const DAY_ANCHORS: Record<string, SlideAnchors> = {
   },
   focus: {
     perfect: [
-      'From 7:12am you stayed with the tracking engine for two and a half hours without surfacing, your longest unbroken run of the day. 🔥',
-      'The reconciliations held you for two and a half hours straight from 7:12am, before a single email got a reply. Nothing broke it.',
+      'From 7:12am you stayed with the tracking engine for two and a half hours, your longest run of the day. 🔥',
+      'The reconciliations held you for two and a half hours from 7:12am, before a single email got a reply.',
       'Two and a half hours on the problem set from 7:12am, not a single switch away. The cleanest stretch of the day.',
     ],
     bad: [
@@ -157,7 +157,7 @@ const DAY_ANCHORS: Record<string, SlideAnchors> = {
   },
   meetings: {
     perfect: [
-      'The standup ran 30 minutes and you built straight through the rest of the morning around it.',
+      'The standup ran 30 minutes and you built through the rest of the morning around it.',
       'Two reviews back to back after lunch, and both the AP and revenue schedules came out approved.',
       'Both discovery calls ran back to back before lunch, which is why the afternoon had room for the deck.',
     ],
@@ -243,8 +243,8 @@ const WEEK_ANCHORS: Record<string, SlideAnchors> = {
   },
   focus: {
     perfect: [
-      '4h 14m without breaking on Thursday, all of it the pipeline work. Your deepest run of the week. 🏆',
-      'The longest unbroken run landed Tuesday morning: nearly three hours straight on the grant application before anything interrupted.',
+      '4h 14m on Thursday, all of it the pipeline work. Your deepest run of the week. 🏆',
+      'The longest run landed Tuesday morning: nearly three hours on the grant application.',
     ],
     bad: [
       'Your longest stretch was 4h 14m.',

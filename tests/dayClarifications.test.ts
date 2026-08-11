@@ -112,6 +112,42 @@ test('DEV-284: a meeting during hours the person clearly worked through is never
   db.close()
 })
 
+test('a meeting that has not happened yet is never asked about', () => {
+  const db = createProductionTestDatabase()
+  // 10am, looking at a day whose calendar runs to the evening. The 3pm is
+  // hours away: there is trivially no evidence for it, and "were you in it?"
+  // has no honest answer yet.
+  const tenAm = base + 60 * 60_000
+  const payload = payloadWith([], [
+    { title: 'Build at the Table', startMs: base + 6 * 3_600_000, endMs: base + 9.5 * 3_600_000, attendeeCount: 4, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
+    { title: 'Morning sync', startMs: base - 2 * 3_600_000, endMs: base - 1.5 * 3_600_000, attendeeCount: 3, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
+  ])
+
+  const questions = detectDayClarifications(db, payload, tenAm).map((c) => c.question)
+  assert.ok(!questions.some((q) => /Build at the Table/.test(q)), `must not ask about a meeting still ahead: ${questions.join(' | ')}`)
+  assert.ok(questions.some((q) => /Morning sync/.test(q)), 'a meeting that already ended is still asked about')
+
+  // Same payload, same person, after the meeting is over: now it is a fair question.
+  const afterwards = detectDayClarifications(db, payload, base + 10 * 3_600_000).map((c) => c.question)
+  assert.ok(afterwards.some((q) => /Build at the Table/.test(q)), 'once it has ended the question appears')
+  db.close()
+})
+
+test('a meeting in progress, and one that just ended, are not asked about yet', () => {
+  const db = createProductionTestDatabase()
+  const meetingEnd = base + 60 * 60_000
+  const payload = payloadWith([], [
+    { title: 'Standup', startMs: base, endMs: meetingEnd, attendeeCount: 3, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
+  ])
+  const asked = (nowMs: number) => detectDayClarifications(db, payload, nowMs).length
+
+  assert.equal(asked(base + 30 * 60_000), 0, 'never asks about a meeting the person is sitting in')
+  assert.equal(asked(meetingEnd), 0, 'the tail of the call has not been flushed into the facts yet')
+  assert.equal(asked(meetingEnd + 5 * 60_000), 0, 'still inside the grace window')
+  assert.equal(asked(meetingEnd + 11 * 60_000), 1, 'past the grace window the question is fair')
+  db.close()
+})
+
 test('a skipped question is remembered and never re-asked', () => {
   const db = createProductionTestDatabase()
   const payload = payloadWith([block({ id: 'blk_unnamed', label: 'Development', startMin: 0, durationMin: 60 })])

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Mascot from '../Mascot'
-import { prefersReducedMotion, type Theme } from './wrapKit'
+import { opaqueSlideSurface, prefersReducedMotion, WRAP_SURFACE_BACKSTOP, type Theme } from './wrapKit'
 
 // The cinematic "Generating your wrap…" screen — what plays while the AI
 // assembles the deck on a first open. Fixes the old first-open experience,
@@ -30,10 +30,14 @@ export default function GeneratingScreen({ cadence, theme, onClose }: {
   }, [reduced, lines.length])
 
   return (
+    // Opaque root, no opacity animation on it — the fade runs on the gradient
+    // layer inside, so a stalled animation can never leave the app showing
+    // through (the DEV-248 bleed-through bug; see opaqueSlideSurface).
     <div
       data-testid="wrap-generating"
-      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: theme.bg, animation: 'wrappedOverlayIn 280ms ease forwards', overflow: 'hidden' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: WRAP_SURFACE_BACKSTOP, overflow: 'hidden' }}
     >
+      <div style={{ position: 'absolute', inset: 0, ...opaqueSlideSurface(theme), animation: 'wrappedOverlayIn 280ms ease' }} />
       {/* Drifting glow orbs — the "being cooked" atmosphere. */}
       {!reduced && (
         <>

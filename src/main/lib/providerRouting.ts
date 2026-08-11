@@ -16,3 +16,19 @@ export function selectJobProvider(
   }
   return settings.aiProvider ?? 'anthropic'
 }
+
+/** The settings write to actually persist, given what is being changed.
+ *
+ *  Changing the provider retires a chat pin set earlier, unless the same write
+ *  states a new one. The chat picker only offers API providers, so a pin left
+ *  behind after switching to a CLI provider is unreachable from the chat UI:
+ *  Settings would say Claude CLI while chat kept billing the old account. */
+export function applyProviderChangeToSettings(
+  previous: Pick<AppSettings, 'aiProvider' | 'aiChatProvider'>,
+  partial: Partial<AppSettings>,
+): Partial<AppSettings> {
+  const providerChanged = partial.aiProvider != null && partial.aiProvider !== previous.aiProvider
+  const statesItsOwnPin = partial.aiChatProvider != null
+  if (!providerChanged || statesItsOwnPin || previous.aiChatProvider === undefined) return partial
+  return { ...partial, aiChatProvider: undefined }
+}

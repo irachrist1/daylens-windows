@@ -201,7 +201,7 @@ export async function runForgetMemory(
 export function buildMemoryTools(deps: MemoryToolDeps) {
   return {
     propose_memory: tool({
-      description: 'Offer to remember ONE durable personal or work fact the user just told you about themselves ("I lead the pricing project", "Fridays are focus days"). The user sees the exact statement plus how it would be used, and confirms, edits, or declines — nothing is saved without their confirmation (silence is not consent), so never claim to remember anything unless this tool returned saved: true. Use it sparingly: only when remembering the fact would clearly improve future answers, only for clearly durable facts the user stated about themselves or their work, never for questions, transient states, or anything you inferred. NEVER propose secrets, credentials, health, or financial details. Do not re-propose a fact this tool reported as declined or already saved.',
+      description: 'Offer to remember ONE durable personal or work fact the user just told you about themselves ("I lead the pricing project", "Fridays are focus days"). The user sees the exact statement plus how it would be used, and confirms, edits, or declines, nothing is saved without their confirmation (silence is not consent), so never claim to remember anything unless this tool returned saved: true. Use it sparingly: only when remembering the fact would clearly improve future answers, only for clearly durable facts the user stated about themselves or their work, never for questions, transient states, or anything you inferred. NEVER propose secrets, credentials, health, or financial details. Do not re-propose a fact this tool reported as declined or already saved.',
       inputSchema: z.object({
         statement: z.string().min(3).max(280)
           .describe('The fact as one short, plain sentence in second person, e.g. "You lead the pricing project."'),
@@ -212,7 +212,7 @@ export function buildMemoryTools(deps: MemoryToolDeps) {
     }),
 
     forget_memory: tool({
-      description: 'Forget ONE saved conversational memory when the user asks ("forget that I lead pricing", "that fact about Fridays is wrong, drop it"). Resolves the saved fact by its text (partial match ok), shows a confirmation card with the exact statement, and deletes it only when the user confirms — never claim a memory was forgotten unless this tool returned forgotten: true. If several facts match, the result names them so you can ask which one.',
+      description: 'Forget ONE saved conversational memory when the user asks ("forget that I lead pricing", "that fact about Fridays is wrong, drop it"). Resolves the saved fact by its text (partial match ok), shows a confirmation card with the exact statement, and deletes it only when the user confirms, never claim a memory was forgotten unless this tool returned forgotten: true. If several facts match, the result names them so you can ask which one.',
       inputSchema: z.object({
         statement: z.string().min(2).max(280)
           .describe('The saved fact to forget, as close to its stored text as possible'),

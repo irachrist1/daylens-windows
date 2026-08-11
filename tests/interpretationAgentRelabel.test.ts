@@ -271,6 +271,30 @@ test('a bare app name is held to the label-voice contract: the agent fails and t
   }
 })
 
+test('a tool-surface label behind a verb lead is rejected at generation time and the block falls back', async () => {
+  try {
+    // "Working on Cursor Agents" passes the bare-subject guard (verb lead)
+    // and the voice invariants; the shared work-name-guard object check must
+    // still reject it before it ever persists.
+    const { directCalls, labels, failureReasons, db } = await runVoiceGateCase({
+      label: 'Working on Cursor Agents',
+      narrative: 'Time in the agent panel.',
+      confidence: 0.9,
+    })
+    assert.ok(directCalls >= 1, 'the rejected block fell back to the direct relabel')
+    assert.ok(!labels.includes('Working on Cursor Agents'), 'the tool-surface label never persisted')
+    assert.ok(labels.includes('Reviewing team updates'))
+    assert.ok(
+      failureReasons.some((reason) => /label rejected/.test(reason)),
+      'the rejection is metered as an agent failure',
+    )
+    db.close()
+  } finally {
+    __resetSettings()
+    clearTestDb()
+  }
+})
+
 test('an over-long label fails the same bound the direct path enforces and the block falls back', async () => {
   try {
     const longLabel = `Reviewing ${'very '.repeat(25)}long coordination work` // > 90 chars, > 12 words

@@ -1905,7 +1905,7 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
               {recap.degraded && (
                 <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
                   {recap.degradedReason
-                    ? `The full recap couldn't be generated — ${recap.degradedReason} Showing the day's facts; Generate recap retries.`
+                    ? `The full recap couldn't be generated — ${recap.degradedReason} Showing the day's facts; ${recap.degradedNeedsAction ? 'generate again once that is sorted.' : 'Generate recap retries.'}`
                     : "The full recap couldn't be generated. Showing the day's facts; Generate recap retries."}
                 </div>
               )}

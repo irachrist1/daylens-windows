@@ -24,6 +24,7 @@ import type Database from 'better-sqlite3'
 import {
   addEntityAlias,
   getEntityDetail,
+  listSuggestedEntityMerges,
   mergeGroupIds,
   resolveMergeChain,
   type EntityRow,
@@ -273,6 +274,81 @@ export function previewEntityCorrection(
     db.exec('ROLLBACK TO entity_correction_preview')
     db.exec('RELEASE entity_correction_preview')
   }
+}
+
+export interface MergeAllDuplicatesResult {
+  /** Merges that actually flipped a row. A pair whose sides already resolve
+   *  to the same survivor is skipped, never counted (DEV-257). */
+  merged: number
+  /** Pairs that errored. Reported to the caller, never swallowed. */
+  failed: number
+  lastCorrectionId: string | null
+  lastDescription: string | null
+}
+
+// One pass merges every current suggestion; further passes only exist to
+// catch duplicates that surface as a consequence of merging. The bound keeps
+// a pathological store from looping forever.
+const MERGE_ALL_MAX_PASSES = 25
+
+function unorderedPairKey(a: string, b: string): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`
+}
+
+/** Merge every suggested duplicate, repeating until a pass merges nothing
+ *  (fixpoint), so one press collapses the whole duplicate pile rather than a
+ *  page-sized batch of it. Runs against the unlimited suggestion listing —
+ *  the Settings display cap never bounds the work. `excludedPairs` carries
+ *  the pairs a person dismissed as "Not the same"; those are never merged.
+ *  Each merge records its own undo-log entry through applyEntityCorrection,
+ *  so "Undo reverses the last one" keeps its single-merge meaning. */
+export function mergeAllDuplicateEntities(
+  db: Database.Database,
+  options: { excludedPairs?: Array<{ leftId: string; rightId: string }> } = {},
+): MergeAllDuplicatesResult {
+  const excluded = new Set(
+    (options.excludedPairs ?? []).map((pair) => unorderedPairKey(pair.leftId, pair.rightId)),
+  )
+  const failedPairs = new Set<string>()
+  const result: MergeAllDuplicatesResult = {
+    merged: 0,
+    failed: 0,
+    lastCorrectionId: null,
+    lastDescription: null,
+  }
+  for (let pass = 0; pass < MERGE_ALL_MAX_PASSES; pass += 1) {
+    const pairs = listSuggestedEntityMerges(db, Number.MAX_SAFE_INTEGER)
+    let mergedThisPass = 0
+    for (const pair of pairs) {
+      const key = unorderedPairKey(pair.leftId, pair.rightId)
+      if (excluded.has(key) || failedPairs.has(key)) continue
+      try {
+        const target = resolveMergeChain(db, entityById(db, pair.leftId))
+        const source = resolveMergeChain(db, entityById(db, pair.rightId))
+        // Already one entity (an earlier pair in this run, or an earlier
+        // user merge). A retry is not a merge and must not count as one.
+        if (target.id === source.id) continue
+        const applied = applyEntityCorrection(db, {
+          kind: 'entity-merge',
+          targetId: target.id,
+          sourceId: source.id,
+        })
+        result.merged += 1
+        mergedThisPass += 1
+        result.lastCorrectionId = applied.correctionId
+        result.lastDescription = applied.description
+      } catch (error) {
+        console.error(
+          `[entities] merge-all pair failed (${pair.leftName} <- ${pair.rightName}):`,
+          error,
+        )
+        result.failed += 1
+        failedPairs.add(key)
+      }
+    }
+    if (mergedThisPass === 0) break
+  }
+  return result
 }
 
 export function applyEntityCorrection(

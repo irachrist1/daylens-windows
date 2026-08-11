@@ -34,12 +34,16 @@ import {
 } from '../lib/followUpSuggestions'
 import { transformInstruction } from '@shared/answerTransforms'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
-import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import { labelCandidateViolation, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
 import { userProfileDirective } from '@shared/userProfile'
-import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
+import { parseDaySummaryResultText } from '../lib/daySummaryParse'
+import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariants'
+import { claudeCodeChatAvailable, runClaudeCodeChat } from '../agent/claudeCodeChat'
+import { buildAgentSystemPrompt } from '../agent/systemPrompt'
+import { decodeProviderErrorMeta, isHardProviderWall } from '@shared/aiProviderError'
 import {
   resolveDayContext,
 } from '../core/query/attributionResolvers'
@@ -115,7 +119,7 @@ import {
   type ProviderTextResponse,
   type ResolvedProviderConfig,
 } from '../services/aiOrchestration'
-import { resolveProviderConfigsForJob, recordChatAgentUsage } from '../services/aiOrchestration'
+import { resolveProviderConfigsForJob, recordChatAgentUsage, jobTimeoutMs } from '../services/aiOrchestration'
 import { withProviderCallCount, withProviderRateLimit } from '../services/aiRateLimiter'
 import { friendlyProviderError } from '../services/providerErrors'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
@@ -132,7 +136,7 @@ import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
 import { registerWrappedQuestionProvider } from '../services/wrappedQuestion'
-import { VOICE_SYSTEM_PROMPT, findBannedVocab } from '../ai/voiceContract'
+import { VOICE_SYSTEM_PROMPT, containsEmDash, findBannedVocab, findPlumbingVocab } from '../ai/voiceContract'
 import { parseDayRegroupGroups } from '../ai/dayRegroup'
 import { maybeStartTrace, setCurrentTrace } from '../ai/trace'
 import { runChatAgentTurn } from '../agent/chatAgent'
@@ -283,6 +287,16 @@ function createChatStreamAccumulator(requestId: string | null | undefined, optio
         requestId,
         delta,
         snapshot,
+      }))
+    },
+    /** A line saying what is happening, with no text added to the answer. */
+    async pushStatus(status: string) {
+      if (!status || !requestId || !options?.onStreamEvent) return
+      await Promise.resolve(options.onStreamEvent({
+        requestId,
+        delta: '',
+        snapshot,
+        status,
       }))
     },
     async streamText(text: string) {
@@ -1778,11 +1792,6 @@ function fallbackDaySummary(payload: DayTimelinePayload, degraded = false): AIDa
   if (payload.totalSeconds === 0) {
     return {
       summary: 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and focus patterns.',
-      questionSuggestions: [
-        'What kinds of questions will you be able to answer once I have more history?',
-        'How should I use Daylens if I am not tracking clients?',
-        'What should I pay attention to the first few days of tracking?',
-      ],
     }
   }
 
@@ -1803,11 +1812,6 @@ function fallbackDaySummary(payload: DayTimelinePayload, degraded = false): AIDa
 
   return {
     summary: summaryParts.filter((part): part is string => Boolean(part)).join(' '),
-    questionSuggestions: [
-      'What did I actually get done today?',
-      'Which files, docs, or pages did I touch today?',
-      payload.blocks.length >= 3 ? 'Where did my focus break down today?' : 'What should I pick back up next?',
-    ],
     ...(degraded ? { degraded: true } : {}),
   }
 }
@@ -1950,8 +1954,29 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
   })
 }
 
-function parseDaySummaryResult(raw: string, fallbackQuestions: string[]): AIDaySummaryResult | null {
-  return parseDaySummaryResultText(raw, fallbackQuestions)
+function parseDaySummaryResult(raw: string): AIDaySummaryResult | null {
+  return parseDaySummaryResultText(raw)
+}
+
+/** Turn a failed recap call into the words the panel shows and whether a retry
+ *  could possibly help.
+ *
+ *  This reason is put on the result and rendered directly, so it never passes
+ *  through the renderer's error sanitizer: the structured meta the provider
+ *  layer tags onto its messages has to be decoded HERE, or the person reads
+ *  ⟦dlerr:{"code":"credit_exhausted"}⟧ in the middle of the sentence telling
+ *  them what went wrong. */
+export function degradedRecapReason(error: unknown): { degradedReason?: string; degradedNeedsAction?: boolean } {
+  const raw = error instanceof Error ? error.message.trim() : typeof error === 'string' ? error.trim() : ''
+  const { message, meta } = decodeProviderErrorMeta(raw)
+  const clean = message.trim()
+  return {
+    ...(clean ? { degradedReason: /[.!?…]$/.test(clean) ? clean : `${clean}.` } : {}),
+    // A wall only the person can clear (billing, credit, auth, a model that is
+    // gone). Offering "try again" against one of those is a lie — the retry
+    // cannot succeed until they act.
+    ...(meta && isHardProviderWall(meta.code) ? { degradedNeedsAction: true } : {}),
+  }
 }
 
 function currentLocalDateString(): string {
@@ -1959,7 +1984,18 @@ function currentLocalDateString(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryResult> {
+export async function generateDaySummary(
+  dateStr: string,
+  options: {
+    /** Which recap prompt to run. Defaults to the shipped one; the recap lab
+     *  passes each candidate so variants are compared through the exact path
+     *  the app uses, not a parallel copy of it. */
+    variant?: RecapPromptVariant
+    /** The lab needs a fresh call every time; the app wants the cache. */
+    bypassCache?: boolean
+  } = {},
+): Promise<AIDaySummaryResult> {
+  const variant = options.variant ?? shippedRecapVariant()
   const db = getDb()
   const liveSession = dateStr === currentLocalDateString() ? getCurrentSession() : null
   // Read the day exactly as the timeline shows it (DEV-247): analysis:false, so
@@ -1975,53 +2011,25 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
 
   const [memoryFromMs, memoryToMs] = localDateBoundsFromString(dateStr)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}`
-  const cached = daySummaryCache.get(cacheKey)
+  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variant.id}`
+  const cached = options.bypassCache ? undefined : daySummaryCache.get(cacheKey)
   if (cached) return cached
 
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     memoryPrompt,
     userProfileDirective(getSettings()),
-    'You are Daylens, writing the opening daily briefing for a desktop work-intelligence app.',
-    'Do not use emoji in any part of your response.',
-    'Turn deterministic local work evidence into a concise, useful summary.',
-    'Focus on what the person was actually working on, what moved forward, and what deserves follow-up.',
-    'Prefer the structured workIntent signal over raw homepage, feed, or generic tab labels when they conflict.',
-    'Treat generic feed/home usage as context unless the evidence clearly says it was the main task.',
-    'Name the actual work and the entities involved (the projects, clients, people, and repositories in "entities"), not the tools that hosted it.',
-    'The "meetings" list is scheduled calendar context. A scheduled time proves only what was planned. Say a meeting happened only when its "presence" field confirms it (you attended, or tracked activity overlaps it) — never assert attendance from a calendar row alone, and respect a meeting marked skipped/moved/unrelated.',
-    'Follow the evidence authority order: the person’s own confirmations and corrections outrank device observation, which outranks a connector/calendar fact, which outranks inference. State uncertainty plainly rather than guessing.',
-    'Never use raw app names as the subject of a sentence. Instead, describe what the app is used for: Warp or Terminal → "your terminal", a browser (Chrome, Safari, Arc, Firefox) → "your browser", VS Code or Cursor → "your editor", Figma → "your design tool", Slack or Teams → "your messaging app", X.com or Twitter → "social browsing" or a specific activity from the page title. Use the specific app name only when a more descriptive phrase would be unclear.',
-    'Use window titles and page titles as evidence for what the user was doing. Do not use the app name as a proxy for the activity. When a page or thread title is available, prefer describing the specific content over naming the platform.',
-    'Ignore badge-count prefixes like "(4)" when interpreting page or tab titles.',
-    'Mention exact file, document, page, repo, or artifact names only when they appear verbatim in the evidence.',
-    'Do not write like a dashboard, analytics panel, or generic AI recap.',
-    'Avoid filler like "based on the provided data", "top apps", or "productive/unproductive".',
-    'Use specific time ranges and named work blocks when they make the story clearer.',
-    'If the evidence is thin or ambiguous, say so plainly and stay modest.',
-    'The summary must be declarative and must not ask the user a question.',
-    'Return strict JSON with keys "summary" and "questionSuggestions".',
-    '"summary" must be 2-4 sentences.',
-    '"questionSuggestions" must contain exactly 3 clickable next-query chips spoken by the user to Daylens.',
-    'Write questionSuggestions as first-person user queries or direct requests to the assistant, not as questions back to the user.',
-    'Good examples: "What did I actually get done today?", "Which files or pages mattered most today?", "Summarize today as a short report I could share".',
-    'Bad examples: "Are you building a model right now?", "Did task planning settle into place?", "Is this still in discovery phase?".',
-    'Never ask the user to confirm intent, progress, or motivation.',
+    ...variant.directives,
   ].filter(Boolean).join('\n')
 
-  const userMessage = [
-    `Date: ${dateStr}`,
-    '',
-    'Write the opening AI summary card and three suggested next-query chips for this day.',
-    'The user should feel like Daylens understood the work, not like it stitched together a template.',
-    'The chips will be rendered as buttons under an "Ask Daylens" label, so they must read like things the user would click to ask next.',
-    '',
-    'Structured day evidence (JSON):',
-    buildDaySummaryScaffold(payload),
-  ].join('\n')
+  const userMessage = variant.userMessage(dateStr, buildDaySummaryScaffold(payload))
 
   try {
+    // The belt has to live here: executeTextAIJob does not enforce the budget
+    // on its own job definition. It is read from there so the number a caller
+    // holds a job to is the number the table documents, never a second literal
+    // that drifts. The old 15s literal expired mid-call on a real day and the
+    // recap served the factual fallback instead (DEV-292).
     const { text } = await withTimeout(
       executeTextAIJob(
         {
@@ -2033,11 +2041,11 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
         },
         sendWithProvider,
       ),
-      15_000,
+      jobTimeoutMs('day_summary'),
       'Day summary timed out',
     )
 
-    const parsed = parseDaySummaryResult(text, fallback.questionSuggestions)
+    const parsed = parseDaySummaryResult(text)
     if (parsed) {
       daySummaryCache.set(cacheKey, parsed)
       return parsed
@@ -2050,9 +2058,7 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     // person can act on ("AI access is paused…", "…timed out"); pass that
     // reason through instead of burying it in the log (DEV-279).
     console.warn(`[ai] day_summary failed for ${dateStr}:`, error)
-    const message = error instanceof Error ? error.message.trim() : ''
-    const reason = message ? (/[.!?…]$/.test(message) ? message : `${message}.`) : undefined
-    return { ...fallback, degraded: true, degradedReason: reason }
+    return { ...fallback, degraded: true, ...degradedRecapReason(error) }
   }
 }
 
@@ -2888,16 +2894,19 @@ export function workBlockPrompt(block: WorkContextBlock): string {
   const lines = [
     'Analyze this Daylens work block.',
     'Return strict JSON: {"label":"...","narrative":"..."}',
-    'label: a 2-7 word phrase naming what they were DOING — usually verb + object ("Configuring the work network", "Refactoring the timeline engine"). NEVER a raw app name, browser name, page/video title, or bare category ("Chrome", "Cursor", "Watching Netflix", "Browsing", "Development"). NEVER the literal "Computer activity", "Uncategorized", or "Untitled".',
+    'label: a 2-7 word phrase naming what they were DOING, usually verb + object ("Configuring the work network", "Refactoring the timeline engine"). NEVER a raw app name, browser name, page/video title, or bare category ("Chrome", "Cursor", "Watching Netflix", "Browsing", "Development"). NEVER the literal "Computer activity", "Uncategorized", or "Untitled". Never put an em dash in a label; use a comma or the word "and".',
     'narrative: 1-2 plain sentences. Evidence-led, no hype, no "the user" prefix.',
     'Priority rules:',
     '  - Window titles and page titles > artifact names > category descriptions > app names only as last-resort context, never as the label.',
     '  - Browser+AI only ≠ Development → call it Research or Planning.',
     '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
     '  - This block may already combine several stretches of one activity. Name the WHOLE thing in one coherent title that covers all the evidence (e.g. "Setting up the work network with the Ubiquiti dashboard and Terminal"), not just the first app.',
-    '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek — people multi-task with media on the side while actually working.',
+    '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek, since people multi-task with media on the side while actually working.',
+    '  - When a terminal, editor, or agent runner (Ghostty, Warp, Codex, cmux, Claude Code) holds a substantial share of the block alongside media, the WORK is the headline and the media is at most an aside. Media titles are more descriptive than terminal windows, never more important: two hours of terminal time next to browser videos is a work block with videos on the side, not "watching videos".',
+    '  - An AI-chat conversation title (ChatGPT, Claude, Gemini) names a TOPIC DISCUSSED, never a thing accomplished. Label the block as working through or exploring that topic; NEVER use completion or deployment verbs (deployed, shipped, launched, released, fixed, built) on chat or browser evidence alone, because those verbs need a code editor or terminal in this block actually doing it.',
+    '  - Never invent a project, product, or deliverable name. Every proper noun in your label must appear in the evidence above; a plausible-sounding name the evidence does not contain is a fabrication.',
     '  - Name the site or tool where the work happened ("in Notion", "in Google Docs", "in Linear"), not the browser it was rendered in. Mention the browser only as secondary context ("in the Dia browser"), never as the headline location.',
-    '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Cursor, Warp, and Terminal — focused work"). Never announce failure, never say "Computer activity" or "Uncategorized".',
+    '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Focused work in Cursor, Warp, and Terminal"). Never announce failure, never say "Computer activity" or "Uncategorized".',
     '',
     `Duration: ${durationMinutes} minutes`,
     `Dominant category: ${block.dominantCategory}`,
@@ -3048,27 +3057,19 @@ export async function generateWorkBlockInsight(
   ].join(' ')
 
   // The label-voice contract (label-voice.md, DEV-276): the model's label must
-  // clear the invariant rules and must not echo a captured title or a bare app
-  // name — a raw window title, filename, ticket description, or JSON string is
-  // never a label. A rejected label gets exactly one corrective retry with the
-  // violation named; if that also fails, the deterministic evidence name (voice
-  // gated itself) stands and the block stays a re-analysis target.
+  // clear the invariant rules, must not echo a captured title or a bare app
+  // name, and must not present a tool brand/surface, command line, joined tab
+  // title, or site surface as the work — even behind a verb lead ("Working on
+  // Cursor Agents"). One shared gate (labelCandidateViolation) holds this path
+  // and the interpretation agent to the same standard. A rejected label gets
+  // exactly one corrective retry with the violation named; if that also fails,
+  // the deterministic evidence name (voice gated itself) stands and the block
+  // stays a re-analysis target.
   // The block kind matters: without it the leisure-shape rule is inert here
   // and a bare video title would only be caught later by the label chooser.
   const voiceContext = labelVoiceContextForBlock(block, effectiveBlockKind(block))
-  const labelRejection = (candidate: string | null | undefined): string | null => {
-    const label = candidate?.trim()
-    if (!label) return 'the label was empty'
-    for (const finding of evaluateLabelVoice(label, voiceContext)) {
-      if (finding.passed) continue
-      if (finding.tier === 'invariant'
-        || finding.rule === 'no-verbatim-window-title'
-        || finding.rule === 'activity-not-software') {
-        return finding.detail ?? finding.rule
-      }
-    }
-    return null
-  }
+  const labelRejection = (candidate: string | null | undefined): string | null =>
+    labelCandidateViolation(candidate, voiceContext)
 
   try {
     const requestInsight = async (voiceFeedback?: string) => {
@@ -3173,14 +3174,14 @@ function dayRegroupPrompt(blocks: WorkContextBlock[], userHint?: string): string
   })
 
   const lines = [
-    'Here are today\'s timeline blocks, in order. They were cut by simple rules and tend to be SPLIT TOO FINELY — one real activity is often broken across several adjacent blocks.',
+    'Here are today\'s timeline blocks, in order. They were cut by simple rules and tend to be SPLIT TOO FINELY: one real activity is often broken across several adjacent blocks.',
     'Your job: group the blocks that are the SAME continued activity into one block. Return strict JSON: {"groups": [[0,1,2],[3],[4,5]]}.',
     'Rules:',
     '  - Each inner array is a run of CONSECUTIVE block indices that are one continued intent/goal/project and should become a single block.',
     '  - Every index 0..N-1 appears exactly once, in order. A block that stands on its own is its own one-element group.',
-    '  - Merge ONLY genuinely-same work: the same task or project continued (e.g. setting up the work network across Terminal, the Ubiquiti dashboard, and diagnostics is ONE thing). A short peek at streaming/social between two stretches of the same work does not break the run — keep merging across it.',
+    '  - Merge ONLY genuinely-same work: the same task or project continued (e.g. setting up the work network across Terminal, the Ubiquiti dashboard, and diagnostics is ONE thing). A short peek at streaming/social between two stretches of the same work does not break the run, so keep merging across it.',
     '  - Keep genuinely DIFFERENT goals separate: coding a feature, a meeting, and unrelated admin are different blocks even when back-to-back. When unsure, keep them separate.',
-    '  - Never group to just shrink the count, and never invent a connection the evidence does not show. You may only GROUP existing blocks — never split one.',
+    '  - Never group to just shrink the count, and never invent a connection the evidence does not show. You may only GROUP existing blocks, never split one.',
     '',
     `Blocks (${blocks.length}):`,
     blockLines.join('\n'),
@@ -3210,7 +3211,7 @@ export async function generateDayRegroupPlan(
     VOICE_SYSTEM_PROMPT,
     'You are Daylens.',
     'You decide which adjacent timeline blocks are the same continued activity and should be one block.',
-    'You only group blocks that are already there — you never split, rename, or invent activity.',
+    'You only group blocks that are already there, and you never split, rename, or invent activity.',
     'Return only valid JSON.',
   ].join(' ')
 
@@ -3260,10 +3261,10 @@ export async function interpretSearchIntent(query: string): Promise<{ terms: str
   if (!trimmed) return null
   const systemPrompt = [
     "You turn a user's natural-language search into keywords for a LOCAL full-text search over their tracked activity (app + window titles, web page titles and domains, timeline block labels, saved AI artifacts).",
-    'Return STRICT JSON only — no prose, no code fence:',
+    'Return STRICT JSON only, no prose, no code fence:',
     '{"terms":["..."],"intent":"<one short clause>"}',
     'Rules:',
-    '- terms: 1-6 short lowercase keywords/phrases — the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
+    '- terms: 1-6 short lowercase keywords/phrases: the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
     '- Never invent specific names the query does not imply.',
     '- intent: a short human clause like "the autoencoders project" or "anything about the migration".',
   ].join('\n')
@@ -3320,6 +3321,9 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     if (answerText) {
       const banned = findBannedVocab(answerText)
       if (banned) console.warn(`[ai:voice] banned vocabulary in chat answer: "${banned}"`)
+      if (containsEmDash(answerText)) console.warn('[ai:voice] em dash in chat answer')
+      const plumbing = findPlumbingVocab(answerText)
+      if (plumbing) console.warn(`[ai:voice] plumbing vocabulary in chat answer: "${plumbing}"`)
     }
     if (recorder) {
       recorder.finish(result.assistantMessage?.content)
@@ -3497,9 +3501,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     agentConfig = { ...agentConfig, model: modelOverride }
   }
 
-  // CLI providers can't make structured tool calls. Say so in one line and
-  // point to Settings — never silently swap providers (invariant 12).
-  if (!providerSupportsAgentTools(agentConfig.provider, agentConfig.transport)) {
+  // A CLI provider cannot make the structured tool calls this loop needs, but
+  // the Claude CLI can run a loop of its own over the Daylens MCP server. That
+  // branch is taken below, once the system prompt it needs has been built.
+  const cliCannotDriveThisLoop = !providerSupportsAgentTools(agentConfig.provider, agentConfig.transport)
+  const claudeCodeCanAnswer = cliCannotDriveThisLoop
+    && agentConfig.provider === 'claude-cli'
+    && claudeCodeChatAvailable()
+  if (cliCannotDriveThisLoop && !claudeCodeCanAnswer) {
     const cliNotice = `Chat answers now come from a live agent over your real data, which needs an API provider — ${providerLabel(agentConfig.provider)} runs through a CLI and can't call tools. Pick an API provider in Settings → AI (or a per-chat model from the catalog) and ask me again.`
     await stream.streamText(cliNotice)
     return persistTurn({
@@ -3536,6 +3545,70 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   const trackingStart = firstSessionRow?.t
     ? new Date(firstSessionRow.t).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : null
+
+  // Chat on the local Claude Code, driving Daylens' own read-only MCP tools.
+  // It gets the same voice contract and operating rules as the in-app agent,
+  // so the answer is held to the same grounding and honesty; what it does not
+  // get yet is citations, memory writes, or correction previews.
+  if (claudeCodeCanAnswer) {
+    const claudeTool = await resolveCLITool('claude')
+    if (!claudeTool) {
+      const missing = 'The Claude CLI is no longer on this machine, so chat has nothing to answer with. Reconnect it in Settings → AI.'
+      await stream.streamText(missing)
+      return persistTurn({
+        assistantText: missing,
+        answerKind: 'error',
+        sourceKind: 'deterministic',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    }
+    try {
+      const text = await runClaudeCodeChat({
+        threadId: String(threadId ?? 'new'),
+        question,
+        systemPrompt: buildAgentSystemPrompt({
+          now: new Date(),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          trackingStart,
+          providerLabel: providerLabel(agentConfig.provider),
+          model: agentConfig.model,
+          homeDir: os.homedir(),
+          extraSystem,
+        }),
+        model: agentConfig.model,
+        executablePath: claudeTool.executablePath,
+        onDelta: (delta) => stream.push(delta),
+        onStatus: (label) => { void stream.pushStatus(label) },
+        signal: getAmbientAbortSignal(),
+      })
+      // Already on screen delta by delta; this only fills a gap if the CLI
+      // returned a final result the stream never carried.
+      await stream.streamText(text)
+      return persistTurn({
+        assistantText: text,
+        answerKind: 'freeform_chat',
+        sourceKind: 'freeform',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      // Never silently fall through to another provider (invariant 12): say
+      // what failed and leave the person's choice of provider alone.
+      const message = error instanceof Error ? error.message : String(error)
+      const notice = `Your local Claude Code could not answer this one: ${message}`
+      console.warn('[ai:chat] claude-code path failed:', error)
+      await stream.streamText(notice)
+      return persistTurn({
+        assistantText: notice,
+        answerKind: 'error',
+        sourceKind: 'deterministic',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    }
+  }
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[ai:chat] agent turn → provider=${agentConfig.provider} model=${agentConfig.model}`)

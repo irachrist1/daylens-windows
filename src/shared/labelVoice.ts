@@ -1,4 +1,5 @@
 import { looksLikeRawArtifactLabel } from './blockLabel'
+import { workNameGuardLabelViolation } from './workNameGuards'
 
 // The executable label-voice rubric (label-voice.md). A block label describes
 // what the person was doing in their own everyday words; this module turns that
@@ -43,7 +44,7 @@ export const LABEL_VOICE_RULES: readonly LabelVoiceRule[] = [
     id: 'no-raw-artifact-forms',
     tier: 'invariant',
     requirement:
-      'No raw machine forms: URLs, bare domains, data/office file extensions, underscore filenames, SCREAMING identifiers, notification counts, browser-tab soup, or trailing browser names.',
+      'No raw machine forms: URLs, bare domains, email addresses, data/office file extensions, underscore filenames, SCREAMING identifiers, notification counts, browser-tab soup, or trailing browser names.',
   },
   {
     id: 'no-plumbing-or-hype',
@@ -125,6 +126,12 @@ const NOTIFICATION_COUNT_RE = /^\(\d+\)\s/
 const BARE_DATE_RE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/
 // Common web TLDs only, so a code filename ("run.ts") never reads as a domain.
 const BARE_DOMAIN_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|io|dev|app|net|ai|co|edu|gov)$/i
+// An email address is a machine form wherever it sits in the label. The bare-
+// domain rule missed these because the "@" stops the whole string matching, so
+// two of one real day's ten blocks were headlined
+// "christian.tonny@rw.Andersen.com" — lifted out of a Microsoft Teams calendar
+// window title. An address is never what a person was doing.
+const EMAIL_ADDRESS_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
 const TRAILING_BROWSER_RE =
   /\s[-—–]\s(?:Google Chrome|Safari|Arc|Firefox|Brave|Microsoft Edge|Chrome|Dia)$/i
 
@@ -244,12 +251,36 @@ const BRACKETED_FRAGMENT_RE = /^\[[^\]]*\]$/
  * (DEV-276: a raw window title, a filename, a ticket description, or a JSON
  * string is never a label).
  */
+// The two-tab sibling of "browser-tab soup". A browsing block's floor label is
+// built by joining the two biggest site names with " + ", which produced
+// "Campus + App" (campus.datacamp.com + app.datacamp.com), "Coursera +
+// Datacamp", "Instagram + Google", "X (Twitter) + Factory", "Netflix +
+// YouTube". Each names software, never an activity.
+//
+// Deliberately narrow, because "+" is legitimate mid-phrase: both sides must be
+// at most two words AND every word must be capitalised, which is the shape of
+// joined proper names and not of a written phrase. "Design + build the
+// onboarding" keeps its lowercase "build" and survives.
+function isTwoTabMashup(text: string): boolean {
+  const parts = text.split(/\s\+\s/)
+  if (parts.length !== 2) return false
+  return parts.every((part) => {
+    const words = part.trim().split(/\s+/).filter(Boolean)
+    if (words.length === 0 || words.length > 2) return false
+    return words.every((word) => {
+      const firstLetter = word.replace(/^[^\p{L}]+/u, '')[0]
+      return firstLetter === undefined || firstLetter === firstLetter.toUpperCase()
+    })
+  })
+}
+
 export function rawLabelForm(value: string | null | undefined): string | null {
   const text = (value ?? '').trim()
   if (!text) return null
   if (RAW_URL_RE.test(text)) return 'raw URL'
   if (BARE_DATE_RE.test(text)) return 'bare date'
   if (BARE_DOMAIN_RE.test(text)) return 'bare domain'
+  if (EMAIL_ADDRESS_RE.test(text)) return 'email address'
   if (RAW_FILE_EXTENSION_RE.test(text)) return 'file extension'
   if (UNDERSCORE_FILENAME_RE.test(text)) return 'underscore filename'
   if (looksLikeRawArtifactLabel(text)) return 'machine identifier'
@@ -258,6 +289,7 @@ export function rawLabelForm(value: string | null | undefined): string | null {
   if (BRACKETED_FRAGMENT_RE.test(text)) return 'bracketed title fragment'
   if (NOTIFICATION_COUNT_RE.test(text)) return 'notification count'
   if (text.split(/\s*\|\s*/).filter(Boolean).length >= 3) return 'browser-tab soup'
+  if (isTwoTabMashup(text)) return 'browser-tab mashup'
   if (TRAILING_BROWSER_RE.test(text)) return 'trailing browser name'
   return null
 }
@@ -362,6 +394,33 @@ export function evaluateLabelVoice(
     passed: details[rule.id] === null,
     detail: details[rule.id],
   }))
+}
+
+/**
+ * The ONE relabel-time rejection both AI label paths enforce — the direct
+ * relabel (generateWorkBlockInsight's labelRejection in jobs/aiService.ts)
+ * and the interpretation agent (agentLabelViolation): every invariant rule,
+ * the two target rules that catch echoed window titles and bare app names,
+ * and the shared work-name-guard vocabulary (tool brands/surfaces, command
+ * lines, joined tab titles, site surfaces — including a disqualified subject
+ * hiding behind a verb lead, "Working on Cursor Agents"). Returns the
+ * violation to feed the one corrective retry, or null when the label passes.
+ */
+export function labelCandidateViolation(
+  label: string | null | undefined,
+  context: LabelVoiceContext = {},
+): string | null {
+  const candidate = label?.trim()
+  if (!candidate) return 'the label was empty'
+  for (const finding of evaluateLabelVoice(candidate, context)) {
+    if (finding.passed) continue
+    if (finding.tier === 'invariant'
+      || finding.rule === 'no-verbatim-window-title'
+      || finding.rule === 'activity-not-software') {
+      return finding.detail ?? finding.rule
+    }
+  }
+  return workNameGuardLabelViolation(candidate)
 }
 
 /**

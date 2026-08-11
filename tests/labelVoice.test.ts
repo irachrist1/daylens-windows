@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   LABEL_VOICE_RULES,
   evaluateLabelVoice,
+  labelCandidateViolation,
   labelVoiceContextForBlock,
   labelVoiceReportLines,
   rawLabelForm,
@@ -145,6 +146,37 @@ test('concrete-over-generic fires only when subject evidence exists', () => {
   )
 })
 
+// labelCandidateViolation is the ONE relabel-time gate both AI label paths
+// call (generateWorkBlockInsight's labelRejection and the interpretation
+// agent's agentLabelViolation): voice invariants, the two echo rules, and
+// the work-name-guard vocabulary — including a tool surface hiding behind a
+// verb lead, which no per-rule check catches on its own.
+test('labelCandidateViolation rejects a tool surface behind a verb lead at generation time', () => {
+  assert.ok(labelCandidateViolation('Working on Cursor Agents'))
+  assert.ok(labelCandidateViolation('Working on Cursor Agents in Daylens'))
+  // A tool-surface phrase mixed into a list reached a real day's wrap.
+  assert.ok(labelCandidateViolation('Reviewing Cursor Agents and Daylens issues'))
+  assert.ok(labelCandidateViolation('Microsoft Teams'))
+  assert.ok(labelCandidateViolation('Inbox (1)'))
+  assert.ok(labelCandidateViolation('Irachrist1/daylens-v1: Daylens'))
+  assert.equal(labelCandidateViolation(''), 'the label was empty')
+  assert.equal(labelCandidateViolation(null), 'the label was empty')
+  // The voice rules still fire first: a bare app name from the block's own
+  // evidence is software, not an activity.
+  assert.ok(labelCandidateViolation('Slack', { appNames: ['Slack'] }))
+  // Legit labels pass untouched.
+  const legit = [
+    'Git workflow cleanup',
+    'Make the onboarding deck',
+    'Setting up the work network with the Ubiquiti dashboard and Terminal',
+    'Refactoring the timeline engine',
+    'Sprint planning in Slack',
+  ]
+  for (const label of legit) {
+    assert.equal(labelCandidateViolation(label, { appNames: ['Slack'] }), null, `rejected a legit label: "${label}"`)
+  }
+})
+
 test('short-activity-phrase targets 2-7 words', () => {
   assert.ok(failedRules('Meeting').includes('short-activity-phrase'))
   assert.ok(
@@ -235,4 +267,30 @@ test('real-day review names each failing label with rule, tier, and reason', () 
   assert.ok(
     labelVoiceMarkdownLines(clean).some((line) => line.includes('meets the recorded voice')),
   )
+})
+
+// Both of these headlined real blocks on a real day before the rules existed.
+test('an email address is never a label', () => {
+  // Lifted out of a Microsoft Teams calendar window title, this named two of
+  // one day's ten blocks. The bare-domain rule missed it: the "@" stops the
+  // whole string matching a domain.
+  assert.equal(rawLabelForm('christian.tonny@rw.Andersen.com'), 'email address')
+  assert.ok(failedRules('christian.tonny@rw.Andersen.com').includes('no-raw-artifact-forms'))
+  assert.ok(failedRules('Replying to christian.tonny@rw.Andersen.com').includes('no-raw-artifact-forms'))
+})
+
+test('two site names joined by a plus are not a label', () => {
+  // The browsing floor built these by joining the block's two biggest sites.
+  // "Campus + App" is campus.datacamp.com and app.datacamp.com.
+  for (const mashup of ['Campus + App', 'Toggl + Rize', 'Netflix + YouTube', 'X (Twitter) + Factory', 'Coursera + Datacamp']) {
+    assert.equal(rawLabelForm(mashup), 'browser-tab mashup', `${mashup} must be rejected`)
+  }
+})
+
+test('a written phrase containing a plus still passes', () => {
+  // The rule keys on the shape of joined proper names, so ordinary prose that
+  // happens to use "+" is untouched.
+  for (const label of ['Design + build the onboarding', 'Planning + writing the roadmap', 'Rize AI time tracking']) {
+    assert.equal(rawLabelForm(label), null, `${label} must survive`)
+  }
 })

@@ -1,6 +1,31 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderTimeChunkAnswer } from '../src/main/agent/timeChunkAnswer.ts'
+import { renderTimeChunkAnswer, wantsTimeChunkTable } from '../src/main/agent/timeChunkAnswer.ts'
+
+test('increment-shaped questions gate the deterministic chunk table', () => {
+  const wantsTable = [
+    'Break that hour into 10-minute increments',
+    'split my day into half-hour segments',
+    'show me Monday hour by hour',
+    'hourly breakdown',
+    'divide my afternoon into 15-minute buckets',
+    'break down Tuesday in 30 minute blocks',
+    // Follow-up refinement of a previous chunk answer.
+    'make it 15-minute rows instead',
+  ]
+  for (const question of wantsTable) {
+    assert.equal(wantsTimeChunkTable(question), true, `should want table: ${question}`)
+  }
+  const keepsProse = [
+    'What was my longest uninterrupted focus block today, and what was I working on?',
+    'What did I do on July 22?',
+    'How long was I in meetings this week?',
+    'Which sites am I leaking time on this week?',
+  ]
+  for (const question of keepsProse) {
+    assert.equal(wantsTimeChunkTable(question), false, `should keep prose: ${question}`)
+  }
+})
 
 test('time chunk answers preserve every exact row without merging gaps', () => {
   const answer = renderTimeChunkAnswer({
@@ -41,5 +66,26 @@ test('time chunk answers hide internal action syntax and deduplicate activity', 
   })
   assert.ok(answer)
   assert.doesNotMatch(answer!, /AskUserQuestion|Wants to run/)
-  assert.equal(answer!.match(/Editor — Project review/g)?.length, 1)
+  assert.equal(answer!.match(/Editor: Project review/g)?.length, 1)
+  // The voice contract bans em dashes in every surface, tables included.
+  assert.doesNotMatch(answer!, /—/)
+})
+
+test('an em dash inside a window title never reaches the chunk table', () => {
+  const answer = renderTimeChunkAnswer({
+    found: true,
+    date: '2026-07-24',
+    incrementMinutes: 30,
+    chunks: [{
+      startTime: '15:00',
+      endTime: '15:30',
+      durationMinutes: 30,
+      activity: [{ appName: 'Gemini', windowTitle: 'Gemini — Digital File Organization Strategy', seconds: 1800 }],
+      pages: [],
+      gap: null,
+    }],
+  })
+  assert.ok(answer)
+  assert.doesNotMatch(answer!, /—/)
+  assert.match(answer!, /Gemini: Digital File Organization Strategy/)
 })

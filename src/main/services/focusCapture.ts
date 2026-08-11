@@ -22,6 +22,9 @@ export { shouldCaptureFocusEvent, eventParams } from './captureEventGate'
 
 let relay: ChildProcess | null = null
 let stopping = false
+// Consent revoked while the relay was still exiting: its last flush can land
+// after the immediate purge, so sweep the spool again once it is truly gone.
+let purgeSpoolOnRelayExit = false
 let restartTimer: ReturnType<typeof setTimeout> | null = null
 let shutdownKillTimer: ReturnType<typeof setTimeout> | null = null
 let ingestTimer: ReturnType<typeof setInterval> | null = null
@@ -161,6 +164,10 @@ function spawnRelay(): void {
       clearTimeout(shutdownKillTimer)
       shutdownKillTimer = null
     }
+    if (purgeSpoolOnRelayExit) {
+      purgeSpoolOnRelayExit = false
+      purgeFocusCaptureSpool()
+    }
     if (stopping) return
     if (Date.now() - spawnedAt >= STABLE_UPTIME_MS) restartDelay = 1000
     console.warn(`[focusCapture] relay exited (code=${code} signal=${signal}); restarting`)
@@ -171,6 +178,8 @@ function spawnRelay(): void {
 export function startFocusCapture(): void {
   if (process.platform !== 'darwin') return
   stopping = false
+  // A fresh consent grant supersedes any pending revocation sweep.
+  purgeSpoolOnRelayExit = false
   // Anything spooled while the app was down lands before live tailing begins.
   ingestTick()
   spawnRelay()
@@ -178,8 +187,13 @@ export function startFocusCapture(): void {
   if (!controlsTimer) controlsTimer = setInterval(pushControls, CONTROLS_PUSH_INTERVAL_MS)
 }
 
-export function stopFocusCapture(): void {
+/** `finalDrain: false` is the consent-revocation path: skip the last ingest
+ *  so spooled events are purged, not persisted (DEV-262). Every other stop
+ *  drains, so a clean quit loses nothing the relay flushed. */
+export function stopFocusCapture(options: { finalDrain?: boolean } = {}): void {
+  const { finalDrain = true } = options
   stopping = true
+  if (!finalDrain && relay) purgeSpoolOnRelayExit = true
   if (restartTimer) {
     clearTimeout(restartTimer)
     restartTimer = null
@@ -211,7 +225,7 @@ export function stopFocusCapture(): void {
     }, SHUTDOWN_KILL_DELAY_MS)
   }
   // Final drain so a clean quit persists everything the relay flushed.
-  ingestTick()
+  if (finalDrain) ingestTick()
 }
 
 /** Consent revoked: stop capture and remove anything spooled but not yet

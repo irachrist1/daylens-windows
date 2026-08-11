@@ -27,7 +27,7 @@ let captureCounter = 0
 export function buildScreenTools() {
   return {
     capture_screen: tool({
-      description: 'Look at the user\'s live screen: one downscaled still of the active display, never stored. EXPENSIVE and privacy-sensitive — use only after the activity database and file tools cannot answer, and only for questions about what is on screen RIGHT NOW. The reason you give is shown to the user.',
+      description: 'Look at the user\'s live screen: one downscaled still of the active display, never stored. EXPENSIVE and privacy-sensitive, use only after the activity database and file tools cannot answer, and only for questions about what is on screen RIGHT NOW. The reason you give is shown to the user.',
       inputSchema: z.object({
         reason: z.string().min(12).describe('Why the database and file tools cannot answer this — shown verbatim to the user.'),
       }),

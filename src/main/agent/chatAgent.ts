@@ -40,8 +40,9 @@ import {
   type ContextPacket,
 } from '../services/contextPacket'
 import { resolvePacketCitations, type PacketCitation } from './contextCitations'
+import { getCurrentTrace } from '../ai/trace'
 import { buildAgentSystemPrompt } from './systemPrompt'
-import { renderTimeChunkAnswer, type TimeChunkResult } from './timeChunkAnswer'
+import { renderTimeChunkAnswer, wantsTimeChunkTable, type TimeChunkResult } from './timeChunkAnswer'
 import { sanitizeForRender } from '@shared/aiSanitize'
 
 const MAX_STEPS = 14
@@ -292,6 +293,16 @@ export async function runChatAgentTurn(
       ...mcp.tools,
     }
 
+    const renderedPacket = contextPacket ? renderContextPacketForAgent(contextPacket) : ''
+    // The trace recorder (eval harness / DAYLENS_AI_TRACE_DIR) needs the packet
+    // as evidence: facts the model quotes from it are grounded, not fabricated.
+    if (renderedPacket) {
+      getCurrentTrace()?.addEvent({
+        kind: 'context_packet',
+        rendered: renderedPacket,
+        itemCount: contextPacket?.items.length ?? 0,
+      })
+    }
     const system = [
       buildAgentSystemPrompt({
         now,
@@ -302,7 +313,7 @@ export async function runChatAgentTurn(
         homeDir: os.homedir(),
         extraSystem: deps.extraSystem,
       }),
-      contextPacket ? renderContextPacketForAgent(contextPacket) : '',
+      renderedPacket,
     ].filter(Boolean).join('\n\n')
 
     const messages: ModelMessage[] = [
@@ -324,6 +335,9 @@ export async function runChatAgentTurn(
       let finalText = ''
       let stepText = ''
       let stepUsedTool = false
+      // Tool calls issued in the current step, mirrored into the trace
+      // recorder's turn event on finish-step.
+      let stepToolUses: Array<{ id: string; name: string; input: unknown }> = []
       // Steps still running, keyed by tool call id, so the result (or error)
       // settles the SAME trail row its call opened.
       const openSteps = new Map<string, AIAgentStep>()
@@ -340,6 +354,7 @@ export async function runChatAgentTurn(
             recordProviderCall()
             stepText = ''
             stepUsedTool = false
+            stepToolUses = []
             break
           case 'text-delta': {
             stepText += part.text
@@ -347,6 +362,7 @@ export async function runChatAgentTurn(
           }
           case 'tool-call': {
             stepUsedTool = true
+            stepToolUses.push({ id: part.toolCallId, name: part.toolName, input: part.input })
             const step: AIAgentStep = {
               id: part.toolCallId,
               label: statusForTool(part.toolName, part.input),
@@ -361,20 +377,52 @@ export async function runChatAgentTurn(
             if (part.toolName === 'get_time_chunks') timeChunkResult = part.output as TimeChunkResult
             if (part.toolName === 'list_page_visits') pageVisitResult = part.output as PageVisitToolResult
             const output = JSON.stringify(part.output ?? null)
-            const bounded = output.length > MAX_TOOL_RESULT_CHARS ? `${output.slice(0, MAX_TOOL_RESULT_CHARS)}…` : output
+            const truncated = output.length > MAX_TOOL_RESULT_CHARS
+            const bounded = truncated ? `${output.slice(0, MAX_TOOL_RESULT_CHARS)}…` : output
             toolTrace.push({ tool: part.toolName, input: part.input, output: bounded })
             toolResultStrings.push(evidenceWithFormattedTimes(bounded))
+            getCurrentTrace()?.addEvent({
+              kind: 'tool_result',
+              name: part.toolName,
+              input: part.input,
+              output: truncated ? bounded : part.output ?? null,
+              toolUseId: part.toolCallId,
+              durationMs: Math.max(0, Date.now() - (openSteps.get(part.toolCallId)?.startedAt ?? Date.now())),
+              truncated,
+            })
             await settleStep(part.toolCallId, 'done')
             break
           }
           case 'tool-error': {
             const message = JSON.stringify({ found: false, reason: String((part as { error?: unknown }).error ?? 'tool error') })
             toolTrace.push({ tool: part.toolName, input: part.input, output: message, failed: true })
+            getCurrentTrace()?.addEvent({
+              kind: 'tool_result',
+              name: part.toolName,
+              input: part.input,
+              output: { found: false, reason: 'tool error' },
+              toolUseId: part.toolCallId,
+              durationMs: Math.max(0, Date.now() - (openSteps.get(part.toolCallId)?.startedAt ?? Date.now())),
+              truncated: false,
+            })
             await settleStep(part.toolCallId, 'failed')
             break
           }
           case 'finish-step':
             addUsage(part.usage)
+            getCurrentTrace()?.addEvent({
+              kind: 'turn',
+              role: 'assistant',
+              text: stepText.trim(),
+              toolUses: stepToolUses,
+              usage: part.usage
+                ? {
+                    inputTokens: part.usage.inputTokens,
+                    outputTokens: part.usage.outputTokens,
+                    cacheReadTokens: part.usage.cachedInputTokens,
+                  }
+                : null,
+            })
             if (!stepUsedTool && stepText.trim()) finalText = stepText.trim()
             break
           case 'error':
@@ -387,7 +435,13 @@ export async function runChatAgentTurn(
     }
 
     let text = await streamTurn(messages)
-    text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
+    // The deterministic chunk table exists to guarantee complete-interval
+    // fidelity when the user ASKED for increments. Gate it on the question:
+    // a turn that merely consulted get_time_chunks while researching keeps
+    // the model's actual answer instead of having it hijacked by a table.
+    if (wantsTimeChunkTable(question)) {
+      text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
+    }
     const exportFormat = /\b(?:excel|xlsx)\b/i.test(question) ? 'xlsx' : /\bcsv\b/i.test(question) ? 'csv' : null
     const exportPages = (pageVisitResult as PageVisitToolResult | null)?.pages
     if (exportFormat && artifacts.length === 0 && exportPages?.length) {
@@ -425,7 +479,7 @@ export async function runChatAgentTurn(
           { role: 'assistant', content: text },
           {
             role: 'user',
-            content: `Your answer failed the grounding check: ${problems}. Rewrite it using only times and names that appear in the tool results you already have (call a tool again if you need to re-check). Reply with the corrected answer only.`,
+            content: `Your answer failed the grounding check: ${problems}. Fix ONLY those items and keep everything else exactly as you wrote it: same answer, same voice, same length, same shape. Where a time was one you computed, replace it with the exact start and end the tool result shows, or drop it. You already have the evidence you need, so do not re-run the research you just did. Do not add caveats about coverage, and do not explain what you can or cannot see. Reply with the corrected answer only.`,
           },
         ]
         const replacement = await streamTurn(retryMessages)
