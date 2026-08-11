@@ -2492,13 +2492,22 @@ export function insertWebsiteVisit(
     visit.source,
   )
   if (result.changes > 0) {
-    const visitId = Number(result.lastInsertRowid)
-    adoptWebsiteVisitWrite(db, {
-      domain: visit.domain,
-      title: visit.pageTitle,
-      visitId: Number.isFinite(visitId) ? visitId : null,
-      observedAt: visit.visitTime,
-    })
+    try {
+      const hasEntities = db.prepare(`
+        SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities' LIMIT 1
+      `).get()
+      if (hasEntities) {
+        const visitId = Number(result.lastInsertRowid)
+        adoptWebsiteVisitWrite(db, {
+          domain: visit.domain,
+          title: visit.pageTitle,
+          visitId: Number.isFinite(visitId) ? visitId : null,
+          observedAt: visit.visitTime,
+        })
+      }
+    } catch (error) {
+      console.warn('[queries] entity write-through for website visit failed', error)
+    }
   }
   return result.changes > 0
 }
