@@ -15,10 +15,15 @@ architecture. A change belongs to V2 when it moves one of the surfaces below
 from its current behavior toward its intended behavior.
 
 The graded record of what passes and what fails is the acceptance dossier:
-`~/Desktop/daylens/ACCEPTANCE.md` (the hand-graded pass/fail list per surface)
-and `~/Desktop/daylens/INDEX.md` (every observed failure, its expected behavior,
-and the reference screenshots). The dossier is the authority; this document
-explains how its entries fit together and where each is tracked in Linear.
+[acceptance/ACCEPTANCE.md](acceptance/ACCEPTANCE.md) (the graded list per surface)
+and [acceptance/INDEX.md](acceptance/INDEX.md) (every tracked failure, its true
+board state, and where the layers disagree). The dossier is the authority; this
+document explains how its entries fit together and where each is tracked in
+Linear.
+
+The surface sections below are written in the present tense against the state of
+the application when they were recorded. Several of the defects they describe have
+since closed. The dossier, not this document, is current on what still fails.
 
 ## Timeline
 

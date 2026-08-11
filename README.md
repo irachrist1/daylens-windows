@@ -43,6 +43,8 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 | [Gap analysis 2026-07-20](docs/reviews/gap-analysis-2026-07-20.md) | The reference day: journal ground truth vs Daylens output |
 | [Repository structure](docs/codebase/structure.md) | Where the major parts of the codebase live                       |
 | [Development](docs/development.md)                 | How specifications, tickets, implementation, and acceptance work |
+| [The factory](docs/factory.md)                     | The record layers, where each lives, and the execution trail per work order |
+| [Acceptance dossier](docs/acceptance/README.md)    | The graded record of what passes and what still fails, surface by surface |
 | [Testing](docs/hygiene/testing.md)                 | Normal verification and release confidence                       |
 | [Benchmarks](docs/hygiene/benchmarks.md)           | Evaluation harnesses, cost, and when to run them                 |
 | [Web companion](docs/codebase/web.md)              | What the web application currently implements and what remains   |
