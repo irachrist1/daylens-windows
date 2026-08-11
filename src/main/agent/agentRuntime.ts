@@ -6,6 +6,11 @@ import {
   type ToolSet,
 } from 'ai'
 import type { ContextPacket } from '../services/contextPacket'
+import {
+  withChatProviderExecution,
+  type ChatExecutionPolicy,
+  type ChatSystemPrompt,
+} from './executionPolicy'
 
 export type AgentCapability =
   | 'text'
@@ -42,7 +47,13 @@ export interface AgentRunRequest<TTools = unknown> {
   toolInteractions?: Readonly<Record<string, AgentToolInteraction>>
   output: AgentRunOutputRequirement
   limits: AgentRunLimits
-  system?: string
+  /** Stable and dynamic system text, or a precomposed prompt. Prompt-cache
+   *  policy may turn this into provider-native cache markers without changing
+   *  the Context packet or answer contract. */
+  system?: ChatSystemPrompt
+  /** When set, every provider HTTP call for this run waits in the shared
+   *  execution-policy rate-limit choke point before it proceeds. */
+  execution?: ChatExecutionPolicy
   messages: ReadonlyArray<AgentRunMessage>
   signal?: AbortSignal
   requiredCapabilities?: ReadonlyArray<AgentCapability>
@@ -397,7 +408,7 @@ export class AISdkAgentRuntime implements AgentRuntime<ToolSet> {
         yield cancellation()
         return
       }
-      const result = streamText({
+      const startStream = () => streamText({
         model: this.model,
         system: request.system,
         messages: [...request.messages] as ModelMessage[],
@@ -417,6 +428,14 @@ export class AISdkAgentRuntime implements AgentRuntime<ToolSet> {
           }
         },
       })
+      // Rate-limit wait and call counting happen before the provider HTTP
+      // request begins. The returned stream still yields tokens as they
+      // arrive — the choke point does not buffer the whole turn.
+      const result = request.execution
+        ? await withChatProviderExecution(request.execution.provider, startStream, {
+            label: request.execution.label ?? 'chat_answer',
+          })
+        : startStream()
 
       for await (const part of result.fullStream) {
         if (controller.signal.aborted && part.type !== 'abort') {

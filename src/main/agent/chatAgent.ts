@@ -19,10 +19,11 @@ import os from 'node:os'
 import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind } from '@shared/types'
 import { statusForTool } from '@shared/agentTrail'
 import type { ResolvedProviderConfig, AIProviderUsage } from '../services/aiOrchestration'
-import { providerLabel } from '../services/aiOrchestration'
-import { recordProviderCall } from '../services/aiRateLimiter'
+import { JOB_DEFINITIONS, providerLabel } from '../services/aiOrchestration'
+import { getSettings } from '../services/settings'
 import { verifyTimestamps, verifyCitedEntities } from '../ai/citations'
 import { languageModelFor } from './providerModel'
+import { applyChatPromptCacheToSystem } from './executionPolicy'
 import { buildDaylensTools } from './daylensTools'
 import { buildContextTools } from './contextTools'
 import { buildScreenTools } from './screenTools'
@@ -375,7 +376,11 @@ export async function runChatAgentTurn(
         itemCount: contextPacket.items.length,
       })
     }
-    const system = [
+    // Stable system prefix is cacheable; the packet is turn-specific and stays
+    // off the cache marker so the disclosure contract does not change.
+    const promptCachingEnabled = getSettings().aiPromptCachingEnabled !== false
+    const cachePolicy = JOB_DEFINITIONS.chat_answer.cachePolicy
+    const system = applyChatPromptCacheToSystem(
       buildAgentSystemPrompt({
         now,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -386,7 +391,12 @@ export async function runChatAgentTurn(
         extraSystem: deps.extraSystem,
       }),
       renderedPacket,
-    ].filter(Boolean).join('\n\n')
+      {
+        provider: deps.config.provider,
+        cachePolicy,
+        promptCachingEnabled,
+      },
+    )
 
     const messages: ModelMessage[] = [
       ...history.map((message) => ({ role: message.role, content: message.content } as ModelMessage)),
@@ -437,11 +447,18 @@ export async function runChatAgentTurn(
         system,
         messages: turnMessages,
         signal: deps.signal,
+        execution: {
+          provider: deps.config.provider,
+          cachePolicy,
+          promptCachingEnabled,
+          label: 'chat_answer',
+        },
       })) {
         switch (event.type) {
           case 'step_started':
+            // Provider-call counting happens inside withChatProviderExecution
+            // when the stream starts; do not double-count per step.
             stepCount += 1
-            recordProviderCall()
             stepText = ''
             stepUsedTool = false
             stepToolUses = []
