@@ -483,6 +483,16 @@ test('file and project window titles drive labels instead of app names', () => {
   db.close()
 })
 
+test('a long single-app stretch is named by its evidence, not by the app', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Competitor pricing pages', category: 'research', startMinute: 0, durationMinutes: 90 })
+
+  const [label] = labelsFor(db)
+
+  assert.notEqual(label, 'Google Chrome')
+  db.close()
+})
+
 test('deterministic title labels outrank stale AI app-name labels', () => {
   const db = createDb()
   const startTime = localMs(9, 0)

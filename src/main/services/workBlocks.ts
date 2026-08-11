@@ -349,7 +349,6 @@ interface CategoryRun {
 interface AppStreak {
   range: [number, number]
   targetDurationSeconds: number
-  label: string
 }
 
 interface ContextRun {
@@ -1013,7 +1012,6 @@ function longSingleAppStreak(sessions: AppSession[]): AppStreak | null {
     const streak: AppStreak = {
       range: [startIndex, bestEndIndex + 1],
       targetDurationSeconds: totalTargetDuration,
-      label: first.appName,
     }
 
     if (!best || streak.targetDurationSeconds > best.targetDurationSeconds) {
@@ -3244,12 +3242,16 @@ function analyzeSessions(
     if (startIndex > 0) {
       blocks.push(...analyzeSessions(sessions.slice(0, startIndex), boundedBeforeGap, false))
     }
+    // No forced label: a streak is a formation, not a name. Naming the block
+    // after the app that hosted it is the shape label-voice.md rejects, and it
+    // short-circuits the evidence-based naming in `labelForCandidate` — a
+    // 90-minute browsing streak read "Google Chrome" while its own window and
+    // page titles named the subject.
     blocks.push({
       sessions: sessions.slice(startIndex, endIndex),
       formation: 'longSingleApp',
       boundedBeforeGap: startIndex === 0 ? boundedBeforeGap : false,
       boundedAfterGap: endIndex === sessions.length ? boundedAfterGap : false,
-      forcedLabel: streak.label,
     })
     if (endIndex < sessions.length) {
       blocks.push(...analyzeSessions(sessions.slice(endIndex), false, boundedAfterGap))
