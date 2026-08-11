@@ -9,6 +9,7 @@
 // falls back to the deterministic line; the deck never collapses wholesale.
 
 import { createHash } from 'node:crypto'
+import { INTERPRETATION_DIRECTIVES } from '@shared/activityDescription'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import type { AIWrappedNarrative, DayEnrichment } from '@shared/types'
 import {
@@ -102,7 +103,7 @@ export function enrichmentAllowedCounts(enrichment: DayEnrichment | null | undef
 /** Bumped whenever the day wrap's prompt semantics change (directives,
  *  contract, slide asks), so a stored analysis version records WHICH prompt
  *  produced it (DEV-206: reproducible, inspectable versions). */
-export const DAY_WRAP_PROMPT_VERSION = 2
+export const DAY_WRAP_PROMPT_VERSION = 3
 
 export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment | null): string {
   const bucket = (s: number) => Math.round(s / 60)
@@ -333,6 +334,10 @@ export function buildWrappedPrompts(facts: DayWrapFacts, enrichment?: DayEnrichm
     DECK_JSON_CONTRACT,
     TIME_LITERACY,
     ...EVIDENCE_HONESTY_DIRECTIVES,
+    // The interpretation half only. The voice half carries a blanket grading
+    // ban that would argue with this deck's own earned-praise rule below, and
+    // a prompt that argues with itself is worse than one rule fewer.
+    ...INTERPRETATION_DIRECTIVES,
     'If a story beat is marked as spillover or "the tail of last night", it happened just after midnight BEFORE the person went to bed. Frame it as winding down the previous night. The day itself began at facts.dayBegan.',
     'Each slide line is one or two sentences, written to the person ("you"), specific, never generic. Stat/caption slides stay tight (under ~200 characters); the story beats may run to two full sentences. The curious question stays under ~200 characters.',
     'ADD A READ, DO NOT RESTATE. On every stat slide the slide\'s OWN big number is already printed huge on the card. Do not make that one number the subject of your sentence and do not merely repeat it ("meetings took 1h 13m", "59m on YouTube"). Lead with what it MEANS. BUT your line must still be concrete: anchor it in at least one real detail that is NOT that headline number, for example the real work being done, a real part of the day, or a real supporting time. Never go vague or generic to avoid the number; a line with no concrete anchor is worse than one that names it.',

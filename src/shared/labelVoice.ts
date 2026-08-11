@@ -1,3 +1,11 @@
+import {
+  JUDGMENT_RE,
+  LABEL_HYPE_VOCAB,
+  LABEL_PLUMBING_VOCAB,
+  activityDescriptionFindings,
+  type DescriptionProvenance,
+  type DescriptionVoiceFinding,
+} from './activityDescription'
 import { looksLikeRawArtifactLabel } from './blockLabel'
 import { workNameGuardLabelViolation } from './workNameGuards'
 
@@ -135,40 +143,13 @@ const EMAIL_ADDRESS_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
 const TRAILING_BROWSER_RE =
   /\s[-—–]\s(?:Google Chrome|Safari|Arc|Firefox|Brave|Microsoft Edge|Chrome|Dia)$/i
 
-// Capture plumbing a person would never say about their own day. Kept tight to
-// unambiguous telemetry vocabulary so real work ("Reviewing evidence for the
-// Harris case") is never punished for its subject matter.
-const PLUMBING_TERMS = [
-  'foreground',
-  'window title',
-  'app session',
-  'browser session',
-  'captured signal',
-  'capture source',
-  'telemetry',
-  'bundle id',
-]
-
-// The subset of the assistant voice contract's banned vocabulary that could
-// plausibly surface in a short label.
-const HYPE_TERMS = [
-  'dive into',
-  'deep dive',
-  'unleash',
-  'game-changing',
-  'seamless',
-  'elevate',
-  'harness the power',
-  'empower',
-  'streamline',
-  'navigate the landscape',
-]
-
-// The block observation contract: never judge productivity, focus, distraction,
-// or personal worth. Naming a real focus-timer session stays allowed, so
-// "focus" itself is not in this list.
-const JUDGMENT_RE =
-  /\b(?:productive|unproductive|productivity|wasted|wasting|time.wasting|distraction|distracted|procrastinat\w*|lazy|slacking|doomscroll\w*)\b/i
+// Capture plumbing, hype, and judgment all come from the one policy module
+// (activityDescription.ts) so a term added there binds on labels and on prose
+// at once. The label scope is deliberately stricter than the prose scope:
+// "window title" is a legitimate word in an answer about what Daylens captures
+// and is never a legitimate label.
+const PLUMBING_TERMS: readonly string[] = LABEL_PLUMBING_VOCAB
+const HYPE_TERMS: readonly string[] = LABEL_HYPE_VOCAB
 
 const LEISURE_ACTIVITY_SHAPE_RE = /^(watching|on |listening|browsing)/i
 
@@ -466,6 +447,47 @@ export function labelVoiceContextForBlock(
   }
 }
 
+// ── Label provenance (REQ-VIC-004) ─────────────────────────────────────────
+// A person's own wording for their own work outranks anything Daylens infers,
+// and it is never policy-checked: the rules exist to stop Daylens from writing
+// badly, not to correct someone's name for their own day. What the rules DO
+// still govern is how that wording travels — a name the person supplied is not
+// evidence, so no surface may re-derive a fact from it.
+//
+// Two paths produce a user-authored label and both must count: a
+// `block_label_overrides` row sets `label.override`, and a corrected block
+// review sets `label.source = 'user'` (and writes the same text into both).
+// Read structurally, like `labelVoiceContextForBlock`, because the projection
+// and payload paths carry slightly different block shapes.
+
+export interface LabelProvenanceBlock {
+  label?: {
+    current?: string | null
+    source?: string | null
+    override?: string | null
+  } | null
+}
+
+/** The person's own wording for this block, verbatim, or null when the label
+ *  is Daylens's. Never trimmed of anything but surrounding whitespace: the
+ *  wording is theirs, including punctuation the policy would strip. */
+export function userAuthoredLabel(block: LabelProvenanceBlock): string | null {
+  const override = block.label?.override?.trim()
+  if (override) return override
+  if (block.label?.source === 'user') {
+    const current = block.label?.current?.trim()
+    if (current) return current
+  }
+  return null
+}
+
+/** Where this block's user-visible label came from. `user` wording must be
+ *  presented as the person's name for the stretch and never as an observation
+ *  (AC-VIC-004.3). */
+export function labelProvenance(block: LabelProvenanceBlock): DescriptionProvenance {
+  return userAuthoredLabel(block) === null ? 'evidence' : 'user'
+}
+
 export interface EvaluatedLabel {
   label: string
   findings: LabelVoiceFinding[]
@@ -517,54 +539,16 @@ export function summarizeLabelVoice(evaluated: EvaluatedLabel[]): LabelVoiceSumm
 }
 
 // ── Recap voice ────────────────────────────────────────────────────────────
-// The day recap and block narrative are prose a person reads about their own
-// day. They must not leak internal vocabulary ("trusted blocks", "strongest
-// evidence", "clearest named block") or read as a stat dump ("focus held for X
-// of tracked time"). This check fails those shapes and passes calm prose.
+// The prose check moved to activityDescription.ts. ADR-002 of the Voice & Label
+// Policy blueprint puts label evaluation here and generated-prose evaluation
+// there, and a recap or block narrative is prose. These two names stay exported
+// for the callers that already import them; there is now one implementation
+// behind them instead of a second copy of the same scans.
 
-// Internal vocabulary and template scaffolding a person would never write about
-// their own day. Matched case-insensitively as substrings.
-const RECAP_INTERNAL_PHRASES = [
-  'trusted block',
-  'strongest evidence',
-  'evidence included',
-  'clearest named block',
-  'clearest block',
-  'named block',
-  'based on the available titles',
-  'supporting context',
-  'focus held for',
-  'of tracked time',
-  'top apps',
-  'based on the provided data',
-  'work intent',
-  'dominant category',
-]
-
-export interface RecapVoiceFinding {
-  phrase: string
-  reason: string
-}
+export type RecapVoiceFinding = DescriptionVoiceFinding
 
 /** Voice violations in a generated recap or block narrative. Empty = clean. */
-export function recapVoiceFindings(text: string | null | undefined): RecapVoiceFinding[] {
-  const value = (text ?? '').trim()
-  if (!value) return []
-  const lower = value.toLowerCase()
-  const findings: RecapVoiceFinding[] = []
-  for (const phrase of RECAP_INTERNAL_PHRASES) {
-    if (lower.includes(phrase)) findings.push({ phrase, reason: 'internal vocabulary / template phrasing' })
-  }
-  for (const term of PLUMBING_TERMS) {
-    if (lower.includes(term)) findings.push({ phrase: term, reason: 'capture/telemetry vocabulary' })
-  }
-  for (const term of HYPE_TERMS) {
-    if (lower.includes(term)) findings.push({ phrase: term, reason: 'marketing filler' })
-  }
-  const judgment = JUDGMENT_RE.exec(value)
-  if (judgment) findings.push({ phrase: judgment[0], reason: 'judges productivity/worth' })
-  return findings
-}
+export const recapVoiceFindings = activityDescriptionFindings
 
 /** Markdown-ready lines for a review report's label-voice section. */
 export function labelVoiceReportLines(summary: LabelVoiceSummary): string[] {

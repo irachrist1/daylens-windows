@@ -34,10 +34,12 @@ import {
 } from '../lib/followUpSuggestions'
 import { transformInstruction } from '@shared/answerTransforms'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
-import { labelCandidateViolation, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import { labelCandidateViolation, labelProvenance, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
+import { INTERPRETATION_DIRECTIVES } from '@shared/activityDescription'
+import { normalizeSummaryVoice, voiceDirective } from '@shared/summaryVoice'
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummaryParse'
 import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariants'
@@ -248,9 +250,18 @@ const USER_VISIBLE_ACTIVITY_PROSE_RULE =
   'Never use raw app names as the activity. Describe activity, work threads, artifacts, pages, or context instead of listing tool names as nouns. '
   + 'When listing apps in response to "what were my top apps" or similar, the PROSE SUBJECT of each row must be the work, not the app. '
   + 'Use the dominantBlockLabel field on each app for the activity. The app name appears as tail-attribution after the activity, never as the row\'s bolded headline. The duration goes last. '
-  + 'CORRECT row shape: "Coding in the Building & Testing block (Daylens chat-pipeline work) — Kiro, 1h 19m." '
-  + 'WRONG row shapes: "**Kiro** — coding in the Building & Testing block (1h 19m)" (app is still the headline); "Kiro — 1h 19m" (no activity at all); "Kiro: 1h 19m of coding" (app is the subject). '
-  + 'Do not bold the app name as the row prefix. Do not put the app name before the em-dash. The em-dash separates activity (left) from attribution + duration (right).'
+  + 'CORRECT row shape: "Coding in the Building & Testing block (Daylens chat-pipeline work): Kiro, 1h 19m." '
+  + 'WRONG row shapes: "**Kiro**, coding in the Building & Testing block (1h 19m)" (app is still the headline); "Kiro, 1h 19m" (no activity at all); "Kiro: 1h 19m of coding" (app is the subject). '
+  + 'Do not bold the app name as the row prefix. Do not put the app name before the colon. The colon separates activity (left) from attribution + duration (right). Never use an em dash anywhere in the row.'
+
+// REQ-VIC-004. A block carrying `labelIsTheirOwnWords` was named by the person,
+// not by Daylens. Their wording wins over anything the evidence would suggest,
+// and it is never re-derived from: a name they typed is not something Daylens
+// saw, so it cannot become the basis of an observation about their day.
+const USER_AUTHORED_LABEL_RULE =
+  'Some blocks carry "labelIsTheirOwnWords": the person renamed that stretch themselves. '
+  + 'Use their wording exactly as written, in preference to anything the evidence would suggest for that stretch, and never rewrite, shorten, or "improve" it. '
+  + 'What you must NOT do is treat a name inside it as something Daylens observed. If they called a block "Ridgeline renewal" and no page, title, file, or meeting in the evidence names Ridgeline, you may say they called it that; you may not say they worked on the Ridgeline renewal as a fact, and you may not carry "Ridgeline" into any other sentence as evidence.'
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -1827,7 +1838,7 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
     ignoredBlockIds: payload.blocks.filter((block) => !isTrustedTimelineBlock(block)).map((block) => block.id),
     blocks: trustedBlocks.map((block) => ({
       id: block.id,
-      label: block.label.current,
+      label: userVisibleBlockLabel(block),
       narrative: block.label.narrative,
       reviewState: block.review.state,
       correctedIntentRole: block.review.correctedIntentRole,
@@ -1873,7 +1884,14 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
   const blocks = selected.map((block) => {
     const rank = durationRank.get(block.id) ?? Number.MAX_SAFE_INTEGER
     return {
-      label: block.label.current,
+      // The label the Timeline actually shows, never the raw stored one: a
+      // block whose `label.current` is a generic floor ("Development") renders
+      // as its artifact or AI label on screen, and a recap that names the floor
+      // describes a day the person cannot see.
+      label: userVisibleBlockLabel(block),
+      // Their wording, marked as theirs, so the model quotes it instead of
+      // repeating it back as something Daylens observed (AC-VIC-004.3).
+      ...(labelProvenance(block) === 'user' ? { labelIsTheirOwnWords: true } : {}),
       narrative: block.label.narrative,
       timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
       duration: formatDuration(blockDurationSeconds(block)),
@@ -2011,14 +2029,24 @@ export async function generateDaySummary(
 
   const [memoryFromMs, memoryToMs] = localDateBoundsFromString(dateStr)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variant.id}`
+  // The recap IS the morning brief (aiFeatures.ts maps day_summary to "Morning
+  // brief"), so the person's chosen tone belongs here as much as in Wrapped.
+  // It rides the cache key too: without that, changing the tone leaves the
+  // cached recap in the old voice for the life of the process and the toggle
+  // reads as dead.
+  const settings = getSettings()
+  const voice = normalizeSummaryVoice(settings.summaryVoice)
+  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variant.id}:${voice}`
   const cached = options.bypassCache ? undefined : daySummaryCache.get(cacheKey)
   if (cached) return cached
 
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     memoryPrompt,
-    userProfileDirective(getSettings()),
+    userProfileDirective(settings),
+    USER_AUTHORED_LABEL_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
     ...variant.directives,
   ].filter(Boolean).join('\n')
 
@@ -2143,7 +2171,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
     tracked: formatDuration(payload.totalSeconds),
     focus: formatDuration(payload.focusSeconds),
     focus_pct: payload.focusPct,
-    top_blocks: payload.blocks.slice(0, 3).map((block) => block.label.current).filter(Boolean).join(' | ') || 'No clear blocks',
+    top_blocks: payload.blocks.slice(0, 3).map((block) => userVisibleBlockLabel(block)).filter(Boolean).join(' | ') || 'No clear blocks',
   }))
 
   const renderDeterministic = (): { reportMarkdown: string; assistantResponse: string } => {
@@ -2186,7 +2214,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
       }
       for (const block of blocks) {
         const seconds = blockActiveSeconds(block)
-        const label = block.label.current || `${block.dominantCategory} block`
+        const label = userVisibleBlockLabel(block) || `${block.dominantCategory} block`
         const start = new Date(block.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
         const end = new Date(block.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
         const evidenceBits: string[] = []
@@ -2214,7 +2242,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
     chatLines.push('Day by day:')
     for (const payload of activeDays) {
       const topBlock = payload.blocks.slice().sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))[0]
-      const topBlockLabel = topBlock?.label.current || (topBlock ? `${topBlock.dominantCategory} block` : 'no clear blocks')
+      const topBlockLabel = (topBlock ? userVisibleBlockLabel(topBlock) : '') || (topBlock ? `${topBlock.dominantCategory} block` : 'no clear blocks')
       chatLines.push(`- **${dayName(payload.date)} (${payload.date})** — ${formatDuration(payload.totalSeconds)} tracked, ${formatDuration(payload.focusSeconds)} focused (${payload.focusPct}%); longest block: ${topBlockLabel}`)
     }
     if (bestDay) {
@@ -2253,7 +2281,8 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
           focus: formatDuration(payload.focusSeconds),
           focusPct: payload.focusPct,
           topBlocks: take(payload.blocks, evidenceCost).map((block) => ({
-            label: block.label.current,
+            label: userVisibleBlockLabel(block),
+            ...(labelProvenance(block) === 'user' ? { labelIsTheirOwnWords: true } : {}),
             duration: formatDuration(blockActiveSeconds(block)),
             artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle),
           })),
@@ -2585,7 +2614,7 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
     tableRows: packedBlocks.map((block) => ({
       start: formatClock(block.startTime),
       end: formatClock(block.endTime),
-      block: block.label.current,
+      block: userVisibleBlockLabel(block),
       category: block.dominantCategory,
       apps: block.topApps.slice(0, 3).map((app) => app.appName).join(' | ') || 'n/a',
       artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle).join(' | ') || 'n/a',
@@ -2608,7 +2637,10 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
   const [memoryFromMs] = localDateBoundsFromString(weekStart)
   const [, memoryToMs] = localDateBoundsFromString(weekEnd)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt].join('\n'))
+  // Tone is part of the signature so a Settings voice change does not keep
+  // returning a card written in the previous voice (REQ-VIC-002).
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt, voice].join('\n'))
   if (!force) {
     const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
     if (existingSignature === inputSignature) {
@@ -2623,6 +2655,9 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     'You are Daylens, writing the short week-review card for the Timeline week view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
+    USER_AUTHORED_LABEL_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
     'Use only the deterministic local evidence provided.',
     'Focus on the actual work threads, named artifacts, and where the week concentrated.',
     'Avoid dashboard filler or generic productivity language.',
@@ -2700,7 +2735,10 @@ async function generateAppNarrative(
     fromMs: memoryFromMs,
     toMs: memoryToMs,
   })
-  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt].join('\n'))
+  // Tone is part of the signature so a Settings voice change does not keep
+  // returning a card written in the previous voice (REQ-VIC-002).
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt, voice].join('\n'))
   // Force=true must bypass the signature short-circuit. Without this, clicking
   // Generate/Refresh on an app whose evidence has not changed since the last
   // cached narrative returns the same cached row without ever calling the AI,
@@ -2727,6 +2765,8 @@ async function generateAppNarrative(
     'You are Daylens, writing the short narrative card for an app detail view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
     'Explain what this tool was helping with and which artifacts, pages, or sites appeared there. Lead with the work (the domains and pages listed first); mention leisure only briefly if at all.',
     'Use only the deterministic evidence below.',
     'Do not write vanity metrics or generic app summaries.',
@@ -3575,6 +3615,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
           model: agentConfig.model,
           homeDir: os.homedir(),
           extraSystem,
+          summaryVoice: settings.summaryVoice,
         }),
         model: agentConfig.model,
         executablePath: claudeTool.executablePath,
@@ -3683,6 +3724,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       artifactDir: agentArtifactDir(),
       mcpServers: settings.mcpServers ?? [],
       extraSystem,
+      summaryVoice: settings.summaryVoice,
       signal: getAmbientAbortSignal() ?? undefined,
       trackingStart,
       threadId,
@@ -3830,13 +3872,25 @@ export async function getWeekReview(
   weekStartStr: string,
   force = false,
 ): Promise<AISurfaceSummary | null> {
+  if (force) return generateWeekReview(weekStartStr, true)
+
+  const bundle = buildWeekReviewBundle(weekStartStr)
+  if (!bundle) return null
   const scopeKey = `week:${weekStartStr}`
-  if (!force) {
-    const existing = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
-    if (existing && existing.scopeKey === scopeKey) return existing
-    return null
+  const { weekStart, weekEnd } = buildWeekDateRange(weekStartStr)
+  const [memoryFromMs] = localDateBoundsFromString(weekStart)
+  const [, memoryToMs] = localDateBoundsFromString(weekEnd)
+  const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt, voice].join('\n'))
+  const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
+  if (existingSignature === inputSignature) {
+    return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
   }
-  return generateWeekReview(weekStartStr, true)
+  // Evidence or tone moved: surface the stored card as stale rather than
+  // spending a provider call on a read, and rather than pretending the old
+  // voice is current.
+  return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey, { stale: true })
 }
 
 export async function getAppNarrative(
@@ -3844,14 +3898,37 @@ export async function getAppNarrative(
   daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
-  if (!force) {
-    const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
-    const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
+  if (force) return generateAppNarrative(canonicalAppId, daysOrDate, true)
+
+  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
+  const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
+  const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
+  const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)
+  const [memoryFromMs, memoryToMs] = isDate
+    ? localDateBoundsFromString(daysOrDate)
+    : (() => {
+      const [, todayToMs] = dayBounds(new Date())
+      if (days >= ALL_TIME_DAYS) return [0, todayToMs] as const
+      const end = new Date(todayToMs)
+      const fromMs = new Date(
+        end.getFullYear(),
+        end.getMonth(),
+        end.getDate() - days,
+      ).getTime()
+      return [fromMs, todayToMs] as const
+    })()
+  const memoryPrompt = buildDaylensMemoryPromptBlock({
+    fromMs: memoryFromMs,
+    toMs: memoryToMs,
+  })
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt, voice].join('\n'))
+  const existingSignature = getAISurfaceSummarySignature(getDb(), 'app_detail', scopeKey)
+  if (existingSignature === inputSignature) {
     const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
-    if (existing) return existing
-    return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
+    if (!appNarrativeHasStaleMetrics(existing)) return existing
   }
-  return generateAppNarrative(canonicalAppId, daysOrDate, true)
+  return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
 }
 
 export async function testCLITool(tool: CLITool): Promise<{ ok: true; output: string } | { ok: false; error: string }> {

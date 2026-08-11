@@ -1,49 +1,20 @@
-export const BANNED_VOCAB = [
-  'dive into',
-  'unleash',
-  'navigate the landscape',
-  "this isn't X, it's Y",
-  "in today's fast-paced world",
-  'game-changing',
-  'seamless',
-  'elevate',
-  'great question',
-  "let's explore",
-  'at the end of the day',
-  'fascinating perspective',
-  "you're absolutely right",
-  'harness the power',
-  'empower',
-  'robust',
-  'streamline',
-  'crush it',
-  "you've got this",
-  'great work',
-  "let's dive in",
-] as const
+// The vocabulary this contract bans is defined once, in the shared activity-
+// description policy (activityDescription.ts), so the ban binds identically on a
+// Timeline label, a recap, a chunk row, and a chat answer. These two names are
+// re-exported under the names this module's callers already import.
+import {
+  BANNED_VOCAB,
+  EM_DASH,
+  PROSE_PLUMBING_VOCAB,
+  findBannedVocab,
+  findPlumbingVocab,
+} from '@shared/activityDescription'
 
-export const EM_DASH = '—'
+export { BANNED_VOCAB, EM_DASH, findBannedVocab, findPlumbingVocab }
+export { containsEmDash } from '@shared/activityDescription'
+export const PLUMBING_VOCAB = PROSE_PLUMBING_VOCAB
+
 const EN_DASH = '–'
-
-// The words Daylens uses for its own machinery. They are accurate and they are
-// how the tools and this prompt talk, which is exactly why the model reaches for
-// them: an answer that says "page-level detail covers 0m" is describing the
-// capture pipeline instead of the person's day. Named here so the ban is one
-// list the prompt states, the monitor watches, and tests can assert.
-// Deliberately narrow. "window titles" and "tracked activity" are NOT here:
-// the honest capability answer has to name window titles as something Daylens
-// captures, and the wrap's honesty line reports how much tracked activity a day
-// was built from. Only terms that are wrong in every answer belong on this list.
-export const PLUMBING_VOCAB = [
-  'foreground',
-  'page-level detail',
-  'page detail',
-  'app sessions',
-  'captured signal',
-  'page coverage',
-  'the data shows',
-  'based on the data',
-] as const
 
 export const CITATION_CONTRACT = [
   'Every factual claim about work must be anchored to captured evidence: a work block, page, artifact, window title, app session, website visit, or attributed work session.',
@@ -87,30 +58,10 @@ export const VOICE_SYSTEM_PROMPT = [
   ...POSITIVE_VOICE_EXAMPLES,
 ].join('\n')
 
-// The first banned phrase present in `text`, or null. Non-throwing: this is the
-// SOFT path the streaming chat answer uses — by the time an answer is assembled
-// it has already been streamed to the user, so a banned word is logged for voice
-// monitoring, never thrown (a throw here would crash a chat over one word that is
-// already on screen).
-export function findBannedVocab(text: string): string | null {
-  const lower = text.toLowerCase()
-  return BANNED_VOCAB.find((phrase) => lower.includes(phrase.toLowerCase())) ?? null
-}
-
-/** Em dashes are banned in every Daylens surface. Prose the model streams is
- *  monitored with this (soft, logged); deterministically composed text must not
- *  contain one at all. En dashes inside ranges are untouched. */
-export function containsEmDash(text: string): boolean {
-  return text.includes(EM_DASH) || /(?:^|\s)--(?:\s|$)/.test(text)
-}
-
-/** The first plumbing term present in `text`, or null. Soft, like
- *  findBannedVocab: the answer has already streamed, so this reports for voice
- *  monitoring rather than rewriting anything. */
-export function findPlumbingVocab(text: string): string | null {
-  const lower = text.toLowerCase()
-  return PLUMBING_VOCAB.find((term) => lower.includes(term)) ?? null
-}
+// `findBannedVocab`, `findPlumbingVocab`, and `containsEmDash` are re-exported
+// from the shared policy at the top of this file. All three are SOFT: by the
+// time a streamed answer is assembled it is already on the person's screen, so a
+// violation is logged for voice monitoring, never thrown.
 
 // Hard variant — only for non-streaming, pre-commit checks (offline voice evals,
 // tests). Never call this in the live answer path.
