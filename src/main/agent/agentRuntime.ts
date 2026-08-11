@@ -1,13 +1,14 @@
 import {
   stepCountIs,
   streamText,
+  wrapLanguageModel,
   type LanguageModel,
   type ModelMessage,
   type ToolSet,
 } from 'ai'
 import type { ContextPacket } from '../services/contextPacket'
 import {
-  withChatProviderExecution,
+  chatProviderExecutionMiddleware,
   type ChatExecutionPolicy,
   type ChatSystemPrompt,
 } from './executionPolicy'
@@ -339,6 +340,24 @@ export class AISdkAgentRuntime implements AgentRuntime<ToolSet> {
     return this.pendingRuns.get(runId) ?? null
   }
 
+  /**
+   * Put the execution-policy choke point on the model, not on the run: a run
+   * is one streamText() call but one provider HTTP call PER STEP, and every one
+   * of them has to be spaced, retried, and counted. A model referenced by id,
+   * or one still on the v2 spec, has no v3 handle to wrap and runs ungated —
+   * languageModelFor never produces either.
+   */
+  private executionModel(execution: ChatExecutionPolicy | undefined): LanguageModel {
+    const model = this.model
+    if (!execution || typeof model === 'string' || model.specificationVersion !== 'v3') {
+      return model
+    }
+    return wrapLanguageModel({
+      model,
+      middleware: chatProviderExecutionMiddleware(execution),
+    })
+  }
+
   private beginPause(active: ActiveAgentRun<ToolSet>, reason: string): AgentPendingState {
     const pending: AgentPendingState = {
       runId: active.request.runId,
@@ -408,8 +427,8 @@ export class AISdkAgentRuntime implements AgentRuntime<ToolSet> {
         yield cancellation()
         return
       }
-      const startStream = () => streamText({
-        model: this.model,
+      const result = streamText({
+        model: this.executionModel(request.execution),
         system: request.system,
         messages: [...request.messages] as ModelMessage[],
         tools: request.tools,
@@ -428,14 +447,6 @@ export class AISdkAgentRuntime implements AgentRuntime<ToolSet> {
           }
         },
       })
-      // Rate-limit wait and call counting happen before the provider HTTP
-      // request begins. The returned stream still yields tokens as they
-      // arrive — the choke point does not buffer the whole turn.
-      const result = request.execution
-        ? await withChatProviderExecution(request.execution.provider, startStream, {
-            label: request.execution.label ?? 'chat_answer',
-          })
-        : startStream()
 
       for await (const part of result.fullStream) {
         if (controller.signal.aborted && part.type !== 'abort') {

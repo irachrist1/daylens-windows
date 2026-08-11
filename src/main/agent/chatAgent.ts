@@ -456,8 +456,8 @@ export async function runChatAgentTurn(
       })) {
         switch (event.type) {
           case 'step_started':
-            // Provider-call counting happens inside withChatProviderExecution
-            // when the stream starts; do not double-count per step.
+            // Provider-call counting rides the execution-policy middleware on
+            // the model, which sees one call per step; do not count again here.
             stepCount += 1
             stepText = ''
             stepUsedTool = false

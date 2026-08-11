@@ -11,6 +11,7 @@
 // shapes Anthropic prompt-cache markers in the AI SDK message form so the
 // Context packet and answer contract stay unchanged.
 import type { SystemModelMessage } from '@ai-sdk/provider-utils'
+import type { LanguageModelMiddleware } from 'ai'
 import type { AIProviderMode } from '@shared/types'
 import {
   withProviderRateLimit,
@@ -31,12 +32,13 @@ export interface ChatExecutionPolicy {
 }
 
 /**
- * Gate one chat provider stream/turn behind the shared per-provider rate
- * limiter. The limiter records the call and retries transient 429s; spend and
- * quota controls for background AI stay on executeTextAIJob.
+ * Gate ONE provider HTTP call behind the shared per-provider rate limiter. The
+ * limiter spaces the call, records it for the per-turn call count, and retries
+ * transient 429s; spend and quota controls for background AI stay on
+ * executeTextAIJob.
  *
- * Accepts a sync or async starter so streamText() (sync result, async
- * iteration) can pass through without wrapping the whole token stream.
+ * Accepts a sync or async starter so a caller holding a sync handle can pass
+ * through without wrapping the whole token stream.
  */
 export async function withChatProviderExecution<T>(
   provider: AIProviderMode,
@@ -47,6 +49,32 @@ export async function withChatProviderExecution<T>(
     label: options.label ?? 'chat_answer',
     maxAttempts: options.maxAttempts,
   })
+}
+
+/**
+ * The choke point as AI SDK middleware, so it sits on the model call boundary
+ * rather than around a whole multi-step run.
+ *
+ * A grounded tool turn is ONE streamText() call but N provider HTTP calls: the
+ * first returns a tool_use, the tool executes, and the SDK issues a second call
+ * carrying the tool result. Gating the run's entry point would therefore see a
+ * turn's fan-out as a single call — the limiter would not space the tool-result
+ * round-trip, its 429 retry could never fire (streamText hands back its handle
+ * before any request leaves), and recordProviderCall would under-count the
+ * turn. Wrapping doStream/doGenerate puts every provider call through the gate
+ * exactly once.
+ */
+export function chatProviderExecutionMiddleware(
+  policy: Pick<ChatExecutionPolicy, 'provider' | 'label'>,
+): LanguageModelMiddleware {
+  const options: ProviderRateLimitOptions = { label: policy.label ?? 'chat_answer' }
+  return {
+    specificationVersion: 'v3',
+    wrapStream: ({ doStream }) =>
+      withChatProviderExecution(policy.provider, async () => doStream(), options),
+    wrapGenerate: ({ doGenerate }) =>
+      withChatProviderExecution(policy.provider, async () => doGenerate(), options),
+  }
 }
 
 /**
