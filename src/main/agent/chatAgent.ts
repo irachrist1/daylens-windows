@@ -15,7 +15,7 @@
 import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
 import type Database from 'better-sqlite3'
 import os from 'node:os'
-import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind } from '@shared/types'
+import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind, SummaryVoice } from '@shared/types'
 import { statusForTool } from '@shared/agentTrail'
 import type { ResolvedProviderConfig, AIProviderUsage } from '../services/aiOrchestration'
 import { providerLabel } from '../services/aiOrchestration'
@@ -72,6 +72,9 @@ export interface ChatAgentDeps {
   artifactDir: string
   mcpServers?: McpServerConfig[]
   extraSystem?: string | null
+  /** The person's chosen tone, read from settings by the production caller.
+   *  Absent in the bench and tests, where it normalizes to the default. */
+  summaryVoice?: SummaryVoice | null
   signal?: AbortSignal
   now?: Date
   trackingStart?: string | null
@@ -312,6 +315,7 @@ export async function runChatAgentTurn(
         model: deps.config.model,
         homeDir: os.homedir(),
         extraSystem: deps.extraSystem,
+        summaryVoice: deps.summaryVoice ?? null,
       }),
       renderedPacket,
     ].filter(Boolean).join('\n\n')

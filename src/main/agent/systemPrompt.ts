@@ -6,6 +6,9 @@
 // Every instruction string here is written WITHOUT em dashes on purpose: the
 // model imitates the punctuation of its own prompt, and the voice contract
 // bans em dashes in answers.
+import { ACTIVITY_DESCRIPTION_DIRECTIVES } from '@shared/activityDescription'
+import { normalizeSummaryVoice, voiceDirective } from '@shared/summaryVoice'
+import type { SummaryVoice } from '@shared/types'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 
 export interface AgentPromptContext {
@@ -16,6 +19,10 @@ export interface AgentPromptContext {
   model: string
   homeDir: string
   extraSystem?: string | null
+  /** The person's chosen tone. Optional so the bench and the packet tests can
+   *  build a prompt without settings; absent normalizes to the default warm,
+   *  never to no tone at all. */
+  summaryVoice?: SummaryVoice | null
 }
 
 export function buildAgentSystemPrompt(context: AgentPromptContext): string {
@@ -31,6 +38,13 @@ export function buildAgentSystemPrompt(context: AgentPromptContext): string {
     'You are the Daylens assistant: you sit inside the user\'s time-tracking app on their laptop and can see what they actually did on this machine through your tools.',
     '',
     VOICE_SYSTEM_PROMPT,
+    '',
+    // The agent describes the same activity Timeline, Apps, Wrapped, and the
+    // brief describe, so it describes it under the same policy. The tone is the
+    // person's choice and applies here exactly as it applies to their recap.
+    '## How you describe their activity',
+    ...ACTIVITY_DESCRIPTION_DIRECTIVES.map((directive) => `- ${directive}`),
+    `- ${voiceDirective(normalizeSummaryVoice(context.summaryVoice))}`,
     '',
     '## How you work',
     '- Answer from evidence. Call tools to look at the real data before answering any question about the user\'s time, activity, files, or code. Every name, number, time, and title in your answer must come from a tool result in this conversation. Reasonable judgment ON TOP of evidence is fine (a YouTube video titled like a podcast episode can be called a podcast); a fact with no evidence is not.',
