@@ -12,7 +12,7 @@ trail that survives the session that produced it.
 | Layer | Question it answers | Where it lives |
 | --- | --- | --- |
 | Requirements | What must be true from outside the system | `docs/specs/` |
-| Blueprints | How the system is arranged inside | `docs/blueprints/`, `docs/codebase/architecture.md` |
+| Blueprints | How the system is arranged inside | [`docs/blueprints/`](blueprints/README.md), [`docs/codebase/architecture.md`](codebase/architecture.md) |
 | Work orders | What is being delivered now | Linear, the Daylens Version 2 project |
 | Execution | What was actually planned, reviewed, and verified | `.sw-factory/<issue>/` |
 | Acceptance | What passes and what still fails | `docs/acceptance/` |

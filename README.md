@@ -44,6 +44,7 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 | [Repository structure](docs/codebase/structure.md) | Where the major parts of the codebase live                       |
 | [Development](docs/development.md)                 | How specifications, tickets, implementation, and acceptance work |
 | [The factory](docs/factory.md)                     | The record layers, where each lives, and the execution trail per work order |
+| [Blueprints](docs/blueprints/README.md)            | How each capability is arranged inside, traced to code symbols and ADRs |
 | [Acceptance dossier](docs/acceptance/README.md)    | The graded record of what passes and what still fails, surface by surface |
 | [Testing](docs/hygiene/testing.md)                 | Normal verification and release confidence                       |
 | [Benchmarks](docs/hygiene/benchmarks.md)           | Evaluation harnesses, cost, and when to run them                 |
