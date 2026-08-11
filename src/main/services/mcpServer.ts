@@ -9,6 +9,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { getSettings } from './settings'
 import { isRealDayHarness } from '../lib/realDayHarness'
+import { minimalChildEnv } from '../lib/childEnv'
 
 export interface McpServerConfig {
   command: string
@@ -21,6 +22,10 @@ export interface McpServerConfig {
   // the UI can show it and prove no developer path is exposed in production.
   isPackaged: boolean
   dbPath: string
+  // Whether the Daylens-managed subprocess is up right now, so the Settings
+  // section reports the live state instead of inferring it from the toggle it
+  // just wrote.
+  running: boolean
 }
 
 let _proc: ChildProcess | null = null
@@ -72,6 +77,7 @@ export function getMcpServerConfig(): McpServerConfig | null {
     },
     isPackaged: app.isPackaged,
     dbPath,
+    running: isMcpServerRunning(),
   }
 }
 
@@ -87,7 +93,7 @@ export function startMcpServer(): void {
 
   try {
     _proc = spawn(config.command, config.args, {
-      env: { ...process.env, ...config.env },
+      env: minimalChildEnv(config.env),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
   } catch (err) {

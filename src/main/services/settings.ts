@@ -70,7 +70,7 @@ export const DEFAULTS: AppSettings = {
   interpretationAgentEnabled: true,
   distractionAlertThresholdMinutes: 10,
   distractionAlertsEnabled: true,
-  mcpServerEnabled: false,
+  mcpServerEnabled: true,
   workMemoryConsolidationEnabled: true,
   useRemoteAI: false,
   // T3 — opt-in, off by default. Private/incognito windows are excluded
@@ -168,7 +168,7 @@ export function getSettings(): AppSettings {
     interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', true) as boolean),
-    mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
+    mcpServerEnabled: (_store.get('mcpServerEnabled', true) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
     useRemoteAI: (_store.get('useRemoteAI', false) as boolean),
     trackingControlsEnabled: (_store.get('trackingControlsEnabled', false) as boolean),

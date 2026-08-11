@@ -39,6 +39,21 @@ test('MCP db path is the userData database, never the app/source root', () => {
   }
 })
 
+test('MCP config reports whether the managed server is running', () => {
+  const root = makeFakeCheckout()
+  process.env.DAYLENS_TEST_APP_PATH = root
+  try {
+    const config = getMcpServerConfig()
+    assert.ok(config)
+    // Nothing started it in this test, so the Settings section must be told the
+    // server is down rather than inferring "on" from the toggle it just wrote.
+    assert.equal(config.running, false)
+  } finally {
+    delete process.env.DAYLENS_TEST_APP_PATH
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('MCP config reports the packaged state for the UI to explain dev paths', () => {
   const root = makeFakeCheckout()
   process.env.DAYLENS_TEST_APP_PATH = root
