@@ -35,6 +35,7 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 
 | Document                                           | Purpose                                                          |
 | -------------------------------------------------- | ---------------------------------------------------------------- |
+| [V2 sprint state](docs/V2-SPRINT-STATE.md)         | **Read first before picking up a V2 work order.** What the six-lane sprint shipped, what it did not, and the three places where the record misleads |
 | [Product direction](docs/product/product.md)       | The product promise, problem, principles, and boundaries         |
 | [Landing positioning](docs/product/landing-positioning.md) | Accepted public-site audience, promise, and AI-forward voice |
 | [V2 direction](docs/product/v2.md)                 | Accepted V2 scope, sequencing, and technical boundaries          |

@@ -57,7 +57,16 @@ Both are call-site wiring, not rebuilds. Both were blocked only because those fi
 - **`SCHEMA_SQL` no longer describes the real `memory_records` table.** A fresh install builds the pre-v70 shape and migration v70 immediately rebuilds it. Harmless today, misleading to read.
 - **`execGetDaySummary` still reads the uncorrected `getAppSummariesForRange`.** This is why the WO-53 enforcement is load-bearing rather than decorative.
 - **Stored Wrapped narratives do not re-voice when the tone changes.** Deliberate: putting voice into `factsHash` would write a false `facts-changed` reason into the analysis ledger. A correct fix needs a stored-voice column.
-- **The recap tone has no Settings control** — issue #124.
+- ~~**The recap tone has no Settings control**~~ — fixed in `40b8df58`. Settings > General now carries it, reusing `VOICE_SAMPLES` and onboarding's own persist path. Issue #124 closed.
+
+## This repository is public
+
+Treat it that way. Two rules that were being broken and are now enforced by review rather than tooling:
+
+- **No real personal data in fixtures or comments.** `40b8df58` replaced real email addresses (the owner's work and student addresses, and a colleague's) that were sitting in `tests/labelVoice.test.ts`, `tests/windowTitleContext.test.ts`, `tests/enrichmentResolve.test.ts` and a comment in `src/shared/labelVoice.ts`. Build fixtures from invented activity. Note that the pre-fix values remain in git history.
+- **No captured screenshots of real days.** The UX audit — screenshots, `INDEX.md`, `ACCEPTANCE.md` — lives in the **private** `spcsorg/daylens-ux-audit` repository, because it carries calendar entries, colleague names and browsing history. Do not move it here.
+
+A scan for provider-shaped secrets (`sk-ant-`, `ghp_`, `AKIA`, `xoxb-`, Google API keys) returns only validator patterns in `providerValidation.ts`, `aiProvider.ts`, `credentialPatterns.ts` and the web key route. No live credentials are committed.
 
 ## Issue sync
 
