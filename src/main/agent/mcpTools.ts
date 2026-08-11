@@ -92,6 +92,32 @@ export function selectConnectableMcpServers(
   return { connectable, skipped }
 }
 
+/** Races an async operation against a timeout. On timeout or failure, calls
+ *  `cleanup` to release resources the operation allocated (e.g. a spawned
+ *  subprocess), and swallows the pending promise's eventual rejection so it
+ *  does not surface as an unhandled rejection. On success, returns the result
+ *  and the caller owns the resource — cleanup is not called. */
+export async function raceConnectWithCleanup<T>(
+  connect: () => Promise<T>,
+  timeoutMs: number,
+  cleanup: () => Promise<void>,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('connect timeout')), timeoutMs)
+  })
+  const promise = connect()
+  try {
+    return await Promise.race([promise, timeout])
+  } catch (error) {
+    promise.catch(() => {})
+    await cleanup().catch(() => {})
+    throw error
+  } finally {
+    clearTimeout(timer!)
+  }
+}
+
 export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpToolPool> {
   if (isRealDayHarness()) {
     return { tools: {}, close: async () => undefined, serverStatuses: [] }
@@ -102,19 +128,17 @@ export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpTo
   const statuses: McpServerStatus[] = [...skipped]
 
   await Promise.all(connectable.map(async (server) => {
+    const transport = new StdioMCPTransport({
+      command: server.command,
+      args: server.args ?? [],
+      env: mcpChildEnv(server.env),
+    })
     try {
-      const client = await Promise.race([
-        createMCPClient({
-          transport: new StdioMCPTransport({
-            command: server.command,
-            args: server.args ?? [],
-            env: mcpChildEnv(server.env),
-          }),
-        }),
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error('connect timeout')), CONNECT_TIMEOUT_MS)
-        }),
-      ])
+      const client = await raceConnectWithCleanup(
+        () => createMCPClient({ transport }),
+        CONNECT_TIMEOUT_MS,
+        () => transport.close(),
+      )
       clients.push(client)
       const serverTools = wrapMcpToolsWithGuards(await client.tools())
       for (const [name, toolDef] of Object.entries(serverTools)) {
