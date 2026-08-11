@@ -1338,7 +1338,7 @@ export type ContextPacketExchangeKind = 'chat' | 'day_analysis'
 
 export interface ContextPacketRow {
   id: string
-  purpose: 'answer' | 'interpret'
+  purpose: ContextPurpose
   exchange_kind: ContextPacketExchangeKind
   thread_id: number | null
   message_id: number | null
@@ -1364,10 +1364,31 @@ export interface StoredContextPacket {
   packet: ContextPacket
 }
 
+export interface StoredContextDisclosure {
+  packetId: string
+  itemIndex: number
+  threadId: number | null
+  messageId: number | null
+  destination: string
+  leftDevice: boolean
+  policyVersion: number
+  createdAt: number
+  item: ContextPacketItem
+}
+
+export interface DeleteThreadContextResult {
+  packetsDeleted: number
+  fileDisclosuresDeleted: number
+}
+
 export function contextPacketsAvailable(db: Database.Database): boolean {
   return db.prepare(
     `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'context_packets'`,
   ).get() != null
+}
+
+function packetFileDisclosureReason(packetId: string): string {
+  return `Included in context packet ${packetId}`
 }
 
 /**
@@ -1386,45 +1407,49 @@ export function recordContextPacket(
     scopeKey?: string | null
   },
 ): void {
-  if (!contextPacketsAvailable(db)) return
-  db.prepare(`
-    INSERT INTO context_packets (
-      id, purpose, exchange_kind, thread_id, message_id, scope_key, question,
-      destination, left_device, policy_version, item_count, content_fingerprint,
-      packet_json, created_at
-    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    packet.id,
-    packet.purpose,
-    meta.exchangeKind,
-    meta.threadId ?? null,
-    meta.scopeKey ?? null,
-    packet.request.originalText,
-    packet.disclosure.destination,
-    packet.disclosure.leftDevice ? 1 : 0,
-    packet.policyVersion,
-    packet.disclosure.itemCount,
-    packet.contentFingerprint,
-    JSON.stringify(packet),
-    packet.assembledAt,
-  )
-  for (const item of packet.items) {
-    if (item.kind !== 'file_excerpt' || !packet.disclosure.leftDevice) continue
-    try {
+  if (!contextPacketsAvailable(db)) {
+    throw new Error('Context packet storage is unavailable')
+  }
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO context_packets (
+        id, purpose, exchange_kind, thread_id, message_id, scope_key, question,
+        destination, left_device, policy_version, item_count, content_fingerprint,
+        packet_json, created_at
+      ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      packet.id,
+      packet.purpose,
+      meta.exchangeKind,
+      meta.threadId ?? null,
+      meta.scopeKey ?? null,
+      packet.request.originalText,
+      packet.disclosure.destination,
+      packet.disclosure.leftDevice ? 1 : 0,
+      packet.policyVersion,
+      packet.disclosure.itemCount,
+      packet.contentFingerprint,
+      JSON.stringify(packet),
+      packet.assembledAt,
+    )
+    for (const item of packet.items) {
+      if (
+        item.kind !== 'file_excerpt'
+        || !item.identity.startsWith('file:')
+        || !packet.disclosure.leftDevice
+      ) continue
       recordFileDisclosure(db, {
         threadId: meta.threadId ?? null,
         filePath: item.identity.slice('file:'.length),
         versionFingerprint: item.version ?? 'unversioned',
         excerptStart: 0,
         excerptEnd: item.statement.length,
-        reason: `Included in context packet ${packet.id}`,
+        reason: packetFileDisclosureReason(packet.id),
         sensitivity: item.sensitivity,
         destination: packet.disclosure.destination,
       })
-    } catch (error) {
-      console.warn('[contextPacket] file disclosure ledger write failed', error)
     }
-  }
+  })()
 }
 
 /** Bind the packet to the persisted assistant message once it exists, so
@@ -1435,7 +1460,17 @@ export function linkContextPacketToMessage(
   messageId: number,
 ): void {
   if (!contextPacketsAvailable(db)) return
-  db.prepare(`UPDATE context_packets SET message_id = ? WHERE id = ?`).run(messageId, packetId)
+  db.transaction(() => {
+    const packetResult = db.prepare(`
+      UPDATE context_packets SET message_id = ? WHERE id = ?
+    `).run(messageId, packetId)
+    if (packetResult.changes === 0) return
+    db.prepare(`
+      UPDATE file_disclosures
+      SET message_id = ?
+      WHERE reason = ?
+    `).run(messageId, packetFileDisclosureReason(packetId))
+  })()
 }
 
 function rowToStored(row: ContextPacketRow): StoredContextPacket {
@@ -1472,6 +1507,49 @@ export function getContextPacketForMessage(
     SELECT * FROM context_packets WHERE message_id = ? ORDER BY created_at DESC LIMIT 1
   `).get(messageId) as ContextPacketRow | undefined
   return row ? rowToStored(row) : null
+}
+
+export function getContextDisclosuresForPacket(
+  db: Database.Database,
+  packetId: string,
+): StoredContextDisclosure[] {
+  const stored = getContextPacketById(db, packetId)
+  if (!stored) return []
+  return stored.packet.items.map((item, itemIndex) => ({
+    packetId: stored.id,
+    itemIndex,
+    threadId: stored.threadId,
+    messageId: stored.messageId,
+    destination: stored.destination,
+    leftDevice: stored.packet.disclosure.leftDevice,
+    policyVersion: stored.packet.policyVersion,
+    createdAt: stored.createdAt,
+    item,
+  }))
+}
+
+/** Remove every packet and file disclosure owned by a thread.
+ *  The AI-thread lifecycle owner can call this interface as part of its broader
+ *  message, artifact, checkpoint, and context cleanup transaction. */
+export function deleteContextPacketsForThread(
+  db: Database.Database,
+  threadId: number,
+): DeleteThreadContextResult {
+  return db.transaction(() => {
+    const fileDisclosuresAvailable = db.prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'file_disclosures'`,
+    ).get() != null
+    const fileDisclosuresDeleted = fileDisclosuresAvailable
+      ? db.prepare(`DELETE FROM file_disclosures WHERE thread_id = ?`).run(threadId).changes
+      : 0
+    const packetsDeleted = contextPacketsAvailable(db)
+      ? db.prepare(`DELETE FROM context_packets WHERE thread_id = ?`).run(threadId).changes
+      : 0
+    return {
+      packetsDeleted,
+      fileDisclosuresDeleted,
+    }
+  })()
 }
 
 export function listContextPackets(

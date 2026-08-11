@@ -3313,6 +3313,52 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 80,
+    description:
+      'Agent Runtime context disclosure storage (WO-68): widen context_packets purpose to include action runs while preserving the complete pre-provider packet, destination, message link, and disclosure JSON. LOCAL-ONLY — no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+      const contextPacketsSql = getTableSql('context_packets') ?? ''
+      if (!contextPacketsSql) {
+        throw new Error('context_packets is unavailable before migration v80')
+      }
+      if (contextPacketsSql.includes("'act'")) return
+      db.exec(`
+        CREATE TABLE context_packets_v80 (
+          id                  TEXT PRIMARY KEY,
+          purpose             TEXT NOT NULL CHECK(purpose IN ('answer', 'interpret', 'act')),
+          exchange_kind       TEXT NOT NULL CHECK(exchange_kind IN ('chat', 'day_analysis')),
+          thread_id           INTEGER,
+          message_id          INTEGER,
+          scope_key           TEXT,
+          question            TEXT NOT NULL,
+          destination         TEXT NOT NULL,
+          left_device         INTEGER NOT NULL DEFAULT 1,
+          policy_version      INTEGER NOT NULL,
+          item_count          INTEGER NOT NULL,
+          content_fingerprint TEXT NOT NULL,
+          packet_json         TEXT NOT NULL,
+          created_at          INTEGER NOT NULL
+        );
+        INSERT INTO context_packets_v80 (
+          id, purpose, exchange_kind, thread_id, message_id, scope_key, question,
+          destination, left_device, policy_version, item_count, content_fingerprint,
+          packet_json, created_at
+        )
+        SELECT
+          id, purpose, exchange_kind, thread_id, message_id, scope_key, question,
+          destination, left_device, policy_version, item_count, content_fingerprint,
+          packet_json, created_at
+        FROM context_packets;
+        DROP TABLE context_packets;
+        ALTER TABLE context_packets_v80 RENAME TO context_packets;
+        CREATE INDEX idx_context_packets_message ON context_packets (message_id);
+        CREATE INDEX idx_context_packets_thread ON context_packets (thread_id, created_at DESC);
+        CREATE INDEX idx_context_packets_scope ON context_packets (exchange_kind, scope_key, created_at DESC);
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0
