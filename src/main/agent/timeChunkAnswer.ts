@@ -1,4 +1,4 @@
-import { isUsefulLabel, naturalizeLabel } from '@shared/blockLabel'
+import { isUsefulLabel, labelIsCategoryFloor, naturalizeLabel } from '@shared/blockLabel'
 import { rawLabelForm } from '@shared/labelVoice'
 
 interface TimeChunkActivity {
@@ -79,12 +79,13 @@ function describableTitle(value: string | null | undefined): string | null {
  * verbatim: applying `rawLabelForm` here would strip a person's own name for
  * the stretch (AC-VIC-004). A generic floor label ("Development", "Browsing")
  * is not a description — leave the subject empty so captured titles can name
- * the actual work instead of burying it under the category word.
+ * the actual work instead of burying it under the category word. The same holds
+ * for the other floors ("Entertainment", "Cursor and Chrome — activity").
  */
 function finalizedBlockLabel(value: string | null | undefined): string | null {
   const text = value?.trim()
   if (!text) return null
-  if (!isUsefulLabel(text)) return null
+  if (!isUsefulLabel(text) || labelIsCategoryFloor(text)) return null
   return concise(text)
 }
 

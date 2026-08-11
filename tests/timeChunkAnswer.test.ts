@@ -186,6 +186,46 @@ test('a generic floor label does not bury a captured window title', () => {
   assert.match(answer!, /Implement OAuth callback validation \(Chrome\)/)
 })
 
+test('an app-list floor label does not bury a captured window title', () => {
+  const answer = renderTimeChunkAnswer({
+    found: true,
+    date: '2026-08-01',
+    incrementMinutes: 30,
+    chunks: [{
+      startTime: '13:00',
+      endTime: '13:30',
+      durationMinutes: 30,
+      blockLabel: 'Cursor and Chrome — activity',
+      activity: [{ appName: 'Cursor', windowTitle: 'Rewrite the export queue retry', seconds: 1800 }],
+      pages: [],
+      gap: null,
+    }],
+  })
+  assert.ok(answer)
+  assert.doesNotMatch(answer!, /— activity/)
+  assert.match(answer!, /Rewrite the export queue retry \(Cursor\)/)
+})
+
+test('a category floor outside the generic list still yields to the title', () => {
+  const answer = renderTimeChunkAnswer({
+    found: true,
+    date: '2026-08-01',
+    incrementMinutes: 30,
+    chunks: [{
+      startTime: '20:00',
+      endTime: '20:30',
+      durationMinutes: 30,
+      blockLabel: 'Entertainment',
+      activity: [{ appName: 'Chrome', windowTitle: 'Chelsea vs Arsenal highlights', seconds: 1800 }],
+      pages: [],
+      gap: null,
+    }],
+  })
+  assert.ok(answer)
+  assert.doesNotMatch(answer!, /\bEntertainment\b/)
+  assert.match(answer!, /Chelsea vs Arsenal highlights \(Chrome\)/)
+})
+
 test('AC-VIC-003.1 / AC-VIC-003.2: idle gaps never judge the person', () => {
   const answer = renderTimeChunkAnswer({
     found: true,
