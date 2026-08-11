@@ -36,8 +36,10 @@ import {
   addEntityAlias,
   addEntityEvidenceRef,
   addEntityRelationship,
+  resolveApplicationEntity,
   resolveMeetingEntity,
   resolveMergeChain,
+  resolvePageEntity,
   resolvePersonEntity,
   resolveProjectEntity,
   resolveRepositoryEntity,
@@ -65,19 +67,13 @@ function adoptClients(db: Database.Database): void {
     id: string; name: string; status: string; created_at: number; updated_at: number
   }>
   for (const client of clients) {
-    const entity = upsertEntity(db, {
-      type: 'client',
-      identityKey: `supplied:${client.id}`,
-      name: client.name,
-      origin: 'supplied',
+    ensureSuppliedClientEntity(db, {
       id: client.id,
+      name: client.name,
       observedAt: client.created_at,
+      aliases: (db.prepare(`SELECT alias, source FROM client_aliases WHERE client_id = ?`)
+        .all(client.id) as Array<{ alias: string; source: string }>),
     })
-    const aliases = db.prepare(`SELECT alias, source FROM client_aliases WHERE client_id = ?`)
-      .all(client.id) as Array<{ alias: string; source: string }>
-    for (const alias of aliases) {
-      addEntityAlias(db, entity.id, alias.alias, { rawLabel: alias.alias, source: alias.source })
-    }
   }
 }
 
@@ -86,23 +82,195 @@ function adoptProjects(db: Database.Database): void {
     id: string; client_id: string | null; name: string; created_at: number
   }>
   for (const project of projects) {
-    const entity = upsertEntity(db, {
-      type: 'project',
-      identityKey: `supplied:${project.id}`,
-      name: project.name,
-      origin: 'supplied',
+    ensureSuppliedProjectEntity(db, {
       id: project.id,
+      name: project.name,
+      clientId: project.client_id,
       observedAt: project.created_at,
+      aliases: (db.prepare(`SELECT alias, source FROM project_aliases WHERE project_id = ?`)
+        .all(project.id) as Array<{ alias: string; source: string }>),
     })
-    const aliases = db.prepare(`SELECT alias, source FROM project_aliases WHERE project_id = ?`)
-      .all(project.id) as Array<{ alias: string; source: string }>
-    for (const alias of aliases) {
-      addEntityAlias(db, entity.id, alias.alias, { rawLabel: alias.alias, source: alias.source })
-    }
-    if (project.client_id && db.prepare(`SELECT 1 FROM entities WHERE id = ?`).get(project.client_id)) {
-      addEntityRelationship(db, entity.id, project.client_id, 'belongs_to', { source: 'user', confidence: 1 })
-    }
   }
+}
+
+/** Create or update the supplied client entity in the same identity as the
+ *  legacy clients row. Call inside the creation/update transaction. */
+export function ensureSuppliedClientEntity(
+  db: Database.Database,
+  input: {
+    id: string
+    name: string
+    observedAt?: number
+    aliases?: Array<{ alias: string; source?: string }>
+  },
+): EntityRow {
+  const entity = upsertEntity(db, {
+    type: 'client',
+    identityKey: `supplied:${input.id}`,
+    name: input.name,
+    origin: 'supplied',
+    id: input.id,
+    observedAt: input.observedAt ?? Date.now(),
+  })
+  addEntityAlias(db, entity.id, input.name, { rawLabel: input.name, source: 'user' })
+  for (const alias of input.aliases ?? []) {
+    addEntityAlias(db, entity.id, alias.alias, { rawLabel: alias.alias, source: alias.source ?? 'user' })
+  }
+  return entity
+}
+
+/** Create or update the supplied project entity and, when associated, the
+ *  project→client belongs_to relationship (AC-SM-EA-001.3 / 001.4). */
+export function ensureSuppliedProjectEntity(
+  db: Database.Database,
+  input: {
+    id: string
+    name: string
+    clientId?: string | null
+    observedAt?: number
+    aliases?: Array<{ alias: string; source?: string }>
+  },
+): EntityRow {
+  const entity = upsertEntity(db, {
+    type: 'project',
+    identityKey: `supplied:${input.id}`,
+    name: input.name,
+    origin: 'supplied',
+    id: input.id,
+    observedAt: input.observedAt ?? Date.now(),
+  })
+  addEntityAlias(db, entity.id, input.name, { rawLabel: input.name, source: 'user' })
+  for (const alias of input.aliases ?? []) {
+    addEntityAlias(db, entity.id, alias.alias, { rawLabel: alias.alias, source: alias.source ?? 'user' })
+  }
+  if (input.clientId && db.prepare(`SELECT 1 FROM entities WHERE id = ?`).get(input.clientId)) {
+    addEntityRelationship(db, entity.id, input.clientId, 'belongs_to', {
+      source: 'user',
+      confidence: 1,
+    })
+  }
+  return entity
+}
+
+/**
+ * Live write-through for an app_identities observation (WO-30). Mirrors
+ * adoptApplications so capture does not wait for backfill.
+ */
+export function adoptAppIdentityWrite(
+  db: Database.Database,
+  input: {
+    appInstanceId: string
+    canonicalAppId?: string | null
+    displayName: string
+    rawAppName?: string | null
+    observedAt?: number
+  },
+): EntityRow {
+  const entity = resolveApplicationEntity(db, {
+    canonicalAppId: input.canonicalAppId,
+    appInstanceId: input.appInstanceId,
+    displayName: input.displayName,
+    observedAt: input.observedAt,
+    id: input.appInstanceId,
+  })
+  if (input.rawAppName?.trim()) {
+    addEntityAlias(db, entity.id, input.rawAppName, {
+      rawLabel: input.rawAppName,
+      source: 'observed',
+    })
+  }
+  addEntityEvidenceRef(db, entity.id, {
+    sourceType: 'app_identity',
+    sourceId: input.appInstanceId,
+  })
+  return entity
+}
+
+/**
+ * Live write-through for an artifacts row (WO-30). Call after upsertArtifact
+ * once the owning lane wires it — helpers live here so capture writers stay
+ * thin.
+ */
+export function adoptArtifactWrite(
+  db: Database.Database,
+  input: {
+    id: string
+    artifactType: string
+    canonicalKey: string
+    displayTitle: string
+    firstSeenAt?: number
+    lastSeenAt?: number
+  },
+): EntityRow | null {
+  const typeMap: Record<string, 'page' | 'file' | 'repository'> = {
+    page: 'page',
+    domain: 'page',
+    document: 'file',
+    repo: 'repository',
+  }
+  const entityType = typeMap[input.artifactType]
+  if (!entityType) return null
+  const identityKey = entityType === 'repository'
+    ? `local:${normalizeEntityLabel(input.displayTitle)}`
+    : `${entityType === 'page' ? 'page' : 'file'}:${input.canonicalKey}`
+  const entity = upsertEntity(db, {
+    type: entityType,
+    identityKey,
+    name: input.displayTitle,
+    origin: 'observed',
+    id: input.id,
+    observedAt: input.firstSeenAt,
+    metadata: entityType === 'repository' ? { provisionalLocalIdentity: true } : {},
+  })
+  if (input.lastSeenAt != null) {
+    upsertEntity(db, {
+      type: entityType,
+      identityKey: entity.identity_key,
+      name: input.displayTitle,
+      origin: 'observed',
+      observedAt: input.lastSeenAt,
+    })
+  }
+  addEntityAlias(db, entity.id, input.displayTitle, {
+    rawLabel: input.displayTitle,
+    source: 'observed',
+  })
+  addEntityEvidenceRef(db, entity.id, { sourceType: 'artifact', sourceId: input.id })
+  return entity
+}
+
+/**
+ * Live write-through for a website visit host (WO-30). Mint/update a page
+ * entity keyed by the normalized domain so connected browsing evidence has a
+ * durable graph identity before consumers read it.
+ */
+export function adoptWebsiteVisitWrite(
+  db: Database.Database,
+  input: {
+    domain: string
+    title?: string | null
+    visitId?: string | number | null
+    observedAt?: number
+  },
+): EntityRow | null {
+  const domain = input.domain.trim().toLowerCase()
+  if (!domain) return null
+  const name = input.title?.trim() || domain
+  const entity = resolvePageEntity(db, {
+    canonicalKey: `domain:${domain}`,
+    title: name,
+    observedAt: input.observedAt,
+  })
+  addEntityAlias(db, entity.id, domain, { rawLabel: domain, source: 'observed' })
+  if (input.visitId != null) {
+    addEntityEvidenceRef(db, entity.id, {
+      sourceType: 'website_visit',
+      sourceId: String(input.visitId),
+      spanStartMs: input.observedAt ?? null,
+      spanEndMs: input.observedAt ?? null,
+    })
+  }
+  return entity
 }
 
 function adoptApplications(db: Database.Database): void {

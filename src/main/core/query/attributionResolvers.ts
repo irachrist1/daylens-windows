@@ -8,6 +8,19 @@ import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../../services/database'
 import { deriveClientAliasTokens } from '../../lib/clientAliases'
+import {
+  mergeGroupIds,
+  normalizeEntityLabel,
+  resolveEntityByLabel,
+  resolveMergeChain,
+  type EntityRow,
+  type ResolveByLabelResult,
+} from '../../services/entities/entityRepository'
+import {
+  ensureSuppliedClientEntity,
+  ensureSuppliedProjectEntity,
+} from '../../services/entities/entityAdoption'
+import { refreshEntitySearchTags } from '../../services/entities/entitySearchTags'
 
 // ─── Shared row types ────────────────────────────────────────────────────────
 
@@ -487,6 +500,39 @@ function trackedWorkRange(db: Database.Database): { startMs: number; endMs: numb
 
 // ─── resolveClientQuery ─────────────────────────────────────────────────────
 
+function entityTargetNameAndAliases(
+  db: Database.Database,
+  entityId: string,
+  fallbackName: string,
+  legacyAliases: string[],
+): { name: string; aliases: string[] } {
+  let entity: EntityRow | undefined
+  try {
+    entity = db.prepare(`SELECT * FROM entities WHERE id = ?`).get(entityId) as EntityRow | undefined
+  } catch {
+    return { name: fallbackName, aliases: legacyAliases }
+  }
+  if (!entity) {
+    return { name: fallbackName, aliases: legacyAliases }
+  }
+  const survivor = resolveMergeChain(db, entity)
+  if (survivor.status === 'deleted') {
+    return { name: fallbackName, aliases: legacyAliases }
+  }
+  const groupIds = mergeGroupIds(db, survivor.id)
+  const marks = groupIds.map(() => '?').join(', ')
+  const graphAliases = (db.prepare(`
+    SELECT DISTINCT alias FROM entity_aliases WHERE entity_id IN (${marks}) ORDER BY alias ASC
+  `).all(...groupIds) as Array<{ alias: string }>).map((row) => row.alias)
+  const canonical = survivor.canonical_name
+  const aliasSet = new Set<string>()
+  for (const alias of [...graphAliases, ...legacyAliases]) {
+    if (normalizeEntityLabel(alias) === normalizeEntityLabel(canonical)) continue
+    aliasSet.add(alias)
+  }
+  return { name: canonical, aliases: [...aliasSet] }
+}
+
 export function resolveClientQuery(
   clientId: string,
   fromMs: number,
@@ -498,9 +544,10 @@ export function resolveClientQuery(
   const client = db.prepare(`SELECT id, name FROM clients WHERE id = ?`).get(clientId) as ClientRow | undefined
   if (!client) return null
 
-  const aliases = (db.prepare(`
+  const legacyAliases = (db.prepare(`
     SELECT alias FROM client_aliases WHERE client_id = ?
   `).all(clientId) as ClientAliasRow[]).map((r) => r.alias)
+  const target = entityTargetNameAndAliases(db, clientId, client.name, legacyAliases)
 
   const projectMap = new Map<string, string>()
   const projects = db.prepare(`SELECT id, name FROM projects WHERE client_id = ?`).all(clientId) as ProjectRow[]
@@ -600,8 +647,8 @@ export function resolveClientQuery(
     },
     target: {
       client_id: client.id,
-      client_name: client.name,
-      aliases,
+      client_name: target.name,
+      aliases: target.aliases,
     },
     totals: {
       attributed_ms: attributedMs,
@@ -637,9 +684,13 @@ export function resolveProjectQuery(
     ? db.prepare(`SELECT id, name FROM clients WHERE id = ?`).get(project.client_id) as ClientRow | undefined
     : undefined
 
-  const aliases = (db.prepare(`
+  const legacyAliases = (db.prepare(`
     SELECT alias FROM project_aliases WHERE project_id = ?
   `).all(projectId) as ProjectAliasRow[]).map((row) => row.alias)
+  const target = entityTargetNameAndAliases(db, projectId, project.name, legacyAliases)
+  const clientName = client
+    ? entityTargetNameAndAliases(db, client.id, client.name, []).name
+    : null
 
   const appNameMap = loadAppNameMap(db)
   const sessions = db.prepare(`
@@ -666,7 +717,7 @@ export function resolveProjectQuery(
       active_ms: ws.active_ms,
       attribution_status: ws.attribution_status,
       project_id: ws.project_id,
-      project_name: project.name,
+      project_name: target.name,
       confidence: ws.attribution_confidence,
       title: ws.title,
       apps: sessionApps(db, ws.id, appNameMap),
@@ -683,10 +734,10 @@ export function resolveProjectQuery(
     },
     target: {
       project_id: project.id,
-      project_name: project.name,
+      project_name: target.name,
       client_id: client?.id ?? null,
-      client_name: client?.name ?? null,
-      aliases,
+      client_name: clientName,
+      aliases: target.aliases,
     },
     totals: {
       attributed_ms: attributedMs,
@@ -1369,125 +1420,180 @@ export function resolveDayContext(
   }
 }
 
-// ─── Client lookup helpers ──────────────────────────────────────────────────
+// ─── Client / project identity (entity-graph boundary) ───────────────────────
 
-/** Entity-repository alias fallback (DEV-177): resolve a label through
- *  entity_aliases (which keeps rename/merge corrections) to a row of `table`.
- *  Adopted client/project entities keep the source row's id, so the surviving
- *  entity id maps straight back. Tolerates a pre-v50 database. */
-function findViaEntityAliases(
-  db: Database.Database,
-  entityType: 'client' | 'project',
-  normalized: string,
-): string | null {
-  try {
-    const rows = db.prepare(`
-      SELECT e.id, e.status, e.merged_into_id FROM entities e
-      JOIN entity_aliases a ON a.entity_id = e.id
-      WHERE e.entity_type = ? AND a.alias_normalized = ?
-    `).all(entityType, normalized) as Array<{ id: string; status: string; merged_into_id: string | null }>
-    const survivors = new Set<string>()
-    for (const row of rows) {
-      let current = row
-      const seen = new Set([current.id])
-      while (current.status === 'merged' && current.merged_into_id) {
-        const next = db.prepare(`SELECT id, status, merged_into_id FROM entities WHERE id = ?`)
-          .get(current.merged_into_id) as { id: string; status: string; merged_into_id: string | null } | undefined
-        if (!next || seen.has(next.id)) break
-        seen.add(next.id)
-        current = next
-      }
-      if (current.status !== 'deleted') survivors.add(current.id)
+export interface ClientLabelResolution {
+  client: ClientRow | null
+  matchedBy: ResolveByLabelResult['matchedBy']
+  candidates: Array<{ id: string; name: string }>
+}
+
+export interface ProjectLabelResolution {
+  project: ProjectRow | null
+  matchedBy: ResolveByLabelResult['matchedBy']
+  candidates: Array<{ id: string; name: string; client_id: string | null }>
+}
+
+function activeClientRow(db: Database.Database, id: string): ClientRow | null {
+  return db.prepare(`
+    SELECT id, name FROM clients WHERE id = ? AND status = 'active'
+  `).get(id) as ClientRow | undefined ?? null
+}
+
+function activeProjectRow(db: Database.Database, id: string): ProjectRow | null {
+  // LEFT JOIN since v50: a client-less project is resolvable; a project that
+  // HAS a client still requires that client to be active.
+  return db.prepare(`
+    SELECT p.id, p.client_id, p.name FROM projects p
+    LEFT JOIN clients c ON c.id = p.client_id
+    WHERE p.id = ? AND p.status = 'active'
+      AND (p.client_id IS NULL OR c.status = 'active')
+  `).get(id) as ProjectRow | undefined ?? null
+}
+
+function legacyExactClientMatch(db: Database.Database, normalized: string): ClientRow[] {
+  const byName = db.prepare(`
+    SELECT id, name FROM clients
+    WHERE LOWER(name) = ? AND status = 'active'
+  `).all(normalized) as ClientRow[]
+  if (byName.length > 0) return byName
+  return db.prepare(`
+    SELECT c.id, c.name FROM clients c
+    JOIN client_aliases ca ON ca.client_id = c.id
+    WHERE ca.alias_normalized = ? AND c.status = 'active'
+  `).all(normalized) as ClientRow[]
+}
+
+function legacyExactProjectMatch(db: Database.Database, normalized: string): ProjectRow[] {
+  const clientGate = `(p.client_id IS NULL OR c.status = 'active')`
+  const byName = db.prepare(`
+    SELECT p.id, p.client_id, p.name FROM projects p
+    LEFT JOIN clients c ON c.id = p.client_id
+    WHERE LOWER(p.name) = ? AND p.status = 'active' AND ${clientGate}
+  `).all(normalized) as ProjectRow[]
+  if (byName.length > 0) return byName
+  return db.prepare(`
+    SELECT p.id, p.client_id, p.name FROM projects p
+    JOIN project_aliases pa ON pa.project_id = p.id
+    LEFT JOIN clients c ON c.id = p.client_id
+    WHERE pa.alias_normalized = ? AND p.status = 'active' AND ${clientGate}
+  `).all(normalized) as ProjectRow[]
+}
+
+/**
+ * Resolve a client label through the entity graph first. Ambiguous labels
+ * return candidates and no selected client (AC-SM-EA-002.5). Legacy exact
+ * name/alias match is the fallback when the graph has no hit — never a silent
+ * fuzzy `LIMIT 1`.
+ */
+export function resolveClientByLabel(
+  name: string,
+  db: Database.Database = getDb(),
+): ClientLabelResolution {
+  const normalized = normalizeEntityLabel(name)
+  if (!normalized) return { client: null, matchedBy: null, candidates: [] }
+
+  const graph = resolveEntityByLabel(db, 'client', name)
+  if (graph.entity) {
+    const client = activeClientRow(db, graph.entity.id)
+    return {
+      client,
+      matchedBy: graph.matchedBy,
+      candidates: client
+        ? [{ id: client.id, name: client.name }]
+        : graph.candidates.map((row) => ({ id: row.id, name: row.canonical_name })),
     }
-    return survivors.size === 1 ? [...survivors][0] : null
-  } catch {
-    return null
   }
+  if (graph.candidates.length > 1) {
+    return {
+      client: null,
+      matchedBy: graph.matchedBy,
+      candidates: graph.candidates.map((row) => ({ id: row.id, name: row.canonical_name })),
+    }
+  }
+
+  const legacy = legacyExactClientMatch(db, normalized)
+  if (legacy.length === 1) {
+    return {
+      client: legacy[0],
+      matchedBy: 'canonical',
+      candidates: [{ id: legacy[0].id, name: legacy[0].name }],
+    }
+  }
+  if (legacy.length > 1) {
+    return {
+      client: null,
+      matchedBy: 'canonical',
+      candidates: legacy.map((row) => ({ id: row.id, name: row.name })),
+    }
+  }
+  return { client: null, matchedBy: null, candidates: [] }
+}
+
+export function resolveProjectByLabel(
+  name: string,
+  db: Database.Database = getDb(),
+): ProjectLabelResolution {
+  const normalized = normalizeEntityLabel(name)
+  if (!normalized) return { project: null, matchedBy: null, candidates: [] }
+
+  const graph = resolveEntityByLabel(db, 'project', name)
+  if (graph.entity) {
+    const project = activeProjectRow(db, graph.entity.id)
+    return {
+      project,
+      matchedBy: graph.matchedBy,
+      candidates: project
+        ? [{ id: project.id, name: project.name, client_id: project.client_id }]
+        : graph.candidates.map((row) => ({ id: row.id, name: row.canonical_name, client_id: null })),
+    }
+  }
+  if (graph.candidates.length > 1) {
+    return {
+      project: null,
+      matchedBy: graph.matchedBy,
+      candidates: graph.candidates.map((row) => ({
+        id: row.id,
+        name: row.canonical_name,
+        client_id: null,
+      })),
+    }
+  }
+
+  const legacy = legacyExactProjectMatch(db, normalized)
+  if (legacy.length === 1) {
+    return {
+      project: legacy[0],
+      matchedBy: 'canonical',
+      candidates: [{ id: legacy[0].id, name: legacy[0].name, client_id: legacy[0].client_id }],
+    }
+  }
+  if (legacy.length > 1) {
+    return {
+      project: null,
+      matchedBy: 'canonical',
+      candidates: legacy.map((row) => ({
+        id: row.id,
+        name: row.name,
+        client_id: row.client_id,
+      })),
+    }
+  }
+  return { project: null, matchedBy: null, candidates: [] }
 }
 
 export function findClientByName(
   name: string,
   db: Database.Database = getDb(),
 ): ClientRow | null {
-  const normalized = name.toLowerCase().trim()
-
-  // Direct name match
-  const direct = db.prepare(`
-    SELECT id, name FROM clients
-    WHERE LOWER(name) = ? AND status = 'active'
-  `).get(normalized) as ClientRow | undefined
-  if (direct) return direct
-
-  // Alias match
-  const alias = db.prepare(`
-    SELECT c.id, c.name FROM clients c
-    JOIN client_aliases ca ON ca.client_id = c.id
-    WHERE ca.alias_normalized = ? AND c.status = 'active'
-  `).get(normalized) as ClientRow | undefined
-  if (alias) return alias
-
-  // Entity-repository aliases (renames/merges made in Settings → Memory).
-  const entityId = findViaEntityAliases(db, 'client', normalized)
-  if (entityId) {
-    const viaEntity = db.prepare(`
-      SELECT id, name FROM clients WHERE id = ? AND status = 'active'
-    `).get(entityId) as ClientRow | undefined
-    if (viaEntity) return viaEntity
-  }
-
-  // Fuzzy: contains match
-  const fuzzy = db.prepare(`
-    SELECT id, name FROM clients
-    WHERE LOWER(name) LIKE ? AND status = 'active'
-    ORDER BY LENGTH(name) ASC
-    LIMIT 1
-  `).get(`%${normalized}%`) as ClientRow | undefined
-  return fuzzy ?? null
+  return resolveClientByLabel(name, db).client
 }
 
 export function findProjectByName(
   name: string,
   db: Database.Database = getDb(),
 ): ProjectRow | null {
-  const normalized = name.toLowerCase().trim()
-  // LEFT JOIN since v50: a client-less project is resolvable; a project that
-  // HAS a client still requires that client to be active.
-  const clientGate = `(p.client_id IS NULL OR c.status = 'active')`
-
-  const direct = db.prepare(`
-    SELECT p.id, p.client_id, p.name FROM projects p
-    LEFT JOIN clients c ON c.id = p.client_id
-    WHERE LOWER(p.name) = ? AND p.status = 'active' AND ${clientGate}
-  `).get(normalized) as ProjectRow | undefined
-  if (direct) return direct
-
-  const alias = db.prepare(`
-    SELECT p.id, p.client_id, p.name FROM projects p
-    JOIN project_aliases pa ON pa.project_id = p.id
-    LEFT JOIN clients c ON c.id = p.client_id
-    WHERE pa.alias_normalized = ? AND p.status = 'active' AND ${clientGate}
-  `).get(normalized) as ProjectRow | undefined
-  if (alias) return alias
-
-  // Entity-repository aliases (renames/merges made in Settings → Memory).
-  const entityId = findViaEntityAliases(db, 'project', normalized)
-  if (entityId) {
-    const viaEntity = db.prepare(`
-      SELECT p.id, p.client_id, p.name FROM projects p
-      LEFT JOIN clients c ON c.id = p.client_id
-      WHERE p.id = ? AND p.status = 'active' AND ${clientGate}
-    `).get(entityId) as ProjectRow | undefined
-    if (viaEntity) return viaEntity
-  }
-
-  const fuzzy = db.prepare(`
-    SELECT p.id, p.client_id, p.name FROM projects p
-    LEFT JOIN clients c ON c.id = p.client_id
-    WHERE LOWER(p.name) LIKE ? AND p.status = 'active' AND ${clientGate}
-    ORDER BY LENGTH(p.name) ASC
-    LIMIT 1
-  `).get(`%${normalized}%`) as ProjectRow | undefined
-  return fuzzy ?? null
+  return resolveProjectByLabel(name, db).project
 }
 
 export function listClients(
@@ -1538,8 +1644,16 @@ export function createProject(
       INSERT INTO project_aliases (id, project_id, alias, alias_normalized, source, created_at)
       VALUES (?, ?, ?, ?, 'user', ?)
     `).run(randomUUID(), id, name, normalizeAlias(name), now)
+    ensureSuppliedProjectEntity(db, {
+      id,
+      name,
+      clientId: payload.clientId ?? null,
+      observedAt: now,
+      aliases: [{ alias: name, source: 'user' }],
+    })
   })
   tx()
+  refreshEntitySearchTags(db, id)
   return { id, client_id: payload.clientId ?? null, name }
 }
 
@@ -1659,8 +1773,13 @@ export function createClient(
     // Also seed short aliases ("Andersen" for "Andersen in Rwanda") so chat
     // references resolve the scope without the full name (memory.md §2.2).
     seedClientAliasTokens(db, id, name, now)
+    const aliases = (db.prepare(`
+      SELECT alias, source FROM client_aliases WHERE client_id = ?
+    `).all(id) as Array<{ alias: string; source: string }>)
+    ensureSuppliedClientEntity(db, { id, name, observedAt: now, aliases })
   })
   tx()
+  refreshEntitySearchTags(db, id)
 
   return { id, name, color, status: 'active', created_at: now, updated_at: now, projectCount: 0 }
 }
@@ -1703,8 +1822,18 @@ export function updateClient(
       // Keep short aliases in sync with the new name (memory.md §2.2).
       seedClientAliasTokens(db, payload.id, finalName, now)
     }
+    const aliases = (db.prepare(`
+      SELECT alias, source FROM client_aliases WHERE client_id = ?
+    `).all(payload.id) as Array<{ alias: string; source: string }>)
+    ensureSuppliedClientEntity(db, {
+      id: payload.id,
+      name: finalName,
+      observedAt: now,
+      aliases,
+    })
   })
   tx()
+  if (renaming) refreshEntitySearchTags(db, payload.id)
 
   const projectCount = (db.prepare(`SELECT COUNT(*) AS cnt FROM projects WHERE client_id = ? AND status = 'active'`).get(payload.id) as { cnt: number }).cnt
   return {
