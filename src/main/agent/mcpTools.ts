@@ -19,11 +19,20 @@ export interface McpServerConfig {
   command: string
   args?: string[]
   env?: Record<string, string>
+  /** When false, the server is kept in settings but not connected. Absent
+   *  means enabled, so existing stored configs without the field keep working. */
+  enabled?: boolean
 }
+
+export type McpServerStatus =
+  | { name: string; status: 'connected' }
+  | { name: string; status: 'skipped'; reason: string }
+  | { name: string; status: 'failed'; reason: string }
 
 export interface McpToolPool {
   tools: ToolSet
   close: () => Promise<void>
+  serverStatuses: McpServerStatus[]
 }
 
 const CONNECT_TIMEOUT_MS = 8_000
@@ -64,14 +73,35 @@ export function wrapMcpToolsWithGuards(tools: ToolSet): ToolSet {
   return wrapped
 }
 
+/** Splits configured servers into those to attempt and those to skip. Pure so
+ *  the decision is testable without spawning subprocesses. A server without
+ *  `enabled` is treated as enabled — backward compatible with configs stored
+ *  before the field existed. */
+export function selectConnectableMcpServers(
+  servers: McpServerConfig[],
+): { connectable: McpServerConfig[]; skipped: McpServerStatus[] } {
+  const connectable: McpServerConfig[] = []
+  const skipped: McpServerStatus[] = []
+  for (const server of servers) {
+    if (server.enabled === false) {
+      skipped.push({ name: server.name, status: 'skipped', reason: 'disabled in settings' })
+    } else {
+      connectable.push(server)
+    }
+  }
+  return { connectable, skipped }
+}
+
 export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpToolPool> {
   if (isRealDayHarness()) {
-    return { tools: {}, close: async () => undefined }
+    return { tools: {}, close: async () => undefined, serverStatuses: [] }
   }
+  const { connectable, skipped } = selectConnectableMcpServers(servers)
   const clients: Array<{ close: () => Promise<void> }> = []
   const tools: ToolSet = {}
+  const statuses: McpServerStatus[] = [...skipped]
 
-  await Promise.all(servers.map(async (server) => {
+  await Promise.all(connectable.map(async (server) => {
     try {
       const client = await Promise.race([
         createMCPClient({
@@ -91,13 +121,17 @@ export async function connectMcpTools(servers: McpServerConfig[]): Promise<McpTo
         // Namespace to avoid collisions between servers and with built-ins.
         tools[`mcp_${server.name}_${name}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 64)] = toolDef
       }
+      statuses.push({ name: server.name, status: 'connected' })
     } catch (error) {
-      console.warn(`[agent:mcp] skipping server "${server.name}": ${error instanceof Error ? error.message : String(error)}`)
+      const reason = error instanceof Error ? error.message : String(error)
+      console.warn(`[agent:mcp] skipping server "${server.name}": ${reason}`)
+      statuses.push({ name: server.name, status: 'failed', reason })
     }
   }))
 
   return {
     tools,
+    serverStatuses: statuses,
     close: async () => {
       await Promise.allSettled(clients.map((client) => client.close()))
     },
