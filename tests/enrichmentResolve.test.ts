@@ -135,7 +135,7 @@ test('notes: a stored notes signal resolves into sanitized meetingNotes', () => 
     notes: [
       {
         title: 'Andersen Weekly AI Training',
-        participants: ['Norman', 'catherine@alueducation.com', 'Husna Doe'],
+        participants: ['Norman', 'priya@example-college.edu', 'Husna Doe'],
         actionItems: ['agreed to revise the onboarding timeline', 'follow up on the model comparison in src/eval/run.ts'],
       },
     ],

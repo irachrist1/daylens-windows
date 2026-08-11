@@ -7,6 +7,7 @@ import type {
   AppCategory,
   AppSettings,
   AppTheme,
+  SummaryVoice,
   AppUsageSummary,
   BillingAccessSnapshot,
   BillingUsageReport,
@@ -39,6 +40,7 @@ import { ALL_ACTIVITY_CATEGORY_OPTIONS } from '@shared/activityCategories'
 import { claudeDesktopConfigDisplayPath } from '@shared/platformPaths'
 import { describeMcpConnection, type McpClientConfig } from '@shared/mcpConnection'
 import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
+import { VOICE_SAMPLES, normalizeSummaryVoice } from '@shared/summaryVoice'
 import { useCompactLayout } from '../hooks/useCompactLayout'
 
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = ALL_ACTIVITY_CATEGORY_OPTIONS
@@ -3079,6 +3081,31 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   onChange={(event) => void persist({ userName: event.target.value })}
                   style={inputStyle(240)}
                 />
+              }
+            />
+            <SettingsRow
+              align="start"
+              title="Recap voice"
+              description="How recaps, briefs, wraps and the AI answer sound. Takes effect the next time a recap is opened."
+              control={
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+                  <Segmented<SummaryVoice>
+                    value={normalizeSummaryVoice(settings.summaryVoice)}
+                    options={VOICE_SAMPLES.map((v) => ({ value: v.voice, label: v.label }))}
+                    onChange={(value) => void persist({ summaryVoice: value })}
+                  />
+                  {(() => {
+                    const active = normalizeSummaryVoice(settings.summaryVoice)
+                    const sample = VOICE_SAMPLES.find((v) => v.voice === active)
+                    if (!sample) return null
+                    return (
+                      <div style={{ maxWidth: 380, textAlign: 'right' }}>
+                        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 4 }}>{sample.tagline}</div>
+                        <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>{sample.sample}</div>
+                      </div>
+                    )
+                  })()}
+                </div>
               }
             />
             <SettingsRow

@@ -274,9 +274,9 @@ test('an email address is never a label', () => {
   // Lifted out of a Microsoft Teams calendar window title, this named two of
   // one day's ten blocks. The bare-domain rule missed it: the "@" stops the
   // whole string matching a domain.
-  assert.equal(rawLabelForm('christian.tonny@rw.Andersen.com'), 'email address')
-  assert.ok(failedRules('christian.tonny@rw.Andersen.com').includes('no-raw-artifact-forms'))
-  assert.ok(failedRules('Replying to christian.tonny@rw.Andersen.com').includes('no-raw-artifact-forms'))
+  assert.equal(rawLabelForm('dana.okafor@rw.meridian-example.com'), 'email address')
+  assert.ok(failedRules('dana.okafor@rw.meridian-example.com').includes('no-raw-artifact-forms'))
+  assert.ok(failedRules('Replying to dana.okafor@rw.meridian-example.com').includes('no-raw-artifact-forms'))
 })
 
 test('two site names joined by a plus are not a label', () => {

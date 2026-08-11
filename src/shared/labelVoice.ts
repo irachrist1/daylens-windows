@@ -136,9 +136,9 @@ const BARE_DATE_RE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/
 const BARE_DOMAIN_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|io|dev|app|net|ai|co|edu|gov)$/i
 // An email address is a machine form wherever it sits in the label. The bare-
 // domain rule missed these because the "@" stops the whole string matching, so
-// two of one real day's ten blocks were headlined
-// "christian.tonny@rw.Andersen.com" — lifted out of a Microsoft Teams calendar
-// window title. An address is never what a person was doing.
+// two of one real day's ten blocks were headlined with the owner's own work
+// address, lifted out of a Microsoft Teams calendar window title. An address is
+// never what a person was doing.
 const EMAIL_ADDRESS_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
 const TRAILING_BROWSER_RE =
   /\s[-—–]\s(?:Google Chrome|Safari|Arc|Firefox|Brave|Microsoft Edge|Chrome|Dia)$/i

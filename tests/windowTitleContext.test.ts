@@ -43,7 +43,7 @@ test('chrome titles and the app own name carry no context', () => {
 
 test('emails are stripped from labels', () => {
   const clusters = clusterWindowTitles('Dia', [
-    { windowTitle: 'Important • g.iradukund1@alustudent.com', durationSeconds: 400 },
+    { windowTitle: 'Important • r.mensah3@example-college.edu', durationSeconds: 400 },
   ])
   for (const c of clusters) {
     assert.ok(!c.label.includes('@'), `email leaked: ${c.label}`)
