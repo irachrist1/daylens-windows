@@ -18,6 +18,25 @@ test('extractNamedEntities captures quoted and filename entities (not bare capit
   assert.ok(!entities.includes('GitHub'))
 })
 
+test('scare quotes around the model\'s own prose are not citations', () => {
+  // A lowercase, digitless quoted phrase is emphasis, not a cited entity.
+  // Flagging one used to cost a full grounding retry: the model re-ran its
+  // whole tool sweep and rewrote a correct answer into defensive prose.
+  const entities = extractNamedEntities(
+    'Not much of a "watching" day. Your "top apps" were quiet, and the branch was "merged, plus" a revert.',
+  )
+  assert.deepEqual(entities, [])
+
+  const verdict = verifyCitedEntities('Nothing that counts as "watching" happened.', [
+    JSON.stringify({ pages: [{ title: 'Programming Thinking', seconds: 45 }] }),
+  ])
+  assert.equal(verdict.ok, true)
+
+  // A real title still gets checked, even when most of it is lowercase.
+  const real = extractNamedEntities('The block was labeled "Reviewing ML fundamentals".')
+  assert.ok(real.includes('Reviewing ML fundamentals'))
+})
+
 test('verifyCitedEntities passes when entities appear in tool results', () => {
   const result = verifyCitedEntities('Cursor and GitHub appeared together.', [
     JSON.stringify({ app: 'Cursor', page: 'GitHub pull request' }),

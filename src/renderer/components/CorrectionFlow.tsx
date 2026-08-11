@@ -5,8 +5,8 @@
 // main process), shows it in a dialog, applies atomically on confirm, and
 // leaves an Undo toast up until the next correction replaces it. Permanent
 // purges never come through here — they keep their native confirm and no undo.
-import { useCallback, useState, type CSSProperties, type ReactNode } from 'react'
-import type { CorrectionCommand, CorrectionPreview } from '@shared/types'
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import type { CorrectionBlockDelta, CorrectionCommand, CorrectionPreview } from '@shared/types'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { ipc } from '../lib/ipc'
 import { sanitizeIpcError } from '../lib/ipcError'
@@ -43,6 +43,11 @@ export function useCorrectionFlow(onApplied: () => void | Promise<void>): Correc
   const [applied, setApplied] = useState<AppliedCorrection | null>(null)
   const [undoBusy, setUndoBusy] = useState(false)
   const [undoError, setUndoError] = useState<string | null>(null)
+  // The undo toast fades on its own a few seconds after it appears (DEV-230:
+  // the "attended" confirmation used to stay up forever). Hovering it — reaching
+  // for Undo — pauses the timer, and a mid-undo error keeps it up so the failure
+  // isn't lost. A new correction replaces `applied` and restarts the countdown.
+  const [toastHovered, setToastHovered] = useState(false)
 
   const request = useCallback(async (command: CorrectionCommand): Promise<boolean> => {
     const preview = await ipc.db.previewCorrection(command)
@@ -82,6 +87,12 @@ export function useCorrectionFlow(onApplied: () => void | Promise<void>): Correc
     }
   }
 
+  useEffect(() => {
+    if (!applied || toastHovered || undoBusy || undoError) return
+    const timer = setTimeout(() => setApplied(null), 6000)
+    return () => clearTimeout(timer)
+  }, [applied, toastHovered, undoBusy, undoError])
+
   const undo = async () => {
     if (undoBusy || !applied) return
     setUndoBusy(true)
@@ -119,6 +130,7 @@ export function useCorrectionFlow(onApplied: () => void | Promise<void>): Correc
           error={undoError}
           onUndo={() => { void undo() }}
           onDismiss={() => { setApplied(null); setUndoError(null) }}
+          onHoverChange={setToastHovered}
         />
       )}
     </>
@@ -134,6 +146,51 @@ export function useCorrectionFlow(onApplied: () => void | Promise<void>): Correc
 
 const timeOf = (ms: number): string =>
   new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+// A block label can be arbitrarily long (a pasted ticket description); the
+// preview shows at most two lines of it.
+const clampedLabel: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+}
+
+// A merge maps several source blocks onto one surviving block; showing the
+// survivor once per source repeats it and reads as noise. Group deltas that
+// resolve to the same successor so the preview reads "A + B → merged".
+interface DeltaGroup {
+  sources: CorrectionBlockDelta[]
+  after: CorrectionBlockDelta | null
+  categoryChanged: boolean
+}
+
+function groupDeltasBySuccessor(deltas: readonly CorrectionBlockDelta[]): DeltaGroup[] {
+  const groups: DeltaGroup[] = []
+  const byKey = new Map<string, DeltaGroup>()
+  for (const delta of deltas) {
+    if (delta.labelAfter === null) {
+      groups.push({ sources: [delta], after: null, categoryChanged: false })
+      continue
+    }
+    const key = `${delta.labelAfter}:${delta.startMsAfter}:${delta.endMsAfter}`
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.sources.push(delta)
+      existing.categoryChanged ||= delta.categoryAfter !== delta.categoryBefore
+    } else {
+      const group: DeltaGroup = {
+        sources: [delta],
+        after: delta,
+        categoryChanged: delta.categoryAfter !== null && delta.categoryAfter !== delta.categoryBefore,
+      }
+      byKey.set(key, group)
+      groups.push(group)
+    }
+  }
+  return groups
+}
 
 function CorrectionPreviewDialog({
   preview,
@@ -204,28 +261,31 @@ function CorrectionPreviewDialog({
         {preview.blocks.length > 0 && (
           <div style={{ marginTop: 16 }}>
             <div style={sectionTitle}>Timeline</div>
-            <div style={{ display: 'grid', gap: 10 }}>
-              {preview.blocks.map((delta) => (
-                <div key={delta.blockId} style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-                  <div style={{ color: 'var(--color-text-tertiary)', textDecoration: delta.labelAfter === null ? 'line-through' : 'none' }}>
-                    {delta.labelBefore}
-                    <span style={{ marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
-                      {timeOf(delta.startMsBefore)} – {timeOf(delta.endMsBefore)}
-                    </span>
-                  </div>
-                  {delta.labelAfter === null ? (
+            <div style={{ display: 'grid', gap: 12 }}>
+              {groupDeltasBySuccessor(preview.blocks).map((group) => (
+                <div key={group.sources[0].blockId} style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+                  {group.sources.map((delta) => (
+                    <div key={delta.blockId} style={{ display: 'flex', alignItems: 'baseline', gap: 8, color: 'var(--color-text-tertiary)', textDecoration: group.after === null ? 'line-through' : 'none' }}>
+                      <span style={clampedLabel}>{delta.labelBefore}</span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                        {timeOf(delta.startMsBefore)} – {timeOf(delta.endMsBefore)}
+                      </span>
+                    </div>
+                  ))}
+                  {group.after === null ? (
                     <div style={{ color: 'var(--color-text-secondary)', fontWeight: 600 }}>Removed from the day</div>
                   ) : (
-                    <div style={{ color: 'var(--color-text-primary)', fontWeight: 600 }}>
-                      {delta.labelAfter}
-                      {delta.startMsAfter != null && delta.endMsAfter != null && (
-                        <span style={{ marginLeft: 8, fontWeight: 500, fontVariantNumeric: 'tabular-nums', color: 'var(--color-text-secondary)' }}>
-                          {timeOf(delta.startMsAfter)} – {timeOf(delta.endMsAfter)}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, color: 'var(--color-text-primary)', fontWeight: 600 }}>
+                      <span aria-hidden style={{ flexShrink: 0, color: 'var(--color-text-secondary)', fontWeight: 500 }}>→</span>
+                      <span style={clampedLabel}>{group.after.labelAfter}</span>
+                      {group.after.startMsAfter != null && group.after.endMsAfter != null && (
+                        <span style={{ fontWeight: 500, fontVariantNumeric: 'tabular-nums', color: 'var(--color-text-secondary)', flexShrink: 0 }}>
+                          {timeOf(group.after.startMsAfter)} – {timeOf(group.after.endMsAfter)}
                         </span>
                       )}
-                      {delta.categoryAfter && delta.categoryAfter !== delta.categoryBefore && (
-                        <span style={{ marginLeft: 8, fontWeight: 500, color: 'var(--color-text-secondary)' }}>
-                          {activityCategoryLabel(delta.categoryBefore)} → {activityCategoryLabel(delta.categoryAfter)}
+                      {group.categoryChanged && group.after.categoryAfter && (
+                        <span style={{ fontWeight: 500, color: 'var(--color-text-secondary)', flexShrink: 0 }}>
+                          · {activityCategoryLabel(group.after.categoryAfter)}
                         </span>
                       )}
                     </div>
@@ -299,17 +359,21 @@ function CorrectionUndoToast({
   error,
   onUndo,
   onDismiss,
+  onHoverChange,
 }: {
   description: string
   busy: boolean
   error: string | null
   onUndo: () => void
   onDismiss: () => void
+  onHoverChange: (hovered: boolean) => void
 }) {
   return (
     <div
       data-timeline-inspector="true"
       role="status"
+      onMouseEnter={() => onHoverChange(true)}
+      onMouseLeave={() => onHoverChange(false)}
       style={{
         position: 'fixed',
         left: '50%',

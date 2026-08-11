@@ -13,19 +13,29 @@
 // ---------------------------------------------------------------------------
 
 import type { AppCategory, WorkKind } from './types'
+import { FOCUSED_CATEGORIES } from './types'
 import { policyForHost } from './domainPolicy'
 import { categoryForDomain } from './domainCategories'
 
 export type { WorkKind }
 
+// Product decision (DEV-240): a leisure domain with at least this much
+// credited time in the selected range stays in the main list at its
+// time-ranked position instead of being relegated to the "Off to the side"
+// fold. The fold exists to keep incidental leisure from crowding out work,
+// never to hide hours of real activity off-screen. Default: 30 minutes.
+export const PROMINENT_LEISURE_MIN_SECONDS = 30 * 60
+
 export function partitionDomainsWorkFirst<T>(
   rows: T[],
   domain: (row: T) => string | null | undefined,
+  seconds?: (row: T) => number,
 ): { work: T[]; leisure: T[] } {
   const work: T[] = []
   const leisure: T[] = []
   for (const row of rows) {
-    if (kindForDomain(domain(row)) === 'leisure') leisure.push(row)
+    const prominentLeisure = seconds !== undefined && seconds(row) >= PROMINENT_LEISURE_MIN_SECONDS
+    if (kindForDomain(domain(row)) === 'leisure' && !prominentLeisure) leisure.push(row)
     else work.push(row)
   }
   return { work, leisure }
@@ -273,13 +283,21 @@ export function kindFromCategoryDistribution(
   if (!distribution) return null
   const weighted: Array<{ kind: WorkKind; seconds: number }> = []
   let signalSeconds = 0
+  let totalSeconds = 0
   for (const [category, seconds] of Object.entries(distribution) as Array<[AppCategory, number]>) {
     if (!seconds || seconds <= 0) continue
+    totalSeconds += seconds
     if (NEUTRAL_DISTRIBUTION_CATEGORIES.has(category)) continue
     weighted.push({ kind: kindForCategory(category), seconds })
     signalSeconds += seconds
   }
   if (signalSeconds < DISTRIBUTION_KIND_MIN_SECONDS) return null
+  // A browsing-dominated block is NOT the distribution's call: category
+  // seconds carry no domains, so a 56m X-and-YouTube block would be decided
+  // by a 12-second edge between tiny native-app slivers. When the neutral
+  // share holds three quarters of the block, decline and let the domain-aware
+  // resolver (resolveBlockKind) vote with the actual sites.
+  if (signalSeconds < totalSeconds * 0.25) return null
   return dominantKind(weighted)
 }
 
@@ -289,6 +307,13 @@ export function kindFromCategoryDistribution(
 // that predate both.
 export function effectiveBlockKind(block: BlockKindInput): WorkKind {
   if (block.kind) return block.kind
+  // Same rule the block builder applies when it resolves the stored kind
+  // (timeline.md §3.2/§3.6): a block whose intent-weighted dominant category
+  // is focused work IS work — background-tab media seconds must not outvote
+  // the foreground work on the rehydrated path either. Blocks read from the
+  // store carry no `kind`, so without this a CI-migration block with a
+  // Netflix tab open re-derived as leisure and rendered "Watching Netflix".
+  if (FOCUSED_CATEGORIES.includes(block.dominantCategory)) return 'work'
   const fromDistribution = kindFromCategoryDistribution(block.categoryDistribution)
   if (fromDistribution) return fromDistribution
   return resolveBlockKind(block)
@@ -325,21 +350,62 @@ export function blockTypeTag(block: BlockKindInput): string {
 // contributes its own category-kind; browser time is attributed to the kind of
 // the domains it sat on (leisure youtube vs work github). The dominant kind by
 // seconds wins. Used as the fallback for blocks that predate the stored field.
+//
+// Attention clamp: only foreground app sessions measure attention — a site's
+// visit-seconds are history estimates that keep accruing while its tab sits in
+// the background, so the sites' collective vote is clamped to the browser's own
+// foreground seconds before it can outweigh anything. Only totals survive on a
+// stored block, so the clamp is a proportional scale, not the per-interval
+// reconciliation the live path runs.
 function resolveBlockKind(block: BlockKindInput): WorkKind {
   const weighted: Array<{ kind: WorkKind; seconds: number }> = []
 
+  let browserForegroundSeconds = 0
+  let hasBrowserApp = false
   for (const app of block.topApps) {
-    const browserish = app.isBrowser
-      || app.category === 'browsing'
-      || app.category === 'entertainment'
-      || app.category === 'social'
-    if (browserish) continue // attributed via websites below
+    // Only an actual browser funds the domain-vote budget below. A NATIVE
+    // entertainment/social app (the Spotify app, a native TikTok client) is
+    // not a tab host: routing its seconds into the budget inflated what the
+    // sites were allowed to spend while the app itself never voted — its
+    // seconds vote directly by their category kind like any other native app.
+    const browserish = app.isBrowser || app.category === 'browsing'
+    if (browserish) {
+      // Spent through the domain votes below, capped at this budget.
+      hasBrowserApp = true
+      browserForegroundSeconds += Math.max(0, app.totalSeconds)
+      continue
+    }
     weighted.push({ kind: kindForCategory(app.category), seconds: app.totalSeconds })
   }
 
+  const rawSiteSeconds = block.websites.reduce(
+    (sum, site) => sum + Math.max(0, site.totalSeconds), 0,
+  )
+  const scale = hasBrowserApp && rawSiteSeconds > browserForegroundSeconds && rawSiteSeconds > 0
+    ? browserForegroundSeconds / rawSiteSeconds
+    : 1
+  // Old blocks keep only the top-N apps, so the browser may be missing from
+  // topApps entirely; the site total is then the only observable budget.
+  const budgetSeconds = hasBrowserApp ? browserForegroundSeconds : rawSiteSeconds
+
+  // Media ambience: leisure-sink domains (entertainment AND social_feed —
+  // both domain-policy categories map to leisure in kindForDomain) vote only
+  // when they COLLECTIVELY held the majority of the browser's clamped budget —
+  // anything less is background tabs (a paused video, an idle Netflix or
+  // x.com tab), excluded from kind voting. The gate is collective, not
+  // per-domain: an hour split between X and YouTube is a leisure hour even
+  // though neither domain alone holds the majority.
+  const leisureSinkSeconds = block.websites.reduce(
+    (sum, site) => sum + (policyForHost(site.domain) !== null ? Math.max(0, site.totalSeconds) * scale : 0),
+    0,
+  )
+  const leisureSinksVote = leisureSinkSeconds > budgetSeconds / 2
   for (const site of block.websites) {
+    const seconds = Math.max(0, site.totalSeconds) * scale
+    if (seconds <= 0) continue
+    if (policyForHost(site.domain) !== null && !leisureSinksVote) continue
     const domainKind = kindForDomain(site.domain)
-    weighted.push({ kind: domainKind ?? 'personal', seconds: site.totalSeconds })
+    weighted.push({ kind: domainKind ?? 'personal', seconds })
   }
 
   if (weighted.length === 0) {

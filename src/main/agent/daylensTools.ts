@@ -8,6 +8,13 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import type Database from 'better-sqlite3'
 import { executeTool, execSearchSessionsWithMeaning } from '../services/aiTools'
+import { getLongestFocusStretch } from '../services/wrappedTools'
+import { getTimelineDayProjection } from '../core/query/projections'
+import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { userAuthoredLabel } from '@shared/labelVoice'
+import { blockActiveSeconds } from '@shared/blockDuration'
+import { effectiveBlockKind, kindForCategory } from '@shared/workKind'
+import { formatClock as fmtClockMs } from '../../renderer/lib/dayWrapScenes'
 import { getMomentEvidence } from '../lib/momentEvidence'
 import { getWebsiteVisitsForRange } from '../db/queries'
 import {
@@ -173,6 +180,9 @@ function timeChunks(
   const visits = getWebsiteVisitsForRange(db, spanStartMs, spanEndMs)
     .filter((visit) => !ignoredSpans.some((span) => span.startMs <= visit.visitTime && span.endMs > visit.visitTime))
   const spanSessions = getCorrectedSessionsForRange(db, spanStartMs, spanEndMs)
+  // The covering timeline block names what each increment WAS ("Building the
+  // sync engine"), so the chunk table can say the work, not only the app.
+  const dayBlocks = getTimelineDayProjection(db, date, null, { materialize: false, analysis: false }).blocks
   const chunks = []
   for (let offset = startOffset; offset < endOffset; offset += incrementMinutes) {
     const chunkStart = dayStart + offset * 60_000
@@ -197,12 +207,23 @@ function timeChunks(
       : machineState
         ? { kind: machineState.state, label: machineState.state.includes('asleep') ? 'machine asleep/locked' : 'machine locked' }
         : untracked
-          ? { kind: 'untracked', label: 'no data captured — possible tracking failure' }
-          : { kind: 'idle', label: 'no activity captured — likely away/idle' }
+          // These labels are printed verbatim into the chunk table, so they
+          // carry no em dash (the voice contract bans it in every surface).
+          ? { kind: 'untracked', label: 'no data captured, possibly a tracking failure' }
+          : { kind: 'idle', label: 'no activity captured, likely away or idle' }
+    const coveringBlock = dayBlocks
+      .filter((block) => block.startTime < chunkEnd && block.endTime > chunkStart)
+      .sort((left, right) =>
+        (Math.min(right.endTime, chunkEnd) - Math.max(right.startTime, chunkStart))
+        - (Math.min(left.endTime, chunkEnd) - Math.max(left.startTime, chunkStart)))[0]
     chunks.push({
       startTime: fmtMinuteOffset(offset),
       endTime: fmtMinuteOffset(offset + incrementMinutes),
       durationMinutes: incrementMinutes,
+      blockLabel: coveringBlock ? userVisibleBlockLabel(coveringBlock) : null,
+      // The renderer drops a generated floor label so a captured title can name
+      // the work; it must not do that to a name the person typed themselves.
+      blockLabelIsUserAuthored: coveringBlock ? userAuthoredLabel(coveringBlock) !== null : false,
       activity,
       pages,
       gap,
@@ -251,8 +272,54 @@ export function buildDaylensTools(db: Database.Database) {
       ),
     }),
 
+    get_longest_focus_stretch: tool({
+      description: 'The longest stretches of one day, with exact bounds: longestWorkStretch (the longest unbroken run of WORK sessions with real start/end clocks computed from session evidence — safe to cite even when the day is still one open block) and longestBlock (the longest block of ANY kind, with its kind, kind-split seconds, top apps, and top pages). Use for "longest focus block", "longest stretch", "deepest run" questions. Answer shape: name longestBlock plainly with its exact bounds and what filled it (its own topApps/topPages); if it is mixed or leisure-dominated say so using kindSplitSeconds; then give longestWorkStretch with its own bounds — when substantialFocusBlock is false, say the day had no proper focus block and name that run as the closest thing. Never carve sub-ranges yourself; these are the only real bounds.',
+      inputSchema: z.object({ date: DATE }),
+      execute: async ({ date }) => {
+        // Floor of 5 minutes: even on a day with no substantial focus block,
+        // the model gets the longest REAL work run with citable bounds instead
+        // of inventing one from chunk rows.
+        const stretch = getLongestFocusStretch({ date, minSeconds: 5 * 60 }, db)
+        const blocks = getTimelineDayProjection(db, date, null, { materialize: false, analysis: false }).blocks
+        const longest = [...blocks].sort((left, right) =>
+          blockActiveSeconds(right) - blockActiveSeconds(left))[0]
+        let kindSplit: Record<string, number> | null = null
+        if (longest && longest.sessions.length > 0) {
+          kindSplit = {}
+          for (const session of longest.sessions) {
+            const kind = kindForCategory(session.category)
+            kindSplit[kind] = (kindSplit[kind] ?? 0) + session.durationSeconds
+          }
+        }
+        const longestBlock = longest
+          ? {
+              label: userVisibleBlockLabel(longest),
+              kind: effectiveBlockKind(longest),
+              startClock: fmtClockMs(longest.startTime),
+              endClock: fmtClockMs(longest.endTime),
+              durationSeconds: blockActiveSeconds(longest),
+              spanSeconds: Math.max(0, Math.round((longest.endTime - longest.startTime) / 1000)),
+              // Seconds by work kind inside the block, from its own sessions —
+              // so a "work" block that is mostly Netflix reads as what it is.
+              kindSplitSeconds: kindSplit,
+              topApps: longest.topApps.slice(0, 5).map((a) => ({ appName: a.appName, category: a.category })),
+              topPages: (longest.pageRefs ?? []).slice(0, 5).map((p) => p.pageTitle ?? p.domain ?? null).filter(Boolean),
+            }
+          : null
+        return guarded({
+          found: Boolean(stretch || longestBlock),
+          date,
+          longestWorkStretch: stretch,
+          // A stretch under 20 minutes is real but not substantial: say the day
+          // had no proper focus block, then name this run with its own bounds.
+          substantialFocusBlock: Boolean(stretch && stretch.durationSeconds >= 20 * 60),
+          longestBlock,
+        })
+      },
+    }),
+
     search_history: tool({
-      description: 'Full-text fuzzy search over everything captured: app sessions, window titles, page titles and URLs. Use for recall questions ("that drowning video", "the article about transformers"). Returns matches with times, durations, and URLs, or an explicit empty result. When the local semantic index is available, a separate semanticHits array carries moments found by MEANING (on-device embeddings) — present those as "similar meaning" leads, never as exact matches.',
+      description: 'Full-text fuzzy search over everything captured: app sessions, window titles, page titles and URLs. Use for recall questions ("that drowning video", "the article about transformers"). Returns matches with times, durations, and URLs, or an explicit empty result. When the local semantic index is available, a separate semanticHits array carries moments found by MEANING (on-device embeddings), present those as "similar meaning" leads, never as exact matches.',
       inputSchema: z.object({
         query: z.string().min(1).describe('Search words. Keep it to the distinctive terms.'),
         startDate: DATE.optional(),
@@ -281,7 +348,7 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     list_page_visits: tool({
-      description: 'Website visits over a date range, aggregated per page: title, URL, domain, total time, visit count, first/last seen. Filter by domain (e.g. "youtube.com") or title words. Use for "all YouTube videos this month", podcasts, and export data. Time is reconciled foreground seconds — the same ledger the Apps screen totals — NOT the media\'s own length. When coverageNotes is present, page detail explains less time than the browser verifiably had; quote the note instead of presenting the page list as complete.',
+      description: 'Website visits over a date range, aggregated per page: title, URL, domain, total time, visit count, first/last seen. Filter by domain (e.g. "youtube.com") or title words. Use for "all YouTube videos this month", podcasts, and export data. Time is the reconciled seconds the page was in front of the person, the same ledger the Apps screen totals, NOT the media\'s own length. When coverageNotes is present, page detail explains less time than the browser verifiably had; quote the note instead of presenting the page list as complete.',
       inputSchema: z.object({
         startDate: DATE,
         endDate: DATE,

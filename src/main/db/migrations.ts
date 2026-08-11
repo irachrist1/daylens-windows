@@ -11,6 +11,7 @@ import {
 } from '../services/suppliedMemory'
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
+import { canonicalAppCategory } from '../../shared/activityCategories'
 
 /**
  * Versioned migration system for Daylens.
@@ -319,6 +320,19 @@ export function ensureSearchSchema(db: Database.Database): void {
 // or deleted moment leaves the index in the same transaction that removes its
 // record.
 export function ensureMemorySearchSchema(db: Database.Database): void {
+  // On a rebuild path (memory_records dropped and recreated) the FTS5 table
+  // and its content view survive the DROP. We cannot CREATE them again while
+  // they exist: memory_records_fts_content matches FTS5's reserved '_content'
+  // shadow-table suffix, so SQLite rejects any CREATE of that name while
+  // memory_records_fts is present ("object name reserved for internal use") —
+  // the reserved-name check fires before IF NOT EXISTS is even considered.
+  // Drop the vtable first to lift the shadow-name reservation, then the view,
+  // then recreate from scratch. On the fresh path these are no-ops.
+  db.exec(`
+    DROP TABLE IF EXISTS memory_records_fts;
+    DROP VIEW IF EXISTS memory_records_fts_content;
+  `)
+
   db.exec(`
     CREATE VIEW IF NOT EXISTS memory_records_fts_content AS
     SELECT
@@ -3184,6 +3198,253 @@ const migrations: Migration[] = [
           updated_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_agent_turn_checkpoints_thread ON agent_turn_checkpoints(thread_id);
+      `)
+    },
+  },
+  {
+    version: 66,
+    description:
+      'Day-analysis clarification skips (DEV-247/DEV-270 agentic recap). When the interpretation agent asks the person a clarifying question about the day (an unnamed block, an unconfirmed meeting) and they dismiss it, the dismissal is remembered here so the same question is not re-asked on every open. An ANSWERED question needs no row — it resolves through its durable correction (a block label override, an attendance mark). LOCAL-ONLY: no sync-allowlist key, never exported.',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS timeline_clarification_skips (
+          date TEXT NOT NULL,
+          clarification_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (date, clarification_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_timeline_clarification_skips_date
+          ON timeline_clarification_skips (date);
+      `)
+    },
+  },
+  {
+    version: 67,
+    description:
+      'Canonicalize legacy display-form activity categories. Rows written before the category vocabulary settled carry display labels ("AI Tools", "Browsing", "Development", "Uncategorized"); every kind/intent rule compares canonical enum values, so those rows silently resolved to the wrong work-kind — hours of development on a historical day counted as "personal" and never reached the day wrap\'s work activities. Normalizes every stored category column plus the JSON copies embedded in timeline_blocks, and drops the derived day_snapshots cache (its work/leisure/personal splits were frozen from the broken vocabulary; snapshots re-freeze lazily).',
+    up: () => {
+      const db = getDb()
+
+      const normalizeColumn = (table: string, column: string) => {
+        const exists = db.prepare(
+          `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`,
+        ).get(table)
+        if (!exists) return
+        const rows = db.prepare(`SELECT DISTINCT ${column} AS value FROM ${table} WHERE ${column} IS NOT NULL`).all() as Array<{ value: string }>
+        for (const { value } of rows) {
+          const canonical = canonicalAppCategory(value)
+          if (canonical !== value) {
+            db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(canonical, value)
+          }
+        }
+      }
+      normalizeColumn('app_sessions', 'category')
+      normalizeColumn('apps', 'category')
+      normalizeColumn('category_overrides', 'category')
+      normalizeColumn('app_identities', 'default_category')
+      normalizeColumn('workflow_signatures', 'dominant_category')
+      normalizeColumn('timeline_blocks', 'dominant_category')
+      normalizeColumn('live_app_session_snapshot', 'category')
+
+      // The JSON copies on each block: category_distribution_json keys (a
+      // single row can mix vocabularies — {"Development": …, "development": …}
+      // — so colliding keys SUM), and evidence_summary_json apps[].category.
+      const blocks = db.prepare(
+        `SELECT id, category_distribution_json, evidence_summary_json FROM timeline_blocks`,
+      ).all() as Array<{ id: string; category_distribution_json: string; evidence_summary_json: string }>
+      const updateBlock = db.prepare(
+        `UPDATE timeline_blocks SET category_distribution_json = ?, evidence_summary_json = ? WHERE id = ?`,
+      )
+      for (const block of blocks) {
+        let changed = false
+        let distributionJson = block.category_distribution_json
+        try {
+          const distribution = JSON.parse(block.category_distribution_json) as Record<string, number>
+          const normalized: Record<string, number> = {}
+          for (const [key, seconds] of Object.entries(distribution)) {
+            const canonical = canonicalAppCategory(key)
+            if (canonical !== key) changed = true
+            normalized[canonical] = (normalized[canonical] ?? 0) + (typeof seconds === 'number' ? seconds : 0)
+          }
+          if (changed) distributionJson = JSON.stringify(normalized)
+        } catch { /* malformed JSON: leave the row as it was */ }
+
+        let evidenceJson = block.evidence_summary_json
+        try {
+          const evidence = JSON.parse(block.evidence_summary_json) as { apps?: Array<{ category?: string }> }
+          let evidenceChanged = false
+          for (const app of evidence.apps ?? []) {
+            if (typeof app.category === 'string') {
+              const canonical = canonicalAppCategory(app.category)
+              if (canonical !== app.category) {
+                app.category = canonical
+                evidenceChanged = true
+              }
+            }
+          }
+          if (evidenceChanged) {
+            evidenceJson = JSON.stringify(evidence)
+            changed = true
+          }
+        } catch { /* malformed JSON: leave the row as it was */ }
+
+        if (changed) updateBlock.run(distributionJson, evidenceJson, block.id)
+      }
+
+      // day_snapshots is created lazily, not by the base schema.
+      const hasDaySnapshots = db.prepare(
+        `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'day_snapshots'`,
+      ).get()
+      if (hasDaySnapshots) db.exec(`DELETE FROM day_snapshots`)
+    },
+  },
+  {
+    version: 68,
+    description:
+      'external_signal_scans — the "collected, nothing found" ledger for the external-signal connectors (git / calendar / focus apps). external_signals only ever stores NON-EMPTY results, so a finished day whose connectors ran and found nothing was indistinguishable from a day never collected — and the on-demand wrap backfill would re-run git/icalBuddy on every regeneration of a commit-less historical day. One row per (date, source) marks "a connector completed for this finished day"; today and yesterday are never marked (they stay on the refresh cadence — late-arriving data). LOCAL-ONLY, no sync-allowlist keys. (Numbered v68: the integration branch owns v67.)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS external_signal_scans (
+          date       TEXT NOT NULL,
+          source     TEXT NOT NULL,
+          scanned_at INTEGER NOT NULL,
+          PRIMARY KEY (date, source)
+        );
+      `)
+    },
+  },
+  {
+    version: 70,
+    description:
+      'memory_records gains the page record kind plus domain/url columns, so browser activity has a canonical representation and exact browser retrieval can read the corrected memory boundary instead of raw website_visits. record_kind is constrained by a CHECK and SQLite cannot alter one in place, so the table is rebuilt; memory_record_entities and memory_record_vectors both cascade from it and are backed up and restored around the drop (the production pragma is foreign_keys ON). Supplied facts are copied through: they exist by explicit confirmation, are not part of any day projection, and nothing would ever recreate them.',
+    up: () => {
+      const db = getDb()
+      const existing = getTableSql('memory_records') ?? ''
+      if (!existing || /'page'/.test(existing)) return
+
+      db.exec(`
+        -- The FTS vtable's content view selects FROM memory_records, and the
+        -- triggers that maintain it hang off that table. Both must go before
+        -- the drop: a view left pointing at a missing table makes every later
+        -- statement that touches the vtable fail, and ALTER TABLE ... RENAME
+        -- would try to rewrite a reference it cannot resolve. Recreated by
+        -- ensureMemorySearchSchema once the new table is in place.
+        DROP TABLE IF EXISTS memory_records_fts;
+        DROP VIEW IF EXISTS memory_records_fts_content;
+
+        CREATE TABLE memory_record_entities_v70_backup AS SELECT * FROM memory_record_entities;
+        CREATE TABLE memory_record_vectors_v70_backup AS SELECT * FROM memory_record_vectors;
+        DELETE FROM memory_record_entities;
+        DELETE FROM memory_record_vectors;
+
+        CREATE TABLE memory_records_v70 (
+          id                TEXT PRIMARY KEY,
+          record_kind       TEXT NOT NULL CHECK(record_kind IN ('session', 'meeting', 'artifact', 'page', 'supplied_fact', 'connected_activity')),
+          memory_type       TEXT NOT NULL CHECK(memory_type IN ('observed', 'connected', 'supplied', 'inferred')),
+          statement         TEXT NOT NULL,
+          exact_text        TEXT NOT NULL DEFAULT '',
+          semantic_text     TEXT,
+          date              TEXT NOT NULL,
+          start_ms          INTEGER NOT NULL,
+          end_ms            INTEGER NOT NULL,
+          app_bundle_id     TEXT,
+          app_name          TEXT,
+          title             TEXT,
+          domain            TEXT,
+          url               TEXT,
+          primary_entity_id TEXT,
+          source_refs_json  TEXT NOT NULL DEFAULT '[]',
+          confidence        TEXT NOT NULL DEFAULT 'observed',
+          provenance        TEXT NOT NULL DEFAULT 'capture',
+          sensitivity       TEXT NOT NULL DEFAULT 'standard' CHECK(sensitivity IN ('standard', 'personal', 'high')),
+          embedding_model   TEXT,
+          embedding_version INTEGER,
+          created_at        INTEGER NOT NULL,
+          deleted_at        INTEGER
+        );
+
+        INSERT INTO memory_records_v70 (
+          id, record_kind, memory_type, statement, exact_text, semantic_text,
+          date, start_ms, end_ms, app_bundle_id, app_name, title,
+          primary_entity_id, source_refs_json, confidence, provenance,
+          sensitivity, embedding_model, embedding_version, created_at, deleted_at
+        )
+        SELECT
+          id, record_kind, memory_type, statement, exact_text, semantic_text,
+          date, start_ms, end_ms, app_bundle_id, app_name, title,
+          primary_entity_id, source_refs_json, confidence, provenance,
+          sensitivity, embedding_model, embedding_version, created_at, deleted_at
+        FROM memory_records;
+
+        DROP TABLE memory_records;
+        ALTER TABLE memory_records_v70 RENAME TO memory_records;
+
+        CREATE INDEX IF NOT EXISTS idx_memory_records_date ON memory_records (date);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_kind_start ON memory_records (record_kind, start_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_records_domain ON memory_records (domain);
+
+        INSERT INTO memory_record_entities (record_id, entity_id)
+          SELECT record_id, entity_id FROM memory_record_entities_v70_backup
+          WHERE record_id IN (SELECT id FROM memory_records);
+        INSERT INTO memory_record_vectors (vec_rowid, record_id, date, model, model_version, dims, created_at)
+          SELECT vec_rowid, record_id, date, model, model_version, dims, created_at
+          FROM memory_record_vectors_v70_backup
+          WHERE record_id IN (SELECT id FROM memory_records);
+
+        DROP TABLE memory_record_entities_v70_backup;
+        DROP TABLE memory_record_vectors_v70_backup;
+      `)
+
+      // The rebuild changed every rowid, so the external-content FTS index is
+      // stale against the new table. This helper drops the vtable and its
+      // content view in the order FTS5's reserved shadow names require, then
+      // recreates and reindexes.
+      ensureMemorySearchSchema(db)
+    },
+  },
+  {
+    version: 80,
+    description:
+      'Agent Runtime context disclosure storage (WO-68): widen context_packets purpose to include action runs while preserving the complete pre-provider packet, destination, message link, and disclosure JSON. LOCAL-ONLY — no sync-allowlist keys.',
+    up: () => {
+      const db = getDb()
+      const contextPacketsSql = getTableSql('context_packets') ?? ''
+      if (!contextPacketsSql) {
+        throw new Error('context_packets is unavailable before migration v80')
+      }
+      if (contextPacketsSql.includes("'act'")) return
+      db.exec(`
+        CREATE TABLE context_packets_v80 (
+          id                  TEXT PRIMARY KEY,
+          purpose             TEXT NOT NULL CHECK(purpose IN ('answer', 'interpret', 'act')),
+          exchange_kind       TEXT NOT NULL CHECK(exchange_kind IN ('chat', 'day_analysis')),
+          thread_id           INTEGER,
+          message_id          INTEGER,
+          scope_key           TEXT,
+          question            TEXT NOT NULL,
+          destination         TEXT NOT NULL,
+          left_device         INTEGER NOT NULL DEFAULT 1,
+          policy_version      INTEGER NOT NULL,
+          item_count          INTEGER NOT NULL,
+          content_fingerprint TEXT NOT NULL,
+          packet_json         TEXT NOT NULL,
+          created_at          INTEGER NOT NULL
+        );
+        INSERT INTO context_packets_v80 (
+          id, purpose, exchange_kind, thread_id, message_id, scope_key, question,
+          destination, left_device, policy_version, item_count, content_fingerprint,
+          packet_json, created_at
+        )
+        SELECT
+          id, purpose, exchange_kind, thread_id, message_id, scope_key, question,
+          destination, left_device, policy_version, item_count, content_fingerprint,
+          packet_json, created_at
+        FROM context_packets;
+        DROP TABLE context_packets;
+        ALTER TABLE context_packets_v80 RENAME TO context_packets;
+        CREATE INDEX idx_context_packets_message ON context_packets (message_id);
+        CREATE INDEX idx_context_packets_thread ON context_packets (thread_id, created_at DESC);
+        CREATE INDEX idx_context_packets_scope ON context_packets (exchange_kind, scope_key, created_at DESC);
       `)
     },
   },

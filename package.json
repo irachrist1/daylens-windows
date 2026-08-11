@@ -10,7 +10,9 @@
     "services/billing"
   ],
   "scripts": {
+    "prestart": "node scripts/patch-dev-electron-icon.mjs",
     "start": "electron-forge start",
+    "icons": "electron scripts/render-icons.js",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
@@ -36,7 +38,8 @@
     "verify:real-day:desktop": "node ./scripts/real-day/desktop.mjs",
     "real-day:accept": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./scripts/real-day/run.ts accept",
     "verify:remote-web": "node scripts/run-tests.mjs webRemoteRoundtrip webBehavior",
-    "verify:shipping": "npm run typecheck && npm run lint && npm test && npm run verify:synthetic-day && npm run verify:ai-turn && npm run verify:remote-web && npm run timeline:eval -- --strict && npm run contract:check && npm run web:contract:check && npm --prefix apps/web run manifest:check && npm run web:typecheck && npm run web:build && npm run billing:check && npm run billing:sandbox && npm run build:all",
+    "verify:stress": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs ./tests/stress/run.ts",
+    "verify:shipping": "npm run typecheck && npm run lint && npm test && npm run verify:stress && npm run verify:synthetic-day && npm run verify:ai-turn && npm run verify:remote-web && npm run timeline:eval -- --strict && npm run contract:check && npm run web:contract:check && npm --prefix apps/web run manifest:check && npm run web:typecheck && npm run web:build && npm run billing:check && npm run billing:sandbox && npm run build:all",
     "wrapped:bench": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs --test ./tests/wrappedBenchmark.test.ts",
     "wrapped:bench:run": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/wrapped-bench/run.ts",
     "test:behaviour": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/ai-behaviour/run.ts",
@@ -47,20 +50,28 @@
     "billing:sandbox": "node services/billing/sandbox/run.mjs",
     "billing:e2e": "node services/billing/sandbox/run.mjs",
     "timeline": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/ai-behaviour/show-timeline.ts",
+    "diag:domains": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./scripts/diag-domain-attribution.ts",
+    "diag:timeline": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./scripts/diag-timeline-day.ts",
     "trace": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/ai-behaviour/show-trace.ts",
     "moment:bench": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/moment-bench/run.ts",
     "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
     "build:preload": "cross-env STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
     "build:renderer": "cross-env STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",
     "build:mcp": "vite build --config vite.mcp.config.ts",
+    "build:worker": "vite build --config vite.worker.config.ts",
+    "build:embed-worker": "vite build --config vite.embedworker.config.ts",
+    "build:capture-relay": "vite build --config vite.capturerelay.config.ts",
     "build:capture-helper": "bash scripts/build-capture-helper.sh",
     "models:semantic": "node scripts/download-semantic-model.mjs",
-    "build:all": "npm run build:main && npm run build:preload && npm run build:renderer && npm run build:mcp && npm run build:capture-helper",
+    "build:all": "npm run build:main && npm run build:preload && npm run build:renderer && npm run build:mcp && npm run build:worker && npm run build:embed-worker && npm run build:capture-relay && npm run build:capture-helper",
     "dist:win": "npm run build:all && electron-builder --win --config electron-builder.config.js",
     "dist:win:store": "npm run build:all && electron-builder --win appx --config electron-builder.config.js --publish never",
     "dist:mac": "npm run build:all && electron-builder --mac zip dmg --config electron-builder.config.js",
     "dist:linux": "npm run build:all && electron-builder --linux AppImage deb rpm tar.gz --config electron-builder.config.js",
-    "postinstall": "node scripts/rebuild-natives.mjs"
+    "postinstall": "node scripts/rebuild-natives.mjs",
+    "cli": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./cli/run.ts",
+    "eval:days": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/journal-eval/run.ts",
+    "lab:recap": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/recap-lab/run.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.96",
@@ -121,5 +132,19 @@
   "overrides": {
     "lodash": "4.18.1",
     "protobufjs": "7.5.9"
+  },
+  "allowScripts": {
+    "electron@34.5.8": true,
+    "@paymoapp/active-window@2.1.4": true,
+    "keytar@7.9.0": true,
+    "esbuild@0.27.0": true,
+    "sharp@0.34.5": true,
+    "@google/genai@1.52.0": true,
+    "core-js@3.49.0": true,
+    "onnxruntime-node@1.21.0": true,
+    "protobufjs@7.5.9": true,
+    "better-sqlite3@12.8.0": true,
+    "esbuild@0.25.12": true,
+    "lzma-native@8.0.6": true
   }
 }

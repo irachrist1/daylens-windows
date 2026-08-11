@@ -1,5 +1,5 @@
 import type { AppCategory, ArtifactRef, WorkContextBlock } from './types'
-import { activityCategoryLabel } from './activityCategories'
+import { ACTIVITY_CATEGORY_LABELS, activityCategoryLabel } from './activityCategories'
 
 // Categories where a browser page artifact is a plausible label source for the
 // whole block. For development/communication/writing/etc. a co-occurring browser
@@ -110,7 +110,7 @@ export function naturalizeLabel(value: string): string {
   return cleaned.trim()
 }
 
-function isUsefulLabel(value: string | null | undefined): value is string {
+export function isUsefulLabel(value: string | null | undefined): value is string {
   if (!value) return false
   const trimmed = value.trim()
   if (!trimmed) return false
@@ -131,6 +131,22 @@ function isUsefulLabel(value: string | null | undefined): value is string {
 
 function categoryDisplayName(category: AppCategory): string {
   return activityCategoryLabel(category)
+}
+
+const CATEGORY_FLOOR_LABELS = new Set(
+  [...Object.values(ACTIVITY_CATEGORY_LABELS), 'Untracked time'].map((label) => label.toLowerCase()),
+)
+
+/** True for the wordings `userVisibleBlockLabel` falls back to when nothing
+ *  named the block: the category word, "Untracked time", or the app list
+ *  ("Cursor and Chrome — activity"). `GENERIC_LABELS` misses several of them
+ *  (Entertainment, Social), so a surface that must not present a floor as a
+ *  description asks here as well. */
+export function labelIsCategoryFloor(value: string | null | undefined): boolean {
+  const trimmed = value?.trim()
+  if (!trimmed) return false
+  if (CATEGORY_FLOOR_LABELS.has(trimmed.toLowerCase())) return true
+  return /\s—\sactivity$/.test(trimmed)
 }
 
 function cleanSiteName(domain: string): string {

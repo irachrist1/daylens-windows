@@ -14,6 +14,7 @@ import { getSettings } from '../../services/settings'
 import { applyTimelineCorrectionsToSessions } from '../../services/activityFacts'
 import {
   countFocusEventsInRange,
+  firstFocusEventTsMs,
   listFocusEventsInRange,
   type StoredFocusEvent,
 } from '../../db/focusEventRepository'
@@ -26,8 +27,14 @@ import {
   legacyAppSessionsAsAppSessions,
   listLegacyAppSessionInputs,
 } from '../evidence/legacyAdapter'
+import {
+  computeRangeEvidenceSignature,
+  getCachedRangeFacts,
+  rangeFactsCacheKeyForDb,
+  storeCachedRangeFacts,
+} from './rangeFactsCache'
 
-export const ACTIVITY_FACTS_QUERY_VERSION = 2
+export const ACTIVITY_FACTS_QUERY_VERSION = 3
 
 // Synthetic ids for canonically projected sessions. They must stay negative
 // (no app_sessions row backs them) but clear of the live-session sentinel
@@ -204,12 +211,66 @@ function projectGapsFromFocusEvents(
         if (open?.kind === 'capture_unavailable') close(event.ts_ms)
         else open = null
         break
+      case 'capture_stopped':
+        // Nothing is observed between a clean stop and the next start; the
+        // stretch is honestly "capture unavailable", not activity.
+        close(event.ts_ms)
+        open = { startMs: event.ts_ms, kind: 'capture_unavailable' }
+        break
+      case 'capture_started':
+        // Close whatever observational state was open — after a crash there
+        // is no capture_stopped, and a machine-state gap (idle, locked) may
+        // still be dangling from the dead run. The first poll after start
+        // re-opens an idle gap backdated by the true no-input time, so a
+        // still-away user is covered without double counting.
+        close(event.ts_ms)
+        break
       default:
         break
     }
   }
   close(rangeEndMs)
   return gaps
+}
+
+/** Legacy sessions clipped to the stretch before the canonical capture era
+ *  began (the first focus event ever recorded). A session that straddles the
+ *  cutover keeps only its pre-cutover part — from the cutover on, canonical
+ *  evidence owns the time and the legacy row is a dual-write duplicate.
+ *
+ *  Known limit of the global anchor: it cannot represent a canonical OUTAGE
+ *  after the cutover that legacy dual-writes still covered. A post-cutover day
+ *  whose focus_events are missing or all system noise (observed: hours of
+ *  legacy sessions against a handful of noise-only focus events) renders only
+ *  because a per-day read then has zero canonical sessions and falls to the
+ *  legacy branch — while a multi-day window that includes any canonical
+ *  evidence drops that day's legacy rows, so range totals can undercount such
+ *  days. The exposure is frozen to the historical dual-write era (legacy
+ *  writes are retired); modelling per-outage coverage intervals is not worth
+ *  the complexity for a bounded, shrinking window of old data. */
+function legacySessionsBeforeCanonicalEra(
+  db: Database.Database,
+  legacySessions: readonly AppSession[],
+): AppSession[] {
+  const eraStartMs = firstFocusEventTsMs(db)
+  if (eraStartMs == null) return []
+  return legacySessions.flatMap((session) => {
+    if (session.startTime >= eraStartMs) return []
+    const capturedEndMs = session.startTime + Math.max(0, session.durationSeconds) * 1000
+    const storedEndMs = session.endTime != null && session.endTime > session.startTime
+      ? session.endTime
+      : capturedEndMs
+    if (storedEndMs <= eraStartMs && capturedEndMs <= eraStartMs) return [session]
+    const clippedEndMs = Math.min(storedEndMs, eraStartMs)
+    return [{
+      ...session,
+      endTime: clippedEndMs,
+      durationSeconds: Math.min(
+        Math.max(0, session.durationSeconds),
+        Math.round((eraStartMs - session.startTime) / 1000),
+      ),
+    }]
+  })
 }
 
 function totalsFromSessions(sessions: readonly AppSession[]): {
@@ -237,6 +298,31 @@ export function queryCorrectedActivityFactsForRange(
   options: QueryCorrectedActivityFactsForRangeOptions = {},
 ): CorrectedActivityRangeFacts {
   const nowMs = options.nowMs ?? Date.now()
+
+  // DEV-227: wall-clock range reads (no explicit nowMs) are memoized behind a
+  // cheap evidence signature — at 30 days the full scan costs ~1s of blocking
+  // main-thread work and the Apps view runs it several times in a row.
+  // Callers that pin nowMs (day queries, tests) want deterministic clipping
+  // and bypass the cache entirely.
+  const cacheable = options.nowMs === undefined
+  let cacheKey: string | null = null
+  let signature: string | null = null
+  if (cacheable) {
+    cacheKey = rangeFactsCacheKeyForDb(db, `${fromMs}:${toMs}:${options.markTrailingOpenSessionLive ? 1 : 0}`)
+    signature = computeRangeEvidenceSignature(
+      db,
+      fromMs,
+      toMs,
+      `${PROJECTION_VERSION}.${ACTIVITY_FACTS_QUERY_VERSION}`,
+      getSettings().focusApps ?? [],
+    )
+    const cached = getCachedRangeFacts<CorrectedActivityRangeFacts>(cacheKey, signature, nowMs)
+    if (cached) {
+      // Shallow-copy the arrays so a caller sorting or splicing its result
+      // cannot reorder the cached facts for the next caller.
+      return { ...cached, sessions: [...cached.sessions], gaps: [...cached.gaps] }
+    }
+  }
   // Evidence is read across the whole window, but an open canonical session
   // is never closed past “now”: the live day’s window runs to midnight and
   // the hours that have not happened yet are not activity.
@@ -262,8 +348,18 @@ export function queryCorrectedActivityFactsForRange(
   let evidenceSource: CorrectedActivityRangeFacts['evidenceSource']
   let rawSessions: AppSession[]
   if (canonicalSessions.length > 0 && legacySessionCount > 0) {
+    // Mixed evidence: the window straddles the canonical capture cutover (or
+    // the dual-write era). Canonical focus_events own everything from the
+    // cutover moment on; legacy rows in that region are dual-write duplicates
+    // and are dropped. But legacy sessions from BEFORE the cutover are the
+    // ONLY record of that time — discarding them erased whole working days on
+    // the cutover boundary (a full 08:42–21:16 day of app_sessions vanished
+    // because canonical capture began at 21:16 that evening).
     evidenceSource = 'mixed'
-    rawSessions = canonicalSessions
+    rawSessions = [
+      ...legacySessionsBeforeCanonicalEra(db, legacySessions),
+      ...canonicalSessions,
+    ]
   } else if (canonicalSessions.length > 0) {
     evidenceSource = 'canonical'
     rawSessions = canonicalSessions
@@ -289,7 +385,7 @@ export function queryCorrectedActivityFactsForRange(
   const { totalSeconds, focusSeconds } = totalsFromSessions(sessions)
   const gaps = projectGapsFromFocusEvents(events, projectionEndMs)
 
-  return {
+  const facts: CorrectedActivityRangeFacts = {
     projectionVersion: PROJECTION_VERSION,
     queryVersion: ACTIVITY_FACTS_QUERY_VERSION,
     evidenceSource,
@@ -300,6 +396,12 @@ export function queryCorrectedActivityFactsForRange(
     focusEventCount,
     legacySessionCount,
   }
+
+  if (cacheable && cacheKey && signature) {
+    storeCachedRangeFacts(cacheKey, signature, nowMs, toMs > nowMs, facts)
+    return { ...facts, sessions: [...facts.sessions], gaps: [...facts.gaps] }
+  }
+  return facts
 }
 
 /**

@@ -28,12 +28,6 @@ export default defineConfig({
       '@daylens/remote-contract': path.resolve(__dirname, 'packages/remote-contract/index.ts'),
     },
   },
-  ssr: {
-    // The AI SDK (chat agent, ADR 0003) ships ESM-only; Electron 34's Node 20
-    // cannot require() ESM at runtime, so these must be bundled into main.js
-    // instead of externalized to node_modules.
-    noExternal: [/^ai$/, /^@ai-sdk\//],
-  },
   define: isStandalone
     ? {
         MAIN_WINDOW_VITE_DEV_SERVER_URL: 'undefined',
@@ -69,6 +63,9 @@ export default defineConfig({
         '@paymoapp/active-window',
         'keytar',
         'electron-updater',
+        'ai',
+        /^@ai-sdk\//,
+        'exceljs',
         '@anthropic-ai/sdk',
         '@google/genai',
         'openai',

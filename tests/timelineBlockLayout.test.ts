@@ -3,7 +3,7 @@
 // block. The clock wins over the floor.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { calendarCardHeights } from '../src/renderer/lib/timelineBlockLayout.ts'
+import { assignLanes, calendarCardHeights } from '../src/renderer/lib/timelineBlockLayout.ts'
 
 const MIN = 44
 
@@ -64,4 +64,67 @@ test('a squeezed sliver keeps at least its true height', () => {
     MIN,
   )
   assert.equal(heights[0], 20)
+})
+
+test('non-overlapping items each take the full width (one lane)', () => {
+  const lanes = assignLanes([
+    { start: 0, end: 10 },
+    { start: 10, end: 20 },
+    { start: 25, end: 40 },
+  ])
+  assert.deepEqual(lanes, [
+    { lane: 0, lanes: 1 },
+    { lane: 0, lanes: 1 },
+    { lane: 0, lanes: 1 },
+  ])
+})
+
+test('two overlapping items split into two side-by-side columns', () => {
+  const lanes = assignLanes([
+    { start: 0, end: 60 },
+    { start: 30, end: 90 },
+  ])
+  assert.deepEqual(lanes, [
+    { lane: 0, lanes: 2 },
+    { lane: 1, lanes: 2 },
+  ])
+})
+
+test('a freed column is reused so the cluster stays as narrow as possible', () => {
+  // A (0–20) and B (0–50) overlap → 2 columns. C (25–40) starts after A ends,
+  // so it reuses A's column; the whole cluster stays 2 wide, not 3.
+  const lanes = assignLanes([
+    { start: 0, end: 20 },
+    { start: 0, end: 50 },
+    { start: 25, end: 40 },
+  ])
+  assert.deepEqual(lanes, [
+    { lane: 0, lanes: 2 },
+    { lane: 1, lanes: 2 },
+    { lane: 0, lanes: 2 },
+  ])
+})
+
+test('placements are returned in input order regardless of start time', () => {
+  const lanes = assignLanes([
+    { start: 30, end: 90 },
+    { start: 0, end: 60 },
+  ])
+  assert.deepEqual(lanes, [
+    { lane: 1, lanes: 2 },
+    { lane: 0, lanes: 2 },
+  ])
+})
+
+test('a separate later cluster resets the column count', () => {
+  const lanes = assignLanes([
+    { start: 0, end: 60 },
+    { start: 10, end: 70 },
+    { start: 200, end: 260 },
+  ])
+  assert.deepEqual(lanes, [
+    { lane: 0, lanes: 2 },
+    { lane: 1, lanes: 2 },
+    { lane: 0, lanes: 1 },
+  ])
 })

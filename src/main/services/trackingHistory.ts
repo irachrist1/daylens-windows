@@ -12,6 +12,7 @@ import { localDateString } from '../lib/localDate'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { projectDay } from '../core/projections/chunk2'
+import { bumpRangeFactsEvidenceEpoch } from '../core/query/rangeFactsCache'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
 
 export interface PurgeResult {
@@ -37,6 +38,11 @@ export interface DeleteTrackedActivityInput {
 function rematerializeAndNotify(affectedDates: string[]): void {
   if (affectedDates.length === 0) return
   const db = getDb()
+  // Purges UPDATE evidence rows in place (title nulling), which the
+  // range-facts cache's count/max signature cannot see. Bump the DB-backed
+  // evidence epoch so every process's cache (main AND the range worker)
+  // drops the stale windows — a purged title must never be served (DEV-227).
+  bumpRangeFactsEvidenceEpoch(db)
   for (const date of affectedDates) {
     try {
       materializeTimelineDayProjection(db, date, null)

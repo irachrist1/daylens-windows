@@ -4,6 +4,8 @@ import {
   effectiveBlockKind,
   kindForDomain,
   kindFromCategoryDistribution,
+  partitionDomainsWorkFirst,
+  PROMINENT_LEISURE_MIN_SECONDS,
 } from '../src/shared/workKind.ts'
 
 // Regression suite: a day spent redesigning a website in the browser (Canva,
@@ -54,14 +56,56 @@ test('effectiveBlockKind: stored kind wins, then distribution, then domains', ()
   }
   // Stored field is authoritative.
   assert.equal(effectiveBlockKind({ ...base, kind: 'leisure' }), 'leisure')
-  // Distribution beats the weak domain fallback.
+  // A focused dominant category resolves to work on the read path — the same
+  // rule the block builder applies when it stores the kind (timeline.md
+  // §3.2/§3.6). Rehydrated blocks carry no `kind`, and before this a
+  // CI-work block with an inflated background Netflix tab re-derived as
+  // leisure and rendered "Watching Netflix & YouTube".
+  assert.equal(effectiveBlockKind(base), 'work')
+  // Distribution beats the weak domain fallback (non-focused dominant).
   assert.equal(
-    effectiveBlockKind({ ...base, categoryDistribution: { design: 3000, entertainment: 500 } }),
+    effectiveBlockKind({
+      ...base,
+      dominantCategory: 'browsing' as const,
+      categoryDistribution: { design: 3000, entertainment: 500 },
+    }),
     'work',
   )
-  // No distribution signal: falls back to domain/app resolution.
+  // No distribution signal, no focused dominant: falls back to domain/app
+  // resolution.
   assert.equal(
-    effectiveBlockKind({ ...base, categoryDistribution: { browsing: 4000 } }),
+    effectiveBlockKind({
+      ...base,
+      dominantCategory: 'browsing' as const,
+      categoryDistribution: { browsing: 4000 },
+    }),
     'personal',
   )
+})
+
+// DEV-240: the "Off to the side" fold exists to keep incidental leisure from
+// crowding out work, never to hide hours of real activity off-screen. A
+// leisure domain with significant time stays in the main list at its
+// time-ranked position.
+test('partitionDomainsWorkFirst: prominent leisure stays in the main list', () => {
+  const rows = [
+    { domain: 'youtube.com', totalSeconds: 4 * 3600 },
+    { domain: 'github.com', totalSeconds: 3600 },
+    { domain: 'netflix.com', totalSeconds: 5 * 60 },
+  ]
+  const split = partitionDomainsWorkFirst(rows, (row) => row.domain, (row) => row.totalSeconds)
+  assert.deepEqual(split.work.map((row) => row.domain), ['youtube.com', 'github.com'])
+  assert.deepEqual(split.leisure.map((row) => row.domain), ['netflix.com'])
+
+  // The threshold boundary is prominent.
+  const boundary = partitionDomainsWorkFirst(
+    [{ domain: 'youtube.com', totalSeconds: PROMINENT_LEISURE_MIN_SECONDS }],
+    (row) => row.domain,
+    (row) => row.totalSeconds,
+  )
+  assert.equal(boundary.leisure.length, 0)
+
+  // Without a seconds accessor the original work-first behavior stands.
+  const plain = partitionDomainsWorkFirst(rows, (row) => row.domain)
+  assert.deepEqual(plain.leisure.map((row) => row.domain), ['youtube.com', 'netflix.com'])
 })

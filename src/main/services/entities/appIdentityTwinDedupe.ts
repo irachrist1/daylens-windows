@@ -23,6 +23,7 @@
 // left exactly as they arranged it.
 import type Database from 'better-sqlite3'
 import { resolveMergeChain, type EntityRow } from './entityRepository'
+import { bumpRangeFactsEvidenceEpoch } from '../../core/query/rangeFactsCache'
 
 export interface AppIdentityTwinDedupeResult {
   /** Path-keyed identity rows whose bundle id resolved to a change. */
@@ -217,6 +218,10 @@ export function dedupeAppIdentityTwins(
     }
   })
   dedupe()
+  // Restamping canonical_app_id UPDATEs evidence rows in place; the
+  // range-facts cache's count/max signature cannot see that — bump the
+  // shared evidence epoch so every process's cache drops stale windows.
+  if (result.sessionsRestamped > 0 || result.entitiesMerged > 0) bumpRangeFactsEvidenceEpoch(db)
   return result
 }
 

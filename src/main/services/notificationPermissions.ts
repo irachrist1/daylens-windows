@@ -134,38 +134,6 @@ export async function handleDeliveryFailure(error?: string): Promise<void> {
   }
 }
 
-// B2: Probe OS notification permission at app start by sending a silent
-// notification. Resolves 'granted' (show event) or 'denied' (failed event)
-// via the same event-based detection requestNotificationPermission uses.
-// Fire-and-forget — canDeliverNotifications already allows delivery on
-// 'not-determined', so the probe is purely a latency improvement.
-export function initNotificationPermissions(): void {
-  if (process.platform !== 'darwin') return
-  if (getNotificationPermissionState() !== 'not-determined') return
-
-  try {
-    const probe = new Notification({ title: '', body: '', silent: true })
-    let settled = false
-    probe.on('show', () => {
-      if (settled) return; settled = true
-      void persistNotificationPermissionState('granted')
-      console.log('[notifications] startup probe: permission granted')
-    })
-    probe.on('failed', () => {
-      if (settled) return; settled = true
-      void persistNotificationPermissionState('denied')
-      console.log('[notifications] startup probe: permission denied')
-    })
-    setTimeout(() => {
-      if (settled) return; settled = true
-      console.log('[notifications] startup probe: timed out (staying not-determined)')
-    }, 3_000).unref()
-    probe.show()
-  } catch (err) {
-    console.warn('[notifications] startup probe failed:', err)
-  }
-}
-
 export function logNotificationBlocked(surface: string): void {
   const reason = notificationBlockedReason()
   if (!reason) return

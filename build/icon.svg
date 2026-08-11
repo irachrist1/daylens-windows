@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    Master source for icon.png / icon.icns. Regenerate rasters with:
+      node_modules/.bin/electron scripts/render-icons.js
+
+    The mark is 824x824 centred in a 1024 canvas. That 100px transparent margin is
+    the macOS icon grid — the Dock draws whatever it is handed edge to edge, so a
+    mark that fills its canvas renders visibly larger than every neighbouring app.
+    Keep the margin. icon.ico is deliberately not generated from this file: Windows
+    uses a near full-bleed grid and would look undersized with the macOS margin.
+  -->
+  <rect x="100" y="100" width="824" height="824" rx="202.38" fill="#68AEFF"/>
+  <rect x="264.16" y="264.16" width="495.69" height="495.69" rx="86.91" fill="#FFFFFF"/>
+  <path d="M317.27 441.19 H706.73 V672.93 a33.8 33.8 0 0 1 -33.8 33.8 H351.07 a33.8 33.8 0 0 1 -33.8 -33.8 Z" fill="#68AEFF"/>
+  <circle cx="351.87" cy="351.87" r="27.36" fill="#68AEFF"/>
+  <circle cx="440.38" cy="351.87" r="27.36" fill="#68AEFF"/>
+  <circle cx="528.90" cy="351.87" r="27.36" fill="#68AEFF"/>
+</svg>

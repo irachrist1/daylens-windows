@@ -65,6 +65,8 @@ import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb, tableExists } from '../services/database'
 import { setSettings } from '../services/settings'
 import { flushCurrentSession, getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
+import { workerAppDetail, workerAppSummaries } from '../services/rangeWorker'
+import { getCaptureVerificationState } from '../services/permissionWatcher'
 import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import {
@@ -79,7 +81,6 @@ import { getProcessMetrics } from '../services/processMonitor'
 import {
   getBlockDetailPayload,
   getDistractionCostPayload,
-  getRecapRange,
   writeTimelineBlockReview,
   writeIgnoredBlockReviewBackstop,
   reviewEvidenceKeyForBlock,
@@ -92,6 +93,7 @@ import { applyCorrection, previewCorrection, undoCorrection } from '../services/
 import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { analyzeTimelineDay } from '../services/analyzeDay'
+import { detectDayClarifications, applyClarificationAnswer } from '../services/dayClarifications'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { applyTimelineBlockEdit } from '../services/timelineBlockEdits'
@@ -123,6 +125,8 @@ import type {
   CorrectionUndoResult,
   PurgeTrackedEvidencePayload,
   WorkMemorySettingsSummary,
+  TimelineAnalyzeProgress,
+  TimelineClarificationAnswer,
 } from '@shared/types'
 import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
 import { isRealDayHarness } from '../lib/realDayHarness'
@@ -410,16 +414,22 @@ export function registerDbHandlers(): void {
     return mergeLiveSessionForDate(getSessionsForRange(getDb(), from, to), dateStr)
   })
 
+  // analysis:false — the renderer shows the day as the user sees it: a day that
+  // has not been analyzed (or was rebuilt after a partial-seal repair, DEV-267)
+  // reads as coarse, neutral sittings, not fine app fragments (DEV-268).
   ipcMain.handle(IPC.DB.GET_HISTORY_DAY, (_e, dateStr: string) => {
-    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
+    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
   })
 
   ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (_e, dateStr: string) => {
-    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
+    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
     return payload
   })
 
   ipcMain.handle(IPC.DB.REBUILD_TIMELINE_DAY, async (_e, dateStr: string, hint?: string) => {
+    const onProgress = (update: TimelineAnalyzeProgress): void => {
+      if (!_e.sender.isDestroyed()) _e.sender.send(IPC.DB.ANALYZE_PROGRESS, update)
+    }
     // "Rebuild" is intentionally no longer a destructive block wipe. Days
     // already self-heal on open; the useful manual action is to spend AI work
     // only where the day is still on a deterministic floor or low-confidence
@@ -434,12 +444,31 @@ export function registerDbHandlers(): void {
       userHint: hint?.trim() || undefined,
       resolveLiveSession: getLiveSessionForDate,
       triggerSource: 'user',
+      onProgress,
     })
-    return result.payload
+    return {
+      payload: result.payload,
+      changed: result.changed,
+      merged: result.merged,
+      mergedCount: result.mergedCount,
+      relabeled: result.relabeled,
+      attempted: result.attempted,
+      failed: result.failures.length,
+      failureReason: result.failures[0] ?? null,
+    }
   })
 
-  ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {
-    return getRecapRange(getDb(), dates)
+  // The material questions the day-analysis agent has for this day — detected
+  // over the same projection the timeline shows, so it never asks about a block
+  // the person can't see (DEV-247/270 clarification).
+  ipcMain.handle(IPC.DB.GET_DAY_CLARIFICATIONS, (_e, dateStr: string) => {
+    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
+    return detectDayClarifications(getDb(), payload)
+  })
+
+  ipcMain.handle(IPC.DB.RESOLVE_DAY_CLARIFICATION, (_e, dateStr: string, answer: TimelineClarificationAnswer) => {
+    applyClarificationAnswer(getDb(), dateStr, answer)
+    return { ok: true }
   })
 
   // Calendar month grid — persisted blocks for a date range, one light query.
@@ -453,7 +482,7 @@ export function registerDbHandlers(): void {
   // Corrected facts (invariant 7): deleted Timeline blocks are subtracted, so
   // the Apps list totals never disagree with the Timeline. Raw capture stays
   // stored untouched underneath.
-  ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, (_e, days: number = 7) => {
+  ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, async (_e, days: number = 7) => {
     // Normalize at the boundary so every period reaches one canonical query.
     const normalizedDays = Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 7
     const today = localDateString()
@@ -466,11 +495,16 @@ export function registerDbHandlers(): void {
     }
     // All-time: one query over all captured history. Avoids the day-by-day
     // cache loop, which would iterate ~36,500 times for this sentinel.
-    if (normalizedDays >= ALL_TIME_DAYS) {
-      return getCorrectedAppSummariesForRange(getDb(), 0, todayTo, live)
+    const from = normalizedDays >= ALL_TIME_DAYS
+      ? 0
+      : dayBounds(shiftLocalDate(today, -(normalizedDays - 1)))[0]
+    // DEV-227: multi-day scans cost ~1s at 30 days and block the UI, so they
+    // run in the range worker; the inline path is the fallback, not the norm.
+    try {
+      return await workerAppSummaries(from, todayTo, live)
+    } catch {
+      return getCorrectedAppSummariesForRange(getDb(), from, todayTo, live)
     }
-    const [from] = dayBounds(shiftLocalDate(today, -(normalizedDays - 1)))
-    return getCorrectedAppSummariesForRange(getDb(), from, todayTo, live)
   })
 
   // Apps view date switcher. A single day reads the same trusted-block
@@ -538,7 +572,16 @@ export function registerDbHandlers(): void {
     return getAppCharacter(getDb(), bundleId, daysBack)
   })
 
-  ipcMain.handle(IPC.DB.GET_APP_DETAIL, (_e, canonicalAppId: string, days: number = 7) => {
+  ipcMain.handle(IPC.DB.GET_APP_DETAIL, async (_e, canonicalAppId: string, days: number = 7) => {
+    // DEV-227: the detail payload re-runs the multi-day range scan; offload
+    // ranges beyond a single day to the worker, fall back inline on failure.
+    if (Number.isFinite(days) && days > 1) {
+      try {
+        return await workerAppDetail(canonicalAppId, days, getCurrentSession())
+      } catch {
+        // fall through to the inline path
+      }
+    }
     return getAppDetailProjection(getDb(), canonicalAppId, days, getCurrentSession())
   })
 
@@ -1004,6 +1047,7 @@ export function registerDbHandlers(): void {
   // Returns the current in-flight session (not yet flushed to DB) so the renderer
   // can display live totals without waiting for the next app switch.
   ipcMain.handle(IPC.TRACKING.GET_LIVE, () => getCurrentSession())
+  ipcMain.handle(IPC.TRACKING.GET_CAPTURE_VERIFICATION, () => getCaptureVerificationState())
   ipcMain.handle(IPC.TRACKING.GET_DIAGNOSTICS, () => {
     const since = Date.now() - 15 * 60_000
     const db = getDb()
@@ -1045,11 +1089,16 @@ export function registerDbHandlers(): void {
       captureHealth: {
         permissions: getTrackingPermissionDetails(),
         windowTitles: {
-          status: recentSamplesWithTitle > 0
-            ? 'healthy'
-            : recentSamples > 0
+          // DEV-229: "healthy" means MOST samples carry titles, not "at least
+          // one did" — 17 titled out of 102 used to read as healthy while
+          // capture was effectively blind.
+          status: recentSamples === 0
+            ? 'waiting'
+            : recentSamplesWithTitle === 0
               ? 'missing'
-              : 'waiting',
+              : recentSamplesWithTitle / recentSamples < 0.5
+                ? 'degraded'
+                : 'healthy',
           recentSamples,
           recentSamplesWithTitle,
           lastCapturedAt,

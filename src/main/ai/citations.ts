@@ -61,6 +61,16 @@ function looksLikeRealIdentifier(entity: string): boolean {
   return false
 }
 
+// Quotes the model puts around its OWN prose for emphasis ("watching", "top
+// apps", "merged, plus") are not citations, and flagging them costs a whole
+// grounding retry: the model re-runs its tool sweep and rewrites a correct
+// answer into defensive prose. Real citations (page titles, block labels,
+// commit subjects, filenames, identifiers) carry a capital or a digit
+// somewhere; an all-lowercase, digitless phrase does not.
+function isScareQuote(entity: string): boolean {
+  return !/[A-Z]/.test(entity) && !/\d/.test(entity)
+}
+
 function normalizeEntity(entity: string): string {
   return entity
     .trim()
@@ -78,7 +88,9 @@ export function extractNamedEntities(text: string): string[] {
   const quoted = text.match(/"([^"\n]{3,80})"/g) ?? []
   for (const raw of quoted) {
     const entity = normalizeEntity(raw.slice(1, -1))
-    if (entity.length >= 3 && !isStopword(entity)) entities.add(entity)
+    if (entity.length < 3 || isStopword(entity)) continue
+    if (isScareQuote(entity)) continue
+    entities.add(entity)
   }
 
   // Filename-like tokens (extension required). Also a strong signal.

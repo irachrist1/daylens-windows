@@ -15,14 +15,20 @@ Daylens is an npm-workspaces monorepo with one root lockfile. Run `npm install` 
 | `src/native`               | macOS and Windows native capture-helper source                                                                                               |
 | `apps/web`                 | Next.js and Convex marketing site and linked web companion                                                                                   |
 | `packages/remote-contract` | Shared desktop and web wire contract                                                                                                         |
-| `packages/mcp-server`      | Local stdio MCP server over Daylens data                                                                                                     |
+| `packages/mcp-server`      | Local stdio MCP server over Daylens data; read-only, same tool executors as the in-app agent                                                 |
+| `packages/range-worker`    | Apps-view range reads off the main thread                                                                                                    |
+| `packages/embed-worker`    | MiniLM ONNX embedding inference                                                                                                              |
+| `packages/capture-relay`   | Drains the on-disk focus-event spool                                                                                                         |
 | `services/billing`         | Managed AI access, metering, and payment service                                                                                             |
+
+The four `packages/*/src/index.ts` entries are referenced by vite configs and fork sites; knip flags them as unused, but they are not.
 
 ## Supporting paths
 
 | Path              | Responsibility                                                                     |
 | ----------------- | ---------------------------------------------------------------------------------- |
 | `tests`           | Offline regression suites, evaluation harnesses, fixtures, and test loaders        |
+| `cli`             | Headless CLI (`./daylens`) driving product surfaces through the renderer's code paths |
 | `scripts`         | Build, release, contract, test, and verification tooling                           |
 | `shared`          | Runtime data shared outside TypeScript source, including application normalization |
 | `build`           | Packaging resources and generated native-helper output                             |
@@ -33,6 +39,7 @@ Daylens is an npm-workspaces monorepo with one root lockfile. Run `npm install` 
 | `docs/hygiene`    | Testing, evaluation, and benchmark guidance                                        |
 | `docs/operations` | Installation, releases, billing, signing, and other runbooks                       |
 | `docs/research`   | Bounded reference work that informs but does not override accepted specifications  |
+| `docs/reviews`    | Dated analyses and reviews, kept as records rather than living documents           |
 | `docs/TO-DO.md`   | Specification reviews, product validation, and operational follow-up               |
 | `.github`         | Continuous integration and release workflows                                       |
 | `Casks`           | Homebrew cask definition                                                           |

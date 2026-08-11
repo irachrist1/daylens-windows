@@ -3,6 +3,7 @@ import type { DerivedStateComponent } from '@shared/core'
 import { DERIVED_STATE_COMPONENT_VERSIONS, DERIVED_STATE_RESET_COMPONENTS } from '../domain/versioning'
 import { resolveCanonicalApp, resolveCanonicalBrowser, normalizeUrlForStorage, pageKeyForUrl } from '../../lib/appIdentity'
 import { hasMaintenanceRun, markMaintenanceRun } from '../../db/maintenance'
+import { bumpRangeFactsEvidenceEpoch } from '../query/rangeFactsCache'
 
 const IDENTITY_COLUMNS_REPAIR_KEY = 'identity_columns_v1'
 
@@ -226,4 +227,7 @@ export function repairStoredIdentityColumns(db: Database.Database): void {
 
   tx()
   markMaintenanceRun(db, IDENTITY_COLUMNS_REPAIR_KEY)
+  // The repair UPDATEs evidence rows in place; the range-facts cache's
+  // count/max signature cannot see that — bump the shared evidence epoch.
+  bumpRangeFactsEvidenceEpoch(db)
 }

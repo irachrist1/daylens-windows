@@ -21,7 +21,7 @@ export function getTimelineDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean; forceRebuild?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): DayTimelinePayload {
   return getTimelineDayPayload(db, dateStr, liveSession, options)
 }
@@ -30,18 +30,23 @@ export function getHistoryDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean; forceRebuild?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean; analysis?: boolean } = {},
 ): HistoryDayPayload {
   return getHistoryDayPayload(db, dateStr, liveSession, options)
 }
 
+// The one entry every Analyze / re-analyze / correction / day-rollover read
+// comes through. Materializing a day IS analyzing it: the day is divided into
+// fine, labeled blocks and sealed. A passive renderer read never comes here (it
+// calls getTimelineDayProjection with materialize:false), so an un-analyzed day
+// stays coarse and neutral there (DEV-268).
 export function materializeTimelineDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
   options: { forceRebuild?: boolean } = {},
 ): DayTimelinePayload {
-  return getTimelineDayProjection(db, dateStr, liveSession, { materialize: true, forceRebuild: options.forceRebuild })
+  return getTimelineDayProjection(db, dateStr, liveSession, { materialize: true, forceRebuild: options.forceRebuild, analysis: true })
 }
 
 export function getWeeklySummaryProjection(

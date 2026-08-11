@@ -454,6 +454,16 @@ a[href], button.link-style {
   animation: spin 0.7s linear infinite;
 }
 
+.settings-rail-nav {
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+.settings-rail-nav::-webkit-scrollbar {
+  display: none;
+}
+
 /* The live block's "happening now" dot on the timeline. */
 @keyframes live-pulse {
   0%, 100% { opacity: 1; }

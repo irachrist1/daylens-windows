@@ -12,6 +12,9 @@ import {
   exportUsageRows,
   invalidateBillingAccess,
 } from '../services/billing'
+import { getSpendGuardrailsReport } from '../services/aiSpendGuardrails'
+import { getSettingsAsync } from '../services/settings'
+import { getDb } from '../services/database'
 
 function csvCell(value: unknown): string {
   const text = value == null ? '' : String(value)
@@ -33,6 +36,9 @@ export function registerBillingHandlers(): void {
   })
   ipcMain.handle(IPC.BILLING.GET_USAGE, (_event, payload: { from: number; to: number }) => (
     getBillingUsage(payload.from, payload.to)
+  ))
+  ipcMain.handle(IPC.BILLING.GET_SPEND_GUARDRAILS, async () => (
+    getSpendGuardrailsReport(getDb(), await getSettingsAsync())
   ))
   ipcMain.handle(IPC.BILLING.CREATE_POLAR_CHECKOUT, async (_event, payload?: { trigger?: string }) => {
     await shell.openExternal(await createPolarCheckout(checkoutTrigger(payload)))

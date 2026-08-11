@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ScreenContextBacklogFrame, ScreenContextStatus } from '@shared/types'
 import { ipc } from '../../lib/ipc'
+import { captureEvidenceLine, describeCaptureBlockReason, screenContextHeadline } from './screenContextCopy'
 
 const buttonStyle: React.CSSProperties = {
   fontSize: 12.5,
@@ -55,10 +56,10 @@ function frameStateLabel(state: string): string {
   switch (state) {
     case 'captured': return 'Waiting for extraction'
     case 'extracting': return 'Extracting'
-    case 'indexed': return 'Extracted — deleting the image'
+    case 'indexed': return 'Extracted, deleting the image'
     case 'safe_to_delete': return 'Deleting the image'
     case 'failed':
-    case 'quarantined': return 'Extraction failed — quarantined'
+    case 'quarantined': return 'Extraction failed, quarantined'
     default: return state
   }
 }
@@ -85,27 +86,28 @@ function ExperimentBadge() {
 
 // The consent copy. Deliberately scary-clear (screen-context.md §Product
 // behavior): it leads with the uncomfortable fact, then what happens to each
-// image, what is never captured, and the ways out. No softening.
+// image, what is never captured, and the ways out. No softening. Kept to one
+// short sentence pair per point (DEV-250).
 const CONSENT_POINTS: Array<{ title: string; body: string }> = [
   {
     title: 'Daylens will take pictures of your screen.',
-    body: 'While the experiment is on, it captures still snapshots of your active display — at most one automatic frame every 30 seconds, never continuous video, never audio.',
+    body: 'Still snapshots of your active display, at most one automatic frame every 30 seconds. Never video, never audio.',
   },
   {
     title: 'Each picture is read once, then destroyed.',
-    body: 'A frame is stored encrypted on this machine, useful details are extracted from it (a document title, short text snippets), and the image is deleted the moment those details are safely stored — usually within seconds, always within 24 hours.',
+    body: 'A frame is stored encrypted on this machine, useful details are extracted, and the image is deleted. Usually within seconds, always within 24 hours.',
   },
   {
     title: 'Some things are never captured.',
-    body: 'Private and incognito windows, password, payment, and security screens, apps and websites you have excluded, and anything on screen while you are sharing it — sampling stops before capture, not after.',
+    body: 'Private windows, password and payment screens, excluded apps and sites, and anything on screen while you share it. Sampling stops before capture, not after.',
   },
   {
     title: 'Nothing leaves this machine.',
-    body: 'During the experiment, screen-derived details are local-only: never synced, never exported, never sent to an AI provider, never included in analytics.',
+    body: 'Screen details are local only. Never synced, never exported, never sent to an AI provider.',
   },
   {
     title: 'You stay in control.',
-    body: 'Pause instantly, inspect every stored frame below, delete any or all of it, and leave the experiment at any time — leaving deletes unprocessed pictures immediately, and normal tracking is unaffected.',
+    body: 'Pause instantly, inspect and delete every stored frame below, and leave at any time. Leaving deletes unprocessed pictures immediately.',
   },
 ]
 
@@ -115,6 +117,8 @@ export function ScreenContextSection() {
   const [error, setError] = useState<string | null>(null)
   const [understood, setUnderstood] = useState(false)
   const [busy, setBusy] = useState(false)
+  // DEV-251: the diagnostic click always ends in one of these, on screen.
+  const [diagnostic, setDiagnostic] = useState<{ ok: boolean; text: string } | null>(null)
   const [confirmingWipe, setConfirmingWipe] = useState(false)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [leaveWipesEverything, setLeaveWipesEverything] = useState(true)
@@ -157,8 +161,7 @@ export function ScreenContextSection() {
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
       <ExperimentBadge />
       <span style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-        Testing whether fleeting screen snapshots help Daylens understand work that window titles can’t explain.
-        This may never ship — it becomes a feature only if it earns it.
+        Testing whether screen snapshots explain work that window titles can’t. This may never ship.
       </span>
     </div>
   )
@@ -210,7 +213,7 @@ export function ScreenContextSection() {
             </button>
           </div>
           <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
-            Joining is separate from every other Daylens permission — normal tracking never turns this on, and this never changes normal tracking.
+            Joining is separate from every other Daylens permission. Normal tracking never turns this on.
           </span>
         </div>
       </div>
@@ -227,7 +230,7 @@ export function ScreenContextSection() {
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
-            {status.paused ? 'Joined · paused' : status.samplerActive ? 'Joined · sampling ON' : 'Joined · on'}
+            {screenContextHeadline(status)}
           </span>
           {status.samplerActive && (
             <span
@@ -249,37 +252,70 @@ export function ScreenContextSection() {
             {status.paused ? 'Resume sampling' : 'Pause sampling'}
           </button>
         </div>
+        {/* DEV-251: the claim above is backed by evidence, never by a setting. */}
+        <span style={{ fontSize: 12.5, fontWeight: 560, color: 'var(--color-text-secondary)' }}>
+          {captureEvidenceLine(status)}
+        </span>
         {status.samplerInstalled ? (
           <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55 }}>
-            While sampling is on, the menu-bar icon says so — the indicator follows the sampler itself, never a
-            cached setting. Excluded apps, private windows, password/payment screens, and browsers whose privacy
-            state can’t be verified are refused before any pixel is read. Extraction isn’t installed in this build
-            yet, so captured frames wait, encrypted, in the backlog below until it ships — or until you delete them.
+            Excluded apps, private windows, and password or payment screens are refused before any pixel is read.
+            Extraction isn’t installed in this build yet, so captured frames wait encrypted below until it ships
+            or you delete them.
           </span>
         ) : (
           <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55 }}>
-            Nothing is being captured: no screen sampler is available on this platform. Your consent prepares the
-            pipeline; everything below applies to whatever a supported build captures.
+            Nothing is being captured: no screen sampler exists on this platform. Your consent prepares the
+            pipeline for a supported build.
           </span>
         )}
         {status.samplerInstalled && (
-          <div>
-            <button
-              type="button"
-              style={buttonStyle}
-              disabled={busy || status.paused}
-              onClick={() => void run(async () => {
-                const result = await ipc.screenContext.diagnosticSample()
-                return { ok: result.captured, reason: result.captured ? null : `No frame captured — ${result.reason ?? 'blocked'}.` }
-              })}
-            >
-              Capture a diagnostic sample
-            </button>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <div>
+              <button
+                type="button"
+                style={buttonStyle}
+                disabled={busy || status.paused}
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true)
+                    setDiagnostic(null)
+                    try {
+                      const result = await ipc.screenContext.diagnosticSample()
+                      await reload()
+                      if (result.captured) {
+                        const fresh = await ipc.screenContext.status()
+                        const at = fresh.lastCapturedAt != null ? new Date(fresh.lastCapturedAt).toLocaleTimeString() : null
+                        setDiagnostic({
+                          ok: true,
+                          text: `Sample captured${at ? ` at ${at}` : ''}. It is listed under stored frames below.`,
+                        })
+                      } else {
+                        setDiagnostic({ ok: false, text: describeCaptureBlockReason(result.reason) })
+                      }
+                    } catch {
+                      setDiagnostic({ ok: false, text: 'The diagnostic didn’t run. Try again in a moment.' })
+                    } finally {
+                      setBusy(false)
+                    }
+                  })()
+                }}
+              >
+                Capture a diagnostic sample
+              </button>
+            </div>
+            {diagnostic && (
+              <span
+                role="status"
+                style={{ fontSize: 12.5, lineHeight: 1.5, color: diagnostic.ok ? 'var(--color-text-secondary)' : '#fbbf24' }}
+              >
+                {diagnostic.text}
+              </span>
+            )}
           </div>
         )}
         {status.backlogCapReached && (
           <span style={{ fontSize: 12.5, color: '#fbbf24' }}>
-            The frame backlog reached its cap — sampling is paused until it drains or you delete frames below.
+            The frame backlog is full. Sampling stays paused until you delete frames below.
           </span>
         )}
       </div>
@@ -294,7 +330,7 @@ export function ScreenContextSection() {
         </div>
         {!backlog || backlog.frames.length === 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
-            No frames stored — nothing has been captured.
+            No frames stored. Nothing has been captured.
           </div>
         ) : (
           backlog.frames.map((frame) => {
@@ -344,7 +380,7 @@ export function ScreenContextSection() {
         )}
         {quarantined.length > 0 && (
           <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
-            A quarantined frame is never deleted automatically — it is the only copy, and the decision is yours.
+            Quarantined frames are never deleted automatically. Each is the only copy, and the decision is yours.
           </span>
         )}
       </div>
@@ -355,7 +391,7 @@ export function ScreenContextSection() {
             Excluded apps with screen records
           </span>
           <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55 }}>
-            These apps are excluded from tracking, but screen records from before the exclusion still exist. You can delete them now.
+            These apps are excluded now, but screen records from before still exist. Delete them here.
           </span>
           {status.exclusionOffers.map((offer) => (
             <div key={offer.source} style={{ ...cardStyle, gap: 6, padding: '12px 14px' }}>

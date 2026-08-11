@@ -1,0 +1,69 @@
+# Machine-reconstructed: no journal entry. A three-thread Thursday: an
+# after-midnight sprint that commits both the TARS retrieval/workflow build
+# and the four Daylens fix phases, a late start (machine mostly asleep until
+# 11:32), a short Andersen payroll-admin block, the CodeRabbit review +
+# PR #254-257 merge pass mid-afternoon, and a long Obsidian vault/strategy
+# writing block until the 18:56 lock. The weekly plan's "run club Thursday
+# evening" has no capture corroboration either way.
+date: "2026-07-23"
+confidence: machine
+sources:
+  - "git: tars-private (10 commits 00:06-01:24 — retrieval benchmark v1, BM25 baseline, three-way Notion reconciliation, confirm-first image capture, bounded resurfacing, PARA weekly pass/master prompt); daylens (17 commits: fix phases DEV-276-286 committed 00:38-02:11; CodeRabbit review fixes + PR #254-257 merges 15:28-15:52; all authored Christian Tonny)"
+  - "focus_events: at machine 00:00-02:15 (lock; Claude ~91min + Warp 19min) and 11:32 (unlock)-18:56 (lock); afternoon mix Dia 148min, Obsidian 147min, ChatGPT 40min, Safari 45min; Obsidian titles 16:00-18:00: Ideas Inbox, Second Brain, OpportunityMap, Rwanda Government Intelligence Platform (+ Product), 'Research doc and thesis formation - state of opensource AI 2026', Recall, Thinking brain, Daylens × Thinking brain"
+  - "browser history: Andersen Odoo payroll admin 11:33-11:55 (Payroll Dashboard, work entries, attendance/PTO, payslips) + Perplexity 'Andersen in Rwanda' 11:34 + Entra admin login 11:33; Notion 'This week (Jul 19-26)' 12:02; Netflix 12:05-12:18; X ~13:57-14:00; cerebras.ai knowledge-base article 14:37-14:45; ALU Canvas 'Summative assignment - MLOP' 15:23"
+  - "machine events: lock 02:15, sleep 07:05, momentary wakes 09:48 and 10:51-11:21 (≈10 focus events total), unlock 11:32, lock 18:56 with zero capture after"
+summary: >
+  The day's densest work happened after midnight: a Claude Code + Warp sprint
+  to 02:15 that landed the TARS retrieval benchmark, Notion reconciliation
+  and PARA weekly-pass build (10 commits, 00:06-01:24) interleaved with all
+  four Daylens fix phases (DEV-276-286, committed 00:38-02:11). The machine
+  then slept most of the morning; the day restarted at 11:32 with a short
+  Andersen admin block — Odoo payroll dashboard, work entries, attendance and
+  payslips to about 11:55 — then the weekly plan in Notion and a
+  Netflix-and-browsing lunch lull. Mid-afternoon he addressed CodeRabbit
+  review on the fix-phase PRs and merged #254-257 (15:28-15:52), with an ALU
+  MLOps summative page and a Cerebras knowledge-base article touched nearby.
+  From 16:00 to the 18:56 lock the day became vault writing in Obsidian —
+  Ideas Inbox, OpportunityMap, the Rwanda Government Intelligence Platform
+  notes and a state-of-open-source-AI-2026 thesis doc — with ChatGPT
+  alongside near the end. Nothing was captured after 18:56.
+primaryWork:
+  - name: Daylens fix build (phases DEV-276-286 committed overnight; CodeRabbit review + PR #254-257 merges)
+    aliases: [daylens]
+  - name: TARS retrieval/workflow sprint (benchmark v1, Notion reconciliation, PARA weekly pass)
+    aliases: [tars, retrieval, second brain os]
+  - name: Vault strategy writing in Obsidian (Ideas Inbox, OpportunityMap, Rwanda Gov Intelligence Platform, open-source-AI thesis)
+    aliases: [obsidian, vault, second brain, opportunitymap, ideas inbox, thesis, rwanda]
+secondary:
+  - name: Andersen payroll admin in Odoo (work entries, attendance, payslips)
+    aliases: [andersen, odoo, payroll]
+  - name: ALU MLOps coursework touch (Canvas summative page)
+    aliases: [mlop, alu, canvas]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+  - "chatgpt"
+  - "claude"
+shape:
+  - { from: "00:00", until: "02:15", desc: "after-midnight Claude Code + Warp sprint: TARS commits 00:06-01:24 and the four Daylens fix phases 00:38-02:11" }
+  - { from: "11:32", until: "12:00", desc: "Andersen admin: Odoo payroll dashboard, work entries, attendance/PTO, payslips; Perplexity 'Andersen in Rwanda'" }
+  - { from: "12:00", until: "14:00", desc: "weekly plan in Notion 12:02, then a Dia lull: Netflix 12:05-12:18, X ~14:00; content otherwise untitled" }
+  - { from: "14:00", until: "16:00", desc: "mixed block: Obsidian + ChatGPT, Cerebras knowledge-base article, ALU MLOP summative page 15:23; CodeRabbit fixes and PR #254-257 merges 15:28-15:52" }
+  - { from: "16:00", until: "18:56", desc: "vault writing in Obsidian (~1.9h: Ideas Inbox, OpportunityMap, Rwanda Gov Intelligence Platform, state-of-opensource-AI-2026 thesis, Daylens × Thinking brain), ChatGPT-heavy last hour; lock 18:56" }
+gaps:
+  - { from: "02:20", to: "10:45", reason: "locked 02:15, machine slept 07:05; momentary wakes 09:48 and 10:51 produced ~10 events and no real session before the 11:32 unlock" }
+  - { from: "19:05", to: "23:59", reason: "locked 18:56 with zero capture after; the weekly plan says run club Thursday evening but nothing verifies it" }
+notes: >
+  Machine-reconstructed; no journal exists for this day. The overnight
+  commits are one sitting that straddles midnight — a narrative must not
+  claim a fresh morning coding session, and must not read the 15:28-15:52
+  merge commits as an afternoon of coding (it was a ~25-minute review-and-
+  merge pass). Dia carried 148 foreground minutes but recorded only generic
+  "Dia" window titles; apart from Netflix 12:05-12:18 and brief X, the midday
+  browser content is unknown — do not punish vagueness there and do not let a
+  history-fill artifact call it a Netflix marathon. The 10:51-11:21 wake left
+  ~10 events; treat anything there as noise. Claude (112min) and ChatGPT
+  (40min) are tool surfaces serving the work, never the work. The weekly
+  plan's Thursday rotation says "SPCS"; capture shows Andersen payroll admin
+  and vault writing instead — the plan is a plan, not a record. Evening after
+  18:56 is unobserved: no claim about a run, dinner, or anything else.

@@ -58,9 +58,10 @@ export function registerWrappedPeriodNarrativeProvider(runner: ProviderRunner): 
   providerRunner = runner
 }
 
-// Belt over the per-job timeout (JOB_DEFINITIONS.wrapped_period_narrative = 45s);
-// sits just above it. Overridable for the offline benchmark (see wrappedNarrative).
-const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 50_000
+// Belt over the per-job timeout (JOB_DEFINITIONS.wrapped_period_narrative =
+// 100s); sits just above it. Overridable for the offline benchmark (see
+// wrappedNarrative).
+const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 110_000
 
 function localToday(): string {
   const d = new Date()

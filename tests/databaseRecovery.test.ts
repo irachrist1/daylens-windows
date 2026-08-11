@@ -6,8 +6,10 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   checkDatabaseIntegrity,
+  consumeCleanShutdownMarker,
   quarantineCorruptDatabase,
   recoverCorruptDatabase,
+  writeCleanShutdownMarker,
 } from '../src/main/services/databaseRecovery.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 
@@ -49,6 +51,15 @@ test('a missing or empty database file passes the integrity check', () => {
   assert.deepEqual(checkDatabaseIntegrity(dbPath), { ok: true })
 })
 
+test('clean shutdown marker is consumed exactly once', () => {
+  const dir = makeTempDir()
+
+  assert.equal(consumeCleanShutdownMarker(dir), false)
+  writeCleanShutdownMarker(dir)
+  assert.equal(consumeCleanShutdownMarker(dir), true)
+  assert.equal(consumeCleanShutdownMarker(dir), false)
+})
+
 test('a healthy database passes the integrity check and is untouched', () => {
   const dir = makeTempDir()
   const dbPath = path.join(dir, 'daylens.sqlite')
@@ -66,6 +77,19 @@ test('a corrupt database file fails the integrity check with a reason', () => {
   corruptFile(dbPath)
 
   const result = checkDatabaseIntegrity(dbPath)
+  assert.equal(result.ok, false)
+  assert.ok(!result.ok && result.reason.length > 0)
+})
+
+test('quick mode passes a healthy database and fails a corrupt one', () => {
+  const dir = makeTempDir()
+  const healthyPath = path.join(dir, 'healthy.sqlite')
+  createHealthyDatabase(healthyPath, 'com.daylens.quick')
+  assert.deepEqual(checkDatabaseIntegrity(healthyPath, 'quick'), { ok: true })
+
+  const corruptPath = path.join(dir, 'corrupt.sqlite')
+  corruptFile(corruptPath)
+  const result = checkDatabaseIntegrity(corruptPath, 'quick')
   assert.equal(result.ok, false)
   assert.ok(!result.ok && result.reason.length > 0)
 })

@@ -29,7 +29,15 @@ or the telemetry that captured it.
 ## Rules
 
 Every rule is a named, deterministic check in `src/shared/labelVoice.ts`,
-returning pass or fail plus the offending fragment. Rules come in two tiers:
+returning pass or fail plus the offending fragment. The rules are not only
+scored: the label chooser (`finalizedLabelForBlock`) rejects any candidate that
+fails an invariant rule, and rejects an interpreted candidate (the AI label, an
+artifact title) that reproduces a captured title verbatim or is a bare app
+name. A rejected candidate falls to the next in priority; a person's own
+override is never touched. The AI labeler gets one corrective retry with the
+violation named before the deterministic fallback stands (DEV-276).
+
+Rules come in two tiers:
 
 - **Invariant** rules hold for every produced label, including deterministic
   fallback labels. A violation is a defect in the labeling path.
@@ -42,7 +50,7 @@ returning pass or fail plus the offending fragment. Rules come in two tiers:
 | Rule | Requirement | Fails on |
 | --- | --- | --- |
 | `nonempty-bounded` | A label exists and stays a short phrase: never empty, at most 90 characters and 12 words, no trailing sentence punctuation. | “” · a full sentence ending in a period |
-| `no-raw-artifact-forms` | No raw machine forms reach a label: URLs, bare domains, data/office file extensions, underscore filenames, SCREAMING identifiers, notification counts, browser-tab soup (3+ `\|` segments), trailing browser names. | “https://github.com/…” · “youtube.com” · “report_final_v2.xlsx” · “AGENT-EXECUTION-PLAN.md” · “(3) Inbox” · “W2_Reading \| Intro to ML \| Perusall” · “Docs — Google Chrome” |
+| `no-raw-artifact-forms` | No raw machine forms reach a label: URLs, bare domains, filenames of any kind (code filenames included — DEV-276), JSON fragments, bracketed title fragments, underscore filenames, SCREAMING identifiers, notification counts, browser-tab soup (3+ `\|` segments), trailing browser names. | “https://github.com/…” · “youtube.com” · “handoff.md” · “report_final_v2.xlsx” · “AGENT-EXECUTION-PLAN.md” · “{"questions":[…” · “[Week 1]” · “(3) Inbox” · “W2_Reading \| Intro to ML \| Perusall” · “Docs — Google Chrome” |
 | `no-plumbing-or-hype` | Everyday words only: no capture vocabulary (“foreground”, “window title”, “app session”, “captured signal”, “telemetry”, “bundle id”) and none of the assistant voice contract’s banned marketing filler (“deep dive”, “seamless”, “streamline”, …). | “Foreground app sessions” · “Deep dive into metrics” |
 | `no-judgment` | A label never judges productivity, focus, distraction, or personal worth. Naming a real focus-timer session stays allowed. | “Unproductive browsing” · “Wasted afternoon” · “Doomscrolling” |
 | `leisure-activity-shaped` | A leisure block’s label reads as the activity — “Watching…”, “On…”, “Listening…”, “Browsing…” — never a bare page or video title. | “Big Buck Bunny 4K60” as a leisure label |

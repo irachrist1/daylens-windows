@@ -10,13 +10,13 @@ import { getSessionsForRange, setBlockLabelOverride } from '../src/main/db/queri
 import { absenceSpannedBy } from '../src/main/lib/absenceGuard.ts'
 import { getCorrectedSessionsForRange } from '../src/main/services/activityFacts.ts'
 
-// The absence guard end-to-end. A real day had a block from 3:49 PM to
-// 10:05 PM with a real absence from 8:01 PM to 9:39 PM inside it — a merge
-// path joined work across time away. These tests pin the three defenses:
-// the write-path veto in mergeTimelineEpisodes, the regroup partition in
-// analyzeTimelineDay (the AI proposes, the guard decides), and the repair
-// path that splits an already-stored bad day at the gap while user
-// corrections survive.
+// The absence guard end-to-end, under the DEV-233 decision: a merge the
+// person asks for always succeeds — including across time away — and
+// survives every rebuild. Only automatic merges (the day regroup, the
+// fragment repair) are still vetoed at a real absence. These tests pin that
+// split: the user path fuses and stays fused, the auto path refuses, the AI
+// regroup partition holds, and the repair path splits an already-stored bad
+// block only when no person asked for the fusion.
 
 const TEST_DATE = '2026-04-22'
 
@@ -77,7 +77,7 @@ function blockSpansGap(block: { startTime: number; endTime: number } | { start_t
   return start < gapMid && end > gapMid
 }
 
-test('mergeTimelineEpisodes refuses to join blocks across a real absence', () => {
+test('a merge the person asks for succeeds across a real absence and stays fused', async () => {
   const db = createDb()
   seedDayWithAbsence(db)
   const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
@@ -85,12 +85,40 @@ test('mergeTimelineEpisodes refuses to join blocks across a real absence', () =>
   assert.ok(blocks.length >= 2, `the day must split at the absence; got ${blocks.length} block(s)`)
   assert.ok(blocks.every((block) => !blockSpansGap(block)), 'no fresh block may span the absence')
 
+  mergeTimelineEpisodes(db, TEST_DATE, [blocks[0], blocks[blocks.length - 1]])
+  const corrections = db.prepare(
+    `SELECT COUNT(*) AS n FROM timeline_boundary_corrections WHERE kind = 'merge' AND date = ?`,
+  ).get(TEST_DATE) as { n: number }
+  assert.ok(corrections.n >= 1, 'the user merge must land as a durable correction')
+
+  const fused = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  assert.equal(fused.length, 1, 'the user merge must fuse the day into one block')
+  assert.ok(blockSpansGap(fused[0]), 'the fused block spans the gap the user chose to bridge')
+
+  // Re-analyze must not undo the person's fusion: the repair pass skips a gap
+  // covered by a stored user merge.
+  const result = await analyzeTimelineDay(db, TEST_DATE, {
+    regroupPlan: async () => [],
+    blockInsight: async () => ({ label: 'Repaired work', narrative: '' }),
+  })
+  const reanalyzed = result.payload.blocks.filter((block) => !block.isLive)
+  assert.equal(reanalyzed.length, 1, 're-analyze must keep the user-fused block whole')
+  assert.ok(blockSpansGap(reanalyzed[0]))
+  db.close()
+})
+
+test('an automatic merge still refuses to join across a real absence', () => {
+  const db = createDb()
+  seedDayWithAbsence(db)
+  const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
+  const blocks = payload.blocks.filter((block) => !block.isLive)
+  assert.ok(blocks.length >= 2)
+
   assert.throws(
-    () => mergeTimelineEpisodes(db, TEST_DATE, [blocks[0], blocks[blocks.length - 1]]),
+    () => mergeTimelineEpisodes(db, TEST_DATE, [blocks[0], blocks[blocks.length - 1]], { initiator: 'auto' }),
     /real absence/,
-    'the one shared merge write path must veto a join across the gap',
+    'automatic merges may never invent continuity across time away',
   )
-  // The veto left no merge correction behind.
   const corrections = db.prepare(
     `SELECT COUNT(*) AS n FROM timeline_boundary_corrections WHERE kind = 'merge' AND date = ?`,
   ).get(TEST_DATE) as { n: number }
@@ -175,18 +203,15 @@ test('re-analyze REPAIRS a stored day and carries the fused block correction to 
   assert.equal(freshBlocks.length, 2)
 
   // Poison the day the way the pre-guard bug did: one stored block fused
-  // across the absence, held together by a merge correction spanning the gap,
-  // and an AI label row that marks the day "processed" (frozen).
+  // across the absence with an AI label row that marks the day "processed"
+  // (frozen) — and NO merge correction, because no person asked for the
+  // fusion. Only this un-asked-for shape is repairable; a stored user merge
+  // now outranks the absence cut and is skipped by the repair.
   const dayStart = localMs(9)
   const dayEnd = localMs(12, 30)
   const heuristicVersion = (db.prepare(
     `SELECT heuristic_version FROM timeline_blocks WHERE invalidated_at IS NULL LIMIT 1`,
   ).get() as { heuristic_version: string }).heuristic_version
-  const sessions = db.prepare(
-    `SELECT id, start_time FROM app_sessions ORDER BY start_time ASC`,
-  ).all() as Array<{ id: number; start_time: number }>
-  const lastBefore = [...sessions].reverse().find((s) => s.start_time < localMs(GAP_START_H))!
-  const firstAfter = sessions.find((s) => s.start_time >= localMs(GAP_END.h, GAP_END.m))!
   const now = Date.now()
   db.transaction(() => {
     db.prepare(`UPDATE timeline_blocks SET invalidated_at = ? WHERE date = ?`).run(now, TEST_DATE)
@@ -203,11 +228,6 @@ test('re-analyze REPAIRS a stored day and carries the fused block correction to 
       INSERT INTO timeline_block_labels (id, block_id, label, narrative, source, confidence, created_at)
       VALUES ('lbl_bad_fused', 'bad_fused_block', 'Repairing the tracker', NULL, 'ai', 0.9, ?)
     `).run(now)
-    db.prepare(`
-      INSERT INTO timeline_boundary_corrections (
-        id, date, left_session_id, right_session_id, kind, created_at, updated_at, span_start_ms, span_end_ms
-      ) VALUES ('bnd_poisoned', ?, ?, ?, 'merge', ?, ?, ?, ?)
-    `).run(TEST_DATE, lastBefore.id, firstAfter.id, now, now, dayStart, dayEnd)
   })()
 
   // Sanity: the stored day now serves the fused bad block (it is "processed").
@@ -234,11 +254,6 @@ test('re-analyze REPAIRS a stored day and carries the fused block correction to 
   const repaired = result.payload.blocks.filter((block) => !block.isLive)
   assert.ok(repaired.length >= 2, `the repair must split the day at the gap; got ${repaired.length} block(s)`)
   assert.ok(repaired.every((block) => !blockSpansGap(block)), 'no repaired block may span the absence')
-  // The poisoned merge correction is still stored but can no longer erase a
-  // real-absence boundary — the guard outranks every stored correction.
-  const poisonRow = db.prepare(`SELECT COUNT(*) AS n FROM timeline_boundary_corrections WHERE id = 'bnd_poisoned'`)
-    .get() as { n: number }
-  assert.equal(poisonRow.n, 1)
   const corrected = repaired.filter((block) => block.label.current === 'Fixing the tracker')
   assert.equal(corrected.length, 1, 'the fused rename belongs to exactly the split half with the most overlap')
   const largest = [...repaired].sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))[0]
@@ -253,13 +268,14 @@ test('re-analyze REPAIRS a stored day and carries the fused block correction to 
   db.close()
 })
 
-test('a repaired day stays repaired on the next plain read', async () => {
+test('a stored user merge across an absence survives an invalidating rebuild', async () => {
   const db = createDb()
   seedDayWithAbsence(db)
   materializeTimelineDayProjection(db, TEST_DATE, null)
 
-  // Poison with only the spanning merge correction (no fabricated block):
-  // rebuild-time protection alone must keep the day split at the gap.
+  // The user's fusion is only its stored correction: rebuild-time honoring
+  // alone must keep the day fused across the gap (DEV-233 — a merge survives
+  // leaving the day and returning).
   const sessions = db.prepare(`SELECT id, start_time FROM app_sessions ORDER BY start_time ASC`)
     .all() as Array<{ id: number; start_time: number }>
   const lastBefore = [...sessions].reverse().find((s) => s.start_time < localMs(GAP_START_H))!
@@ -268,15 +284,13 @@ test('a repaired day stays repaired on the next plain read', async () => {
   db.prepare(`
     INSERT INTO timeline_boundary_corrections (
       id, date, left_session_id, right_session_id, kind, created_at, updated_at, span_start_ms, span_end_ms
-    ) VALUES ('bnd_poisoned2', ?, ?, ?, 'merge', ?, ?, ?, ?)
+    ) VALUES ('bnd_user_fused', ?, ?, ?, 'merge', ?, ?, ?, ?)
   `).run(TEST_DATE, lastBefore.id, firstAfter.id, now, now, localMs(9), localMs(12, 30))
   db.prepare(`UPDATE timeline_blocks SET invalidated_at = ? WHERE date = ?`).run(now, TEST_DATE)
 
-  // The next read rebuilds from sessions with the poisoned correction live —
-  // the absence guard in boundary scoring must refuse to honor it.
   const rebuilt = materializeTimelineDayProjection(db, TEST_DATE, null)
   const blocks = rebuilt.blocks.filter((block) => !block.isLive)
-  assert.ok(blocks.length >= 2)
-  assert.ok(blocks.every((block) => !blockSpansGap(block)), 'a stored merge correction must not re-fuse across the absence')
+  assert.equal(blocks.length, 1, 'the rebuild must honor the stored user merge')
+  assert.ok(blockSpansGap(blocks[0]), 'the fused block spans the gap the user chose to bridge')
   db.close()
 })

@@ -12,18 +12,23 @@
 // This function is the ONE chat entrypoint body — the IPC handler and the
 // terminal bench both reach it through sendMessage. Keep every
 // behavior deps-injected so the bench cannot diverge from the UI.
-import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
+import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
 import type Database from 'better-sqlite3'
+import { randomUUID } from 'node:crypto'
 import os from 'node:os'
-import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind } from '@shared/types'
+import type { AIAgentStep, AIMessageArtifact, AgentTurnWaitKind, SummaryVoice } from '@shared/types'
 import { statusForTool } from '@shared/agentTrail'
 import type { ResolvedProviderConfig, AIProviderUsage } from '../services/aiOrchestration'
-import { providerLabel } from '../services/aiOrchestration'
-import { recordProviderCall } from '../services/aiRateLimiter'
+import { JOB_DEFINITIONS, providerLabel } from '../services/aiOrchestration'
+import { getSettings } from '../services/settings'
 import { verifyTimestamps, verifyCitedEntities } from '../ai/citations'
 import { languageModelFor } from './providerModel'
+import { applyChatPromptCacheToSystem } from './executionPolicy'
 import { buildDaylensTools } from './daylensTools'
+import { buildContextTools } from './contextTools'
+import { buildScreenTools } from './screenTools'
 import { buildSystemTools, type FileAccessAnswer } from './systemTools'
+import { buildTerminalTools, type TerminalAccessAnswer } from './terminalTools'
 import type { FileDisclosureRow } from '../services/fileAccess'
 import { buildExportTools, buildInteractionTools, createArtifact, type AgentQuestion, type InteractionDeps } from './interactionTools'
 import { buildMemoryTools } from './memoryTools'
@@ -31,19 +36,107 @@ import { buildCorrectionTools, type CorrectionToolHooks } from './correctionTool
 import { connectMcpTools, type McpServerConfig } from './mcpTools'
 import {
   buildContextPacket,
+  CONTEXT_POLICY_VERSION,
   contextPacketsAvailable,
+  DEFAULT_CONTEXT_BUDGET,
   recordContextPacket,
   renderContextPacketForAgent,
   type ContextPacket,
 } from '../services/contextPacket'
 import { resolvePacketCitations, type PacketCitation } from './contextCitations'
+import {
+  deterministicFactsForQuestion,
+  enforceDeterministicFacts,
+  renderDeterministicFactsForAgent,
+  type DeterministicFact,
+  type DeterministicRepair,
+} from './deterministicFacts'
+import {
+  applyUnsupportedFactDisclosure,
+  assessEvidenceCoverage,
+  buildExchangeEvidence,
+  evidenceBacksValue,
+  extractFactualClaims,
+  type FactualClaim,
+  type SupportedClaim,
+} from './evidenceCoverage'
+import { getCurrentTrace } from '../ai/trace'
 import { buildAgentSystemPrompt } from './systemPrompt'
-import { renderTimeChunkAnswer, type TimeChunkResult } from './timeChunkAnswer'
+import { renderTimeChunkAnswer, wantsTimeChunkTable, type TimeChunkResult } from './timeChunkAnswer'
 import { sanitizeForRender } from '@shared/aiSanitize'
+import { pausedError } from '../lib/aiCancellation'
+import {
+  AISdkAgentRuntime,
+  type AgentToolInteraction,
+} from './agentRuntime'
 
 const MAX_STEPS = 14
 const MAX_OUTPUT_TOKENS = 8_000
 const MAX_TOOL_RESULT_CHARS = 60_000
+
+const PERSON_INPUT_TOOLS = new Set([
+  'ask_user',
+  'propose_memory',
+  'forget_memory',
+  'propose_correction',
+  'undo_correction',
+])
+
+const PERMISSION_TOOLS = new Set([
+  'read_file',
+  'run_command',
+])
+
+function toolInteractionsFor(tools: ToolSet): Record<string, AgentToolInteraction> {
+  const interactions: Record<string, AgentToolInteraction> = {}
+  for (const name of Object.keys(tools)) {
+    if (PERSON_INPUT_TOOLS.has(name)) interactions[name] = 'person_input'
+    else if (PERMISSION_TOOLS.has(name)) interactions[name] = 'permission'
+    else interactions[name] = 'tool'
+  }
+  return interactions
+}
+
+function emptyContextPacket(question: string, destination: string, now: Date): ContextPacket {
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return {
+    id: `ctx_empty_${now.getTime().toString(36)}`,
+    purpose: 'answer',
+    request: {
+      originalText: question,
+      timeRange: {
+        startDate: date,
+        endDate: date,
+        dates: [date],
+        resolution: 'default',
+      },
+      dates: [date],
+      entityIds: [],
+    },
+    person: {
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      confirmedPreferences: [],
+    },
+    items: [],
+    conflicts: [],
+    gaps: [],
+    permissions: [],
+    tools: [],
+    actionContext: null,
+    contextBudget: DEFAULT_CONTEXT_BUDGET,
+    disclosure: {
+      destination,
+      leftDevice: false,
+      policyVersion: CONTEXT_POLICY_VERSION,
+      itemCount: 0,
+      counts: {},
+      omissions: [{ kind: 'day_fact', count: 1, reason: 'unavailable' }],
+    },
+    policyVersion: CONTEXT_POLICY_VERSION,
+    contentFingerprint: 'empty',
+    assembledAt: now.getTime(),
+  }
+}
 
 interface PageVisitToolResult {
   pages?: Array<{ pageTitle?: string | null; url?: string | null; totalSeconds?: number; visitCount?: number }>
@@ -68,6 +161,9 @@ export interface ChatAgentDeps {
   artifactDir: string
   mcpServers?: McpServerConfig[]
   extraSystem?: string | null
+  /** The person's chosen tone, read from settings by the production caller.
+   *  Absent in the bench and tests, where it normalizes to the default. */
+  summaryVoice?: SummaryVoice | null
   signal?: AbortSignal
   now?: Date
   trackingStart?: string | null
@@ -99,6 +195,23 @@ export interface ChatAgentResult {
   /** Verified packet citations in the answer, in display order — every entry
    *  resolves to an item in the recorded packet. */
   citations: PacketCitation[]
+  /** Evidence coverage for this answer's factual claims (REQ-AIA-002). Every
+   *  field is derived from THIS exchange only — the turn's packet, its tool
+   *  results, and its computed facts — so inspecting it can never surface
+   *  provider instructions, credentials, or another conversation. */
+  evidence: {
+    /** Facts computed from the corrected activity boundary for this question. */
+    deterministicFacts: DeterministicFact[]
+    /** Figures the model stated that disagreed with a computed fact and were
+     *  replaced before the answer reached the person (AC-AIA-002.4). */
+    deterministicRepairs: DeterministicRepair[]
+    /** Claims bound to the evidence item that backs them (AC-AIA-002.1). */
+    supportedClaims: SupportedClaim[]
+    /** Claims nothing in the exchange backs (AC-AIA-002.2). */
+    unsupportedClaims: FactualClaim[]
+    /** Unsupported figures the answer was made to admit in words. */
+    disclosedUncertainties: string[]
+  }
   /** Files whose contents were disclosed to the model this turn (DEV-184) —
    *  persisted with the message so the sources row can cite opened files. */
   fileDisclosures: Array<{
@@ -154,11 +267,11 @@ export async function runChatAgentTurn(
   // The exchange starts from the recorded context packet (DEV-182): assembled
   // deterministically from the corrected read models, persisted BEFORE any
   // request leaves the device, then rendered into the model prompt with
-  // per-item citation markers. Assembly failure degrades to a tools-only turn
-  // (the tool results still ride the same privacy boundaries) — it never
-  // blocks the answer.
+  // per-item citation markers. Assembly failure degrades to an empty packet so
+  // the provider-independent runtime still has a typed context boundary — it
+  // never blocks the answer.
   const destination = `${deps.config.provider}:${deps.config.model}`
-  let contextPacket: ContextPacket | null = null
+  let contextPacket: ContextPacket = emptyContextPacket(question, destination, now)
   let contextPacketRecorded = false
   try {
     contextPacket = await buildContextPacket(deps.db, {
@@ -176,14 +289,28 @@ export async function runChatAgentTurn(
     }
   } catch (error) {
     console.warn('[agent] context packet assembly failed; answering from tools only', error)
-    contextPacket = null
+    contextPacket = emptyContextPacket(question, destination, now)
   }
   // Packet statements count as evidence for the grounding verifiers: a time or
   // name the packet disclosed is cited, not hallucinated, even when the model
   // answered without re-fetching it through a tool.
-  const packetEvidence = contextPacket && contextPacket.items.length > 0
+  const packetEvidence = contextPacket.items.length > 0
     ? contextPacket.items.map((item) => item.statement).join('\n')
     : ''
+
+  // Eligible totals and counts are computed BEFORE the model writes, from the
+  // one corrected activity boundary the Timeline and Apps views read
+  // (AC-AIA-002.4). They are handed to the model as authoritative so it
+  // normally just states them, and they are enforced against the finished
+  // answer so a model that states something else cannot reach the person.
+  // Scope resolution reuses the packet's own resolved time range: chat must
+  // not grow a second idea of which days a question means.
+  const deterministicFacts = deterministicFactsForQuestion(
+    deps.db,
+    question,
+    contextPacket.request.timeRange,
+    { nowMs: now.getTime() },
+  )
 
   const mcp = await connectMcpTools(deps.mcpServers ?? [])
   try {
@@ -223,8 +350,26 @@ export async function runChatAgentTurn(
       if (normalized === 'allow this folder') return 'allow_folder'
       return 'deny'
     }
+    // The consent card for run_command rides the SAME permission machinery as
+    // file reads: the turn pauses as awaiting_user(file_permission), and only
+    // an explicit allow runs anything.
+    const requestTerminalAccess = async (request: { command: string; args: string[]; cwd: string; reason: string }): Promise<TerminalAccessAnswer> => {
+      const commandLine = [request.command, ...request.args].join(' ')
+      const answer = await askFilePermission({
+        question: `Daylens wants to run \`${commandLine}\` in ${request.cwd} — ${request.reason}`,
+        options: ['Allow once', 'Allow for this session', 'Deny'],
+        allowFreeText: false,
+      })
+      const normalized = answer.trim().toLowerCase()
+      if (normalized === 'allow once') return 'allow_once'
+      if (normalized === 'allow for this session') return 'allow_session'
+      return 'deny'
+    }
     const tools: ToolSet = {
       ...buildDaylensTools(deps.db),
+      // Calendar, git-signal, and meeting-notes context: same executors as
+      // the wrap/MCP surface, policy-gated in the tools themselves.
+      ...buildContextTools(deps.db),
       ...buildSystemTools({
         db: deps.db,
         fileAccess: {
@@ -236,6 +381,19 @@ export async function runChatAgentTurn(
         },
       }),
       ...buildInteractionTools(interactionDeps),
+      // Tier-3 live-screen escalation: consent-gated in Settings, refuses
+      // honestly when the toggle is off.
+      ...buildScreenTools(),
+      // Consent-gated read-only terminal access: allowlist-first, no shell,
+      // off by default, first use per session confirmed on the same card.
+      ...buildTerminalTools({
+        db: deps.db,
+        threadId: deps.threadId ?? null,
+        destination: `${deps.config.provider}:${deps.config.model}`,
+        signal: deps.signal,
+        requestTerminalAccess,
+        onDisclosure: (row) => fileDisclosures.push(row),
+      }),
       ...buildExportTools(deps.db, interactionDeps),
       // The confirmed-memory proposal card (DEV-185): a durable personal fact
       // pauses the turn through the same askUser machinery as file access;
@@ -258,7 +416,28 @@ export async function runChatAgentTurn(
       ...mcp.tools,
     }
 
-    const system = [
+    const renderedPacket = renderContextPacketForAgent(contextPacket)
+    const renderedFacts = renderDeterministicFactsForAgent(deterministicFacts)
+    // The computed facts ride with the packet in the turn-specific (uncached)
+    // system section, never in the cacheable stable prefix: they are as
+    // question-specific as the packet itself.
+    const dynamicSystem = [renderedPacket, renderedFacts]
+      .filter((section): section is string => Boolean(section && section.trim()))
+      .join('\n\n')
+    // The trace recorder (eval harness / DAYLENS_AI_TRACE_DIR) needs the packet
+    // as evidence: facts the model quotes from it are grounded, not fabricated.
+    if (renderedPacket) {
+      getCurrentTrace()?.addEvent({
+        kind: 'context_packet',
+        rendered: renderedPacket,
+        itemCount: contextPacket.items.length,
+      })
+    }
+    // Stable system prefix is cacheable; the packet is turn-specific and stays
+    // off the cache marker so the disclosure contract does not change.
+    const promptCachingEnabled = getSettings().aiPromptCachingEnabled !== false
+    const cachePolicy = JOB_DEFINITIONS.chat_answer.cachePolicy
+    const system = applyChatPromptCacheToSystem(
       buildAgentSystemPrompt({
         now,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -267,84 +446,165 @@ export async function runChatAgentTurn(
         model: deps.config.model,
         homeDir: os.homedir(),
         extraSystem: deps.extraSystem,
+        summaryVoice: deps.summaryVoice ?? null,
       }),
-      contextPacket ? renderContextPacketForAgent(contextPacket) : '',
-    ].filter(Boolean).join('\n\n')
+      dynamicSystem,
+      {
+        provider: deps.config.provider,
+        cachePolicy,
+        promptCachingEnabled,
+      },
+    )
 
     const messages: ModelMessage[] = [
       ...history.map((message) => ({ role: message.role, content: message.content } as ModelMessage)),
       { role: 'user', content: question },
     ]
 
-    const streamTurn = async (turnMessages: ModelMessage[]): Promise<string> => {
-      const result = streamText({
-        model: deps.model ?? languageModelFor(deps.config),
-        system,
-        messages: turnMessages,
-        tools,
-        stopWhen: stepCountIs(MAX_STEPS),
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        abortSignal: deps.signal,
-      })
+    const runtime = new AISdkAgentRuntime(deps.model ?? languageModelFor(deps.config))
+    const toolInteractions = toolInteractionsFor(tools)
 
+    const streamTurn = async (turnMessages: ModelMessage[]): Promise<string> => {
       let finalText = ''
       let stepText = ''
       let stepUsedTool = false
-      // Steps still running, keyed by tool call id, so the result (or error)
-      // settles the SAME trail row its call opened.
+      let stepToolUses: Array<{ id: string; name: string; input: unknown }> = []
+      let stepUsage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number } | null = null
       const openSteps = new Map<string, AIAgentStep>()
+      const toolInputs = new Map<string, unknown>()
       const settleStep = async (toolCallId: string, state: 'done' | 'failed') => {
         const opened = openSteps.get(toolCallId)
         if (!opened) return
         openSteps.delete(toolCallId)
         await deps.onStreamEvent?.({ delta: '', snapshot: '', step: { ...opened, state } })
       }
-      for await (const part of result.fullStream) {
-        switch (part.type) {
-          case 'start-step':
+      const openToolStep = async (toolCallId: string, toolName: string, input: unknown) => {
+        stepUsedTool = true
+        toolInputs.set(toolCallId, input)
+        stepToolUses.push({ id: toolCallId, name: toolName, input })
+        const step: AIAgentStep = {
+          id: toolCallId,
+          label: statusForTool(toolName, input),
+          state: 'active',
+          startedAt: Date.now(),
+        }
+        openSteps.set(toolCallId, step)
+        await deps.onStreamEvent?.({ delta: '', snapshot: '', status: step.label, step })
+      }
+
+      for await (const event of runtime.run({
+        runId: `chat_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+        contextPacket,
+        tools,
+        toolInteractions,
+        output: { kind: 'text' },
+        limits: {
+          maxSteps: MAX_STEPS,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+        },
+        system,
+        messages: turnMessages,
+        signal: deps.signal,
+        execution: {
+          provider: deps.config.provider,
+          cachePolicy,
+          promptCachingEnabled,
+          label: 'chat_answer',
+        },
+      })) {
+        switch (event.type) {
+          case 'step_started':
+            // Provider-call counting rides the execution-policy middleware on
+            // the model, which sees one call per step; do not count again here.
             stepCount += 1
-            recordProviderCall()
             stepText = ''
             stepUsedTool = false
+            stepToolUses = []
+            stepUsage = null
             break
-          case 'text-delta': {
-            stepText += part.text
+          case 'text':
+            stepText += event.text
+            break
+          case 'tool_request':
+          case 'permission_request':
+          case 'person_input_request':
+            await openToolStep(event.toolCallId, event.toolName, event.input)
+            break
+          case 'tool_result': {
+            if (event.toolName === 'get_time_chunks') timeChunkResult = event.output as TimeChunkResult
+            if (event.toolName === 'list_page_visits') pageVisitResult = event.output as PageVisitToolResult
+            const input = toolInputs.get(event.toolCallId)
+            const failedReason = event.failed
+              && event.output
+              && typeof event.output === 'object'
+              && 'message' in event.output
+              && typeof (event.output as { message?: unknown }).message === 'string'
+              ? (event.output as { message: string }).message
+              : 'tool error'
+            const output = event.failed
+              ? JSON.stringify({ found: false, reason: failedReason })
+              : JSON.stringify(event.output ?? null)
+            const truncated = !event.failed && output.length > MAX_TOOL_RESULT_CHARS
+            const bounded = truncated ? `${output.slice(0, MAX_TOOL_RESULT_CHARS)}…` : output
+            toolTrace.push({
+              tool: event.toolName,
+              input,
+              output: bounded,
+              ...(event.failed ? { failed: true } : {}),
+            })
+            if (!event.failed) toolResultStrings.push(evidenceWithFormattedTimes(bounded))
+            getCurrentTrace()?.addEvent({
+              kind: 'tool_result',
+              name: event.toolName,
+              input,
+              output: event.failed
+                ? { found: false, reason: 'tool error' }
+                : truncated ? bounded : event.output ?? null,
+              toolUseId: event.toolCallId,
+              durationMs: Math.max(0, Date.now() - (openSteps.get(event.toolCallId)?.startedAt ?? Date.now())),
+              truncated,
+            })
+            await settleStep(event.toolCallId, event.failed ? 'failed' : 'done')
             break
           }
-          case 'tool-call': {
-            stepUsedTool = true
-            const step: AIAgentStep = {
-              id: part.toolCallId,
-              label: statusForTool(part.toolName, part.input),
-              state: 'active',
-              startedAt: Date.now(),
+          case 'usage':
+            addUsage({
+              inputTokens: event.usage.inputTokens,
+              outputTokens: event.usage.outputTokens,
+              cachedInputTokens: event.usage.cacheReadTokens,
+            })
+            stepUsage = {
+              inputTokens: event.usage.inputTokens,
+              outputTokens: event.usage.outputTokens,
+              cacheReadTokens: event.usage.cacheReadTokens,
             }
-            openSteps.set(part.toolCallId, step)
-            await deps.onStreamEvent?.({ delta: '', snapshot: '', status: step.label, step })
             break
-          }
-          case 'tool-result': {
-            if (part.toolName === 'get_time_chunks') timeChunkResult = part.output as TimeChunkResult
-            if (part.toolName === 'list_page_visits') pageVisitResult = part.output as PageVisitToolResult
-            const output = JSON.stringify(part.output ?? null)
-            const bounded = output.length > MAX_TOOL_RESULT_CHARS ? `${output.slice(0, MAX_TOOL_RESULT_CHARS)}…` : output
-            toolTrace.push({ tool: part.toolName, input: part.input, output: bounded })
-            toolResultStrings.push(evidenceWithFormattedTimes(bounded))
-            await settleStep(part.toolCallId, 'done')
-            break
-          }
-          case 'tool-error': {
-            const message = JSON.stringify({ found: false, reason: String((part as { error?: unknown }).error ?? 'tool error') })
-            toolTrace.push({ tool: part.toolName, input: part.input, output: message, failed: true })
-            await settleStep(part.toolCallId, 'failed')
-            break
-          }
-          case 'finish-step':
-            addUsage(part.usage)
+          case 'step_completed':
+            getCurrentTrace()?.addEvent({
+              kind: 'turn',
+              role: 'assistant',
+              text: stepText.trim(),
+              toolUses: stepToolUses,
+              usage: stepUsage,
+            })
             if (!stepUsedTool && stepText.trim()) finalText = stepText.trim()
             break
-          case 'error':
-            throw part.error instanceof Error ? part.error : new Error(String(part.error))
+          case 'completion':
+            if (stepText.trim()) finalText = stepText.trim()
+            break
+          case 'cancellation': {
+            // Pending pause must surface as the product pause error so
+            // aiService can resume; cancel remains a plain AbortError.
+            if (event.pending) throw pausedError()
+            const abortError = new Error('The operation was aborted')
+            abortError.name = 'AbortError'
+            throw abortError
+          }
+          case 'failure': {
+            const failure = new Error(event.error.message)
+            failure.name = event.error.code
+            throw failure
+          }
           default:
             break
         }
@@ -353,7 +613,13 @@ export async function runChatAgentTurn(
     }
 
     let text = await streamTurn(messages)
-    text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
+    // The deterministic chunk table exists to guarantee complete-interval
+    // fidelity when the user ASKED for increments. Gate it on the question:
+    // a turn that merely consulted get_time_chunks while researching keeps
+    // the model's actual answer instead of having it hijacked by a table.
+    if (wantsTimeChunkTable(question)) {
+      text = (timeChunkResult && renderTimeChunkAnswer(timeChunkResult)) || text
+    }
     const exportFormat = /\b(?:excel|xlsx)\b/i.test(question) ? 'xlsx' : /\bcsv\b/i.test(question) ? 'csv' : null
     const exportPages = (pageVisitResult as PageVisitToolResult | null)?.pages
     if (exportFormat && artifacts.length === 0 && exportPages?.length) {
@@ -391,7 +657,7 @@ export async function runChatAgentTurn(
           { role: 'assistant', content: text },
           {
             role: 'user',
-            content: `Your answer failed the grounding check: ${problems}. Rewrite it using only times and names that appear in the tool results you already have (call a tool again if you need to re-check). Reply with the corrected answer only.`,
+            content: `Your answer failed the grounding check: ${problems}. Fix ONLY those items and keep everything else exactly as you wrote it: same answer, same voice, same length, same shape. Where a time was one you computed, replace it with the exact start and end the tool result shows, or drop it. You already have the evidence you need, so do not re-run the research you just did. Do not add caveats about coverage, and do not explain what you can or cannot see. Reply with the corrected answer only.`,
           },
         ]
         const replacement = await streamTurn(retryMessages)
@@ -402,6 +668,37 @@ export async function runChatAgentTurn(
         }
       }
     }
+
+    // The exchange's evidence index: this turn's packet, this turn's tool
+    // results, this turn's computed facts, and nothing else. That is what keeps
+    // inspection free of provider instructions, credentials, and unrelated
+    // conversation (AC-AIA-002.3), and it also tells the enforcer which stated
+    // figures were quoted from evidence rather than produced by the model.
+    const exchangeEvidence = buildExchangeEvidence({
+      packet: contextPacket,
+      toolTrace,
+      deterministic: deterministicFacts,
+    })
+
+    // AC-AIA-002.4: the computed value wins. A figure the model stated that
+    // disagrees with a fact computed from the corrected activity boundary is
+    // replaced here, before the answer is finished. This runs AFTER the
+    // grounding retry so the retry cannot reintroduce a wrong total, and
+    // BEFORE coverage so a repaired figure is assessed as the figure that
+    // ships rather than the one that did not.
+    const enforcement = enforceDeterministicFacts(text, deterministicFacts, {
+      isBacked: (value, dimension, kind) => evidenceBacksValue(exchangeEvidence, value, dimension, kind),
+    })
+    text = enforcement.text
+    for (const repair of enforcement.repairs) {
+      console.warn(`[agent:deterministic] replaced ${repair.kind} "${repair.claimed}" with the computed ${repair.corrected}`)
+    }
+
+    // AC-AIA-002.1 / .2: bind each factual claim to the evidence item that
+    // backs it, and make the answer admit any figure nothing backs.
+    const coverage = assessEvidenceCoverage(extractFactualClaims(text), exchangeEvidence)
+    const disclosure = applyUnsupportedFactDisclosure(text, coverage.unsupported)
+    text = disclosure.text
 
     // Resolve the answer's [Cn] markers against the recorded packet: verified
     // citations become superscripts + a citation list; a marker the packet
@@ -421,6 +718,13 @@ export async function runChatAgentTurn(
       groundingRetried,
       contextPacketId: contextPacket && contextPacketRecorded ? contextPacket.id : null,
       citations,
+      evidence: {
+        deterministicFacts,
+        deterministicRepairs: enforcement.repairs,
+        supportedClaims: coverage.supported,
+        unsupportedClaims: coverage.unsupported,
+        disclosedUncertainties: disclosure.disclosed,
+      },
       fileDisclosures: fileDisclosures.map((row) => ({
         path: row.file_path,
         name: row.display_name,

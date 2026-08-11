@@ -69,7 +69,9 @@ export function deliverNotification(input: DeliverNotificationInput): boolean {
   notification.on('close', () => { liveNotifications.delete(notification) })
 
   notification.show()
-  setTimeout(() => { liveNotifications.delete(notification) }, 30 * 60 * 1000)
+  // unref: this cleanup timer must never keep the process alive on its own
+  // (app quit, or a test process waiting for the event loop to drain).
+  setTimeout(() => { liveNotifications.delete(notification) }, 30 * 60 * 1000).unref?.()
   return true
 }
 

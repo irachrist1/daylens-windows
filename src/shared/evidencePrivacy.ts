@@ -44,10 +44,19 @@ function escapeRegex(value: string): string {
 // Bounded match so a short exclusion like "Arc" redacts "Arc was open" but
 // never "architecture". The token must sit on a word boundary (start/end or a
 // non-alphanumeric neighbour). Tokens under 3 chars are too noisy to redact.
-function containsBoundedToken(value: string, rawToken: string): boolean {
-  const token = rawToken.trim().toLowerCase().replace(/^www\./, '')
+// App names are proper nouns and many collide with ordinary words ("Messages",
+// "Notes", "Music"), so app tokens match case-sensitively — excluding the app
+// "Messages" must not redact a label saying "checking messages". Site tokens
+// stay case-insensitive: hosts are lowercase while prose brands vary
+// ("YouTube" for youtube.com).
+function containsBoundedToken(value: string, rawToken: string, caseSensitive = false): boolean {
+  const trimmed = rawToken.trim().replace(/^www\./i, '')
+  const token = caseSensitive ? trimmed : trimmed.toLowerCase()
   if (token.length < 3) return false
-  return new RegExp(`(^|[^a-z0-9])${escapeRegex(token)}(?=$|[^a-z0-9])`, 'i').test(value)
+  return new RegExp(
+    `(^|[^a-zA-Z0-9])${escapeRegex(token)}(?=$|[^a-zA-Z0-9])`,
+    caseSensitive ? '' : 'i',
+  ).test(value)
 }
 
 // A site exclusion has to redact more than the literal host: derived block
@@ -80,7 +89,7 @@ function siteExclusionTokens(entry: string): string[] {
 }
 
 function containsExcludedText(value: string, controls: TrackingControlsState): boolean {
-  return controls.excludedApps.some((entry) => containsBoundedToken(value, entry))
+  return controls.excludedApps.some((entry) => containsBoundedToken(value, entry, true))
     || controls.excludedSites.some((entry) =>
       siteExclusionTokens(entry).some((token) => containsBoundedToken(value, token)))
 }

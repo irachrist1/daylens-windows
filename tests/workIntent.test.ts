@@ -9,7 +9,7 @@ import type {
   WorkflowRef,
   WebsiteSummary,
 } from '../src/shared/types.ts'
-import { inferWorkIntent } from '../src/shared/workIntent.ts'
+import { inferWorkIntent, workSubjectCandidates } from '../src/shared/workIntent.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 
 function makeApp(appName: string, category: WorkContextAppSummary['category'], totalSeconds: number, isBrowser = false): WorkContextAppSummary {
@@ -316,4 +316,97 @@ test('browser-hosted operational trackers are coordination, not writing executio
   })
 
   assert.equal(inferWorkIntent(block).role, 'coordination')
+})
+
+// A channel artifact names the project it hosts; a DM or thread names the
+// PERSON talked to. "Sarah Chen (DM)" once became the work subject of a
+// comms block — a person is never what the work was about.
+test('a channel artifact names the work; a DM or thread artifact never does', () => {
+  const channelBlock = makeBlock({
+    dominantCategory: 'communication',
+    topApps: [makeApp('Slack', 'communication', 3600)],
+    documentRefs: [makeDocumentRef('daylens (Channel)')],
+    topArtifacts: [makeArtifact('daylens (Channel)')],
+  })
+  const channelIntent = inferWorkIntent(channelBlock)
+  assert.match(channelIntent.subject ?? '', /daylens/i, 'a channel still names the project it hosts')
+  assert.ok(channelIntent.subject && !/channel/i.test(channelIntent.subject), 'the (Channel) suffix never leaks')
+
+  const dmBlock = makeBlock({
+    dominantCategory: 'communication',
+    topApps: [makeApp('Slack', 'communication', 3600)],
+    documentRefs: [makeDocumentRef('Sarah Chen (DM)')],
+    topArtifacts: [makeArtifact('Sarah Chen (DM)')],
+  })
+  const dmIntent = inferWorkIntent(dmBlock)
+  assert.ok(!/sarah/i.test(dmIntent.subject ?? ''), `a DM partner became the subject: "${dmIntent.subject}"`)
+  for (const candidate of workSubjectCandidates(dmBlock)) {
+    assert.ok(!/sarah/i.test(candidate), `a DM partner reached the thread candidates: "${candidate}"`)
+  }
+
+  const threadBlock = makeBlock({
+    dominantCategory: 'communication',
+    topApps: [makeApp('Slack', 'communication', 3600)],
+    documentRefs: [makeDocumentRef('Q3 planning (Thread)')],
+    topArtifacts: [makeArtifact('Q3 planning (Thread)')],
+  })
+  const threadIntent = inferWorkIntent(threadBlock)
+  assert.ok(!/q3 planning/i.test(threadIntent.subject ?? ''), `a thread title became the subject: "${threadIntent.subject}"`)
+})
+
+// A person-titled chat app names its windows with WHO is being talked to — a
+// Teams chat window is the chat partner's name, with or without the app
+// suffix. "Jamie Duffy" once became a real day's 75-minute work activity this
+// way. Structural, not name detection: the artifact's OWNER app titles by
+// conversation partner, so its window title never names the work. Slack is
+// the counter-case — its titles lead with the channel, a project container.
+test('a person-titled chat app window title never names the work', () => {
+  const teamsApp = makeApp('Microsoft Teams', 'communication', 4500)
+  const teamsArtifact = (title: string) => ({
+    ...makeDocumentRef(title),
+    artifactType: 'window' as const,
+    ownerAppName: 'Microsoft Teams',
+    ownerBundleId: teamsApp.bundleId,
+  })
+
+  for (const title of ['Jamie Duffy', 'Jamie Duffy | Microsoft Teams']) {
+    const block = makeBlock({
+      dominantCategory: 'communication',
+      topApps: [teamsApp],
+      documentRefs: [teamsArtifact(title)],
+      topArtifacts: [teamsArtifact(title)],
+    })
+    const intent = inferWorkIntent(block)
+    assert.ok(!/jamie/i.test(intent.subject ?? ''), `a chat partner became the subject: "${intent.subject}" (title "${title}")`)
+    for (const candidate of workSubjectCandidates(block)) {
+      assert.ok(!/jamie/i.test(candidate), `a chat partner reached the thread candidates: "${candidate}"`)
+    }
+  }
+
+  // The same title from a NON-chat app still names the work — the rule is
+  // about the producing app, not about detecting person names.
+  const docBlock = makeBlock({
+    dominantCategory: 'writing',
+    topApps: [makeApp('Pages', 'writing', 3600)],
+    documentRefs: [{
+      ...makeDocumentRef('Jamie Duffy offer letter'),
+      ownerAppName: 'Pages',
+      ownerBundleId: 'pages.bundle',
+    }],
+  })
+  assert.match(inferWorkIntent(docBlock).subject ?? '', /offer letter/i, 'a document from a writing app keeps naming the work')
+
+  // Slack window titles lead with the CHANNEL — a project container that
+  // legitimately names the work (the timeline eval pins this too).
+  const slackBlock = makeBlock({
+    dominantCategory: 'communication',
+    topApps: [makeApp('Slack', 'communication', 3600)],
+    documentRefs: [{
+      ...makeDocumentRef('acme-portal'),
+      artifactType: 'window' as const,
+      ownerAppName: 'Slack',
+      ownerBundleId: 'com.tinyspeck.slackmacgap',
+    }],
+  })
+  assert.match(inferWorkIntent(slackBlock).subject ?? '', /acme-portal/i, 'a Slack channel window title keeps naming the work')
 })

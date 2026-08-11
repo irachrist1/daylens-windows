@@ -9,6 +9,7 @@
 // question and a closing reflection. Rejected lines fall back per slide.
 
 import { createHash } from 'node:crypto'
+import { INTERPRETATION_DIRECTIVES } from '@shared/activityDescription'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import type {
   WrappedPeriod,
@@ -61,7 +62,7 @@ const PERIOD_ANGLES = [
 /** Bumped whenever the period wrap's prompt semantics change (directives,
  *  contract, slide asks), so a stored analysis version records WHICH prompt
  *  produced it (DEV-206: reproducible, inspectable versions). */
-export const PERIOD_WRAP_PROMPT_VERSION = 1
+export const PERIOD_WRAP_PROMPT_VERSION = 2
 
 export function computePeriodFactsHash(facts: WrappedPeriodFacts): string {
   const bucket = (s: number) => Math.round(s / 60)
@@ -126,6 +127,8 @@ export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: s
     DECK_JSON_CONTRACT,
     PERIOD_TIME_LITERACY,
     ...EVIDENCE_HONESTY_DIRECTIVES,
+    // Interpretation half only, for the same reason as the day deck.
+    ...INTERPRETATION_DIRECTIVES,
     'Each slide line is one or two sentences, written to the person ("you"), specific, never generic. Stat/caption slides stay tight (under ~200 characters); the thread and story beats may run to two full sentences. The curious question stays under ~200 characters and contains NO clock time and NO percentage.',
     'ADD A READ, DO NOT RESTATE. On every stat slide the slide\'s OWN big number is already printed huge on the card. Do not make that one number the subject of your sentence and do not merely repeat it. Lead with what it MEANS. BUT your line must still be concrete: anchor it in at least one real detail that is NOT that headline number, for example the real thread or work, a real day, or a real supporting figure. Never go vague or generic to avoid the number.',
     'THE REGISTER, by example (never copy these, match their honesty): "Tuesday morning you went straight into the code and stayed there for two and a half hours before your first break." / "Wednesday carried the week and Thursday paid for it, which is a fair trade." / "Three of the five days ended after 11pm, and the work shows where those hours went."',

@@ -5,17 +5,13 @@ import {
   ArrowUpRight,
   Blocks,
   Check,
-  Code2,
   EyeOff,
   Layers3,
   MessageCircleMore,
   Sparkles,
 } from "lucide-react";
 import { assetPath } from "@/app/lib/basePath";
-import {
-  MAC_DOWNLOAD_HREF,
-  UNIFIED_DESKTOP_REPO_URL,
-} from "@/app/lib/platformLinks";
+import { MAC_DOWNLOAD_HREF } from "@/app/lib/platformLinks";
 import styles from "./V2Landing.module.css";
 
 const benefits = [
@@ -373,14 +369,6 @@ export function V2Landing() {
             <a href="#how">How it works</a>
             <Link href="/docs">Docs</Link>
           </nav>
-          <a
-            className={styles.githubLink}
-            href={UNIFIED_DESKTOP_REPO_URL}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <Code2 size={15} /> GitHub
-          </a>
         </div>
         <div className={styles.footerCredits}>
           <Wordmark />

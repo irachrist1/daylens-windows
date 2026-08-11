@@ -150,6 +150,12 @@ export default function ConnectAI({
     const currentSettings = await ipc.settings.get()
     await ipc.settings.set({
       aiProvider: provider,
+      // Chat keeps its own provider so a single conversation can be run
+      // elsewhere. Connecting in Settings is the person saying "use this",
+      // so it clears that override — otherwise a chat pinned to an earlier
+      // provider (or to the old 'anthropic' default) silently keeps billing
+      // the account they just switched away from.
+      aiChatProvider: provider,
       onboardingState: {
         ...currentSettings.onboardingState,
         aiSetupState: 'connected',

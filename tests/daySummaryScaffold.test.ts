@@ -141,6 +141,31 @@ test('scaffold truncates artifact and page titles at 100 chars', () => {
   }
 })
 
+test('scaffold grounds the recap in scheduled meetings (with honest presence) and named entities', () => {
+  const payload = makePayload([makeBlock({ label: 'shipping the recap', startOffsetMin: 0, durationMin: 90, category: 'development' })])
+  const withGrounding: DayTimelinePayload = {
+    ...payload,
+    scheduledMeetings: [
+      { title: 'Standup', startMs: base, endMs: base + 15 * 60_000, attendeeCount: 4, participants: [], attendance: 'matched', marked: 'attended', matchedBlockId: null },
+      { title: 'Andersen work block', startMs: base + 3 * 3_600_000, endMs: base + 4 * 3_600_000, attendeeCount: null, participants: [], attendance: 'calendar_only', marked: null, matchedBlockId: null },
+    ],
+    dayEntities: [
+      { id: 'p1', type: 'project', name: 'Daylens V2', seconds: 5400 },
+      { id: 'c1', type: 'client', name: 'Andersen', seconds: 30 },
+    ],
+  }
+  const parsed = JSON.parse(buildDaySummaryScaffold(withGrounding)) as {
+    meetings?: Array<{ title: string; presence: string }>
+    entities?: Array<{ type: string; name: string }>
+  }
+  // A confirmed-attended meeting says so; a calendar-only event is not asserted to have happened.
+  assert.equal(parsed.meetings?.length, 2)
+  assert.equal(parsed.meetings?.find((m) => m.title === 'Standup')?.presence, 'you confirmed you attended')
+  assert.match(parsed.meetings?.find((m) => m.title === 'Andersen work block')?.presence ?? '', /scheduled only/)
+  // Entities with real time ground the work; a 30-second sliver is dropped.
+  assert.deepEqual(parsed.entities, [{ type: 'project', name: 'Daylens V2', duration: '1h 30m' }])
+})
+
 test('MEASURED: trimmed scaffold is at least 25% smaller than the old serialization', () => {
   const payload = busyDay()
   const scaffold = buildDaySummaryScaffold(payload)

@@ -9,7 +9,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { setupFixture } from './ai-bench/fixtures'
-import { getAppDetailPayload } from '../src/main/services/appDetail'
+import { MIN_DOMAIN_ROW_SECONDS } from '../src/shared/types'
+import { foldTinyDomains, getAppDetailPayload } from '../src/main/services/appDetail'
 
 function localDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -45,7 +46,8 @@ test('browser breakdown reconciles: pages sum to their domain, domains + remaind
     assert.equal(pageSum, domain.totalSeconds, `pages of ${domain.domain} must sum to the domain total`)
   }
   const domainSum = activity.domains.reduce((sum, domain) => sum + domain.totalSeconds, 0)
-  assert.equal(domainSum, activity.attributedSeconds, 'domain totals must sum to attributedSeconds')
+    + (activity.everythingElse?.totalSeconds ?? 0)
+  assert.equal(domainSum, activity.attributedSeconds, 'domain rows plus the everything-else fold must sum to attributedSeconds')
   assert.ok(activity.attributedSeconds <= activity.totalSeconds, 'attributed time can never exceed the header total')
   assert.equal(
     activity.attributedSeconds + activity.unattributedSeconds,
@@ -60,6 +62,47 @@ test('native app detail omits the browser breakdown', () => {
   const { db, today } = setupFixture('codingDay')
   const detail = getAppDetailPayload(db, 'cursor', daysFromFixtureThroughToday(today), null)
   assert.equal(detail.browserActivity, undefined, 'non-browser apps must not carry browserActivity')
+  db.close()
+})
+
+// DEV-239: drive-by domains (1-2 second visits) never earn their own rows —
+// they fold into one "Everything else" line whose seconds stay reconciled.
+test('domains under the minimum-row threshold fold into everything else', () => {
+  const domain = (name: string, totalSeconds: number, visitCount: number) => ({
+    domain: name,
+    totalSeconds,
+    visitCount,
+    pages: [],
+  })
+  const folded = foldTinyDomains([
+    domain('github.com', 3600, 12),
+    domain('claude.ai', 900, 4),
+    domain('redirect-hop.example', 2, 1),
+    domain('cdn-interstitial.example', 1, 2),
+  ])
+  assert.deepEqual(folded.rows.map((row) => row.domain), ['github.com', 'claude.ai'])
+  assert.deepEqual(folded.everythingElse, { totalSeconds: 3, domainCount: 2, visitCount: 3 })
+
+  // Nothing to fold: no everything-else line at all.
+  const untouched = foldTinyDomains([domain('github.com', 3600, 12)])
+  assert.deepEqual(untouched.rows.map((row) => row.domain), ['github.com'])
+  assert.equal(untouched.everythingElse, undefined)
+
+  // The threshold boundary belongs to the visible rows.
+  const boundary = foldTinyDomains([domain('exactly.example', MIN_DOMAIN_ROW_SECONDS, 1)])
+  assert.equal(boundary.rows.length, 1)
+  assert.equal(boundary.everythingElse, undefined)
+})
+
+test('every rendered domain row meets the minimum-row threshold', () => {
+  const { db, today } = setupFixture('allDayChatGPT')
+  const detail = getAppDetailPayload(db, 'chrome', daysFromFixtureThroughToday(today), null)
+  for (const domain of detail.browserActivity?.domains ?? []) {
+    assert.ok(
+      domain.totalSeconds >= MIN_DOMAIN_ROW_SECONDS,
+      `${domain.domain} (${domain.totalSeconds}s) is under the minimum-row threshold and must fold`,
+    )
+  }
   db.close()
 })
 

@@ -137,6 +137,17 @@ export function countFocusEventsInRange(
   return row.count
 }
 
+/** The canonical capture era's first moment — the timestamp of the earliest
+ *  focus event ever recorded, or null before any canonical capture ran.
+ *  Evidence before this moment can only exist as legacy app_sessions rows;
+ *  evidence at or after it is owned by the canonical projection. */
+export function firstFocusEventTsMs(db: Database.Database): number | null {
+  const row = db.prepare(
+    'SELECT MIN(ts_ms) AS first FROM focus_events',
+  ).get() as { first: number | null }
+  return row.first ?? null
+}
+
 export interface FocusEventTimeAndType {
   ts_ms: number
   event_type: string

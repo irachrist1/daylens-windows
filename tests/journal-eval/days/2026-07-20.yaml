@@ -1,0 +1,57 @@
+# Ground truth from the owner's Obsidian journal, cross-checked against
+# docs/reviews/gap-analysis-2026-07-20.md.
+date: "2026-07-20"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-07-20"
+  - "docs/reviews/gap-analysis-2026-07-20.md"
+summary: >
+  Morning (arrived 9:06) was ML study constantly interleaved with Daylens:
+  after planning the day in Apple Notes and fixing Daylens Slack issues
+  first, the study path ran roadmap.sh, a DataCamp signup via the GitHub
+  Student Pack, then a pivot to Andrew Ng's Supervised ML course on Coursera
+  — while Daylens kept moving in the background by driving Claude Tag in the
+  daylens Slack channel. Two human interruptions: Norman (~15 min) and Allen
+  needing an OTP from security.microsoft.com (~15 min); Spotify went on at
+  some point and derailed focus. Lunch ~12:30–14:00 was calls, with the
+  machine left on. Afternoon was email, Obsidian note cleanup, syncing the
+  Daylens repos from spcsorg to irachrist1, more Daylens work, and another
+  Norman visit. Off the computer ~17:30–21:20 (pool with Norman, then the
+  Monday run with hill sprints), then a night block 21:24–23:07 migrating CI
+  workflows to Blacksmith and writing the journal in Obsidian with Claude
+  Code — Netflix was just an idle tab. Zero Andersen work despite a planned
+  14:00–17:00 block.
+primaryWork:
+  - name: Daylens development
+    aliases: [daylens, spcsorg, irachrist1]
+  - name: ML study (Coursera)
+    aliases: [coursera, machine learning, "ml study", andrew ng, supervised ml, datacamp, "ai/ml"]
+secondary:
+  - name: Blacksmith CI migration (night)
+    aliases: [blacksmith, "ci migration", "ci workflow"]
+  - name: Obsidian note cleanup / journal
+    aliases: [obsidian, vault, journal]
+  - name: Email
+    aliases: [email, inbox]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+  # F4 in the gap analysis: the 21:24 block was Blacksmith work; Netflix was
+  # an idle tab. Phrase-level so an honest "Netflix was just an open tab"
+  # line doesn't trip it.
+  - "watching netflix"
+shape:
+  - { from: "09:06", until: "12:30", desc: "ML study interleaved with Daylens: day planned in Apple Notes, Daylens Slack fixes first, then roadmap.sh → DataCamp signup (GitHub Student Pack) → pivot to Andrew Ng's Coursera course; interrupted by Norman (~15 min) and Allen's OTP errand on security.microsoft.com (~15 min); driving Claude Tag in the daylens Slack channel throughout; Spotify on at some point" }
+  - { from: "12:30", until: "14:00", desc: "lunch break on calls; machine on but mostly untouched" }
+  - { from: "14:00", until: "17:30", desc: "email, Obsidian note cleanup, Daylens repo sync spcsorg → irachrist1, more Daylens work; Norman came back to talk" }
+  - { from: "21:24", until: "23:07", desc: "Blacksmith CI migration, then journal writing in Obsidian with a Claude Code session in Warp; Netflix an idle tab, not the activity" }
+gaps:
+  - { from: "17:30", to: "21:20", reason: "two games of pool with Norman, then the Monday run (hill sprints)" }
+notes: >
+  Capture is solid across the on-computer day: first browser visit 09:16,
+  app sessions 09:32–17:30, then again 21:24–23:08 — the 17:30–21:20 hole is
+  genuinely off-computer. The machine stayed on through the 12:30–14:00
+  lunch calls, so tracked evidence exists there even though the person was
+  mostly off-keyboard; segmentation that bridges lunch into one continuous
+  block is an error, not a data artifact. Do not punish the ~9:06–9:16
+  pre-capture sliver.

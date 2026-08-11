@@ -22,7 +22,10 @@ const ICON_FETCH_HEADERS = {
 }
 const WEBSITE_ICON_TTL_MS = 7 * 24 * 60 * 60 * 1_000
 const NEGATIVE_ICON_TTL_MS = 15 * 60 * 1_000
-const ICON_CACHE_VERSION = 6
+// v7: cross-site redirect guard + homepage-first favicon ranking (DEV-240).
+// Bumping invalidates icons cached under the old rules, where a login
+// redirect could stamp another product's logo onto a site.
+const ICON_CACHE_VERSION = 7
 const MAC_BUNDLE_THUMBNAIL_SIZE = 256
 
 type SettingsSnapshot = Pick<AppSettings, 'allowThirdPartyWebsiteIconFallback'>
@@ -679,10 +682,42 @@ async function fetchWithTimeout(url: string): Promise<Response> {
   }
 }
 
-async function fetchImageDataUrl(url: string): Promise<string | null> {
+/**
+ * True when a fetched response stayed on the site it was requested for.
+ * `fetch` follows redirects, and a login-gated or parked site can redirect
+ * its homepage (or even /favicon.ico) to a whole different product — most
+ * commonly an SSO page on google.com — whose favicon would then be cached as
+ * this site's icon and every such domain would wear the same wrong logo.
+ * A response with no final URL (test doubles, older runtimes) is trusted;
+ * the guard only rejects a KNOWN cross-site landing.
+ */
+export function responseStaysOnSite(domain: string, responseUrl: string | null | undefined): boolean {
+  if (!responseUrl) return true
+  let host: string
+  try {
+    host = new URL(responseUrl).hostname.trim().toLowerCase()
+  } catch {
+    return true
+  }
+  if (!host) return true
+  const wanted = domain.trim().toLowerCase().replace(/^www\./, '')
+  const landed = host.replace(/^www\./, '')
+  if (!wanted) return true
+  return landed === wanted || landed.endsWith(`.${wanted}`) || wanted.endsWith(`.${landed}`)
+}
+
+async function fetchImageDataUrl(url: string, sameSiteDomain?: string): Promise<string | null> {
   try {
     const response = await fetchWithTimeout(url)
     if (!response.ok) return null
+    if (sameSiteDomain && !responseStaysOnSite(sameSiteDomain, response.url)) {
+      iconWarn('resolve site icon: redirect left the site, ignoring payload', {
+        url,
+        finalUrl: response.url,
+        domain: sameSiteDomain,
+      })
+      return null
+    }
 
     const bytes = Buffer.from(await response.arrayBuffer())
     if (bytes.length === 0 || bytes.length > 1_500_000) return null
@@ -798,6 +833,13 @@ function manifestIconCandidatesFromJson(manifestText: string, manifestUrl: strin
 }
 
 async function defaultFetchSiteIconFromOrigin(origin: string): Promise<string | null> {
+  const originDomain = (() => {
+    try {
+      return new URL(origin).hostname
+    } catch {
+      return ''
+    }
+  })()
   const directCandidates = [
     new URL('/favicon.ico', origin).toString(),
     new URL('/favicon.svg', origin).toString(),
@@ -810,7 +852,7 @@ async function defaultFetchSiteIconFromOrigin(origin: string): Promise<string | 
       origin,
       candidate,
     })
-    const dataUrl = await fetchImageDataUrl(candidate)
+    const dataUrl = await fetchImageDataUrl(candidate, originDomain)
     if (dataUrl) {
       iconLog('resolve site icon: direct origin hit', {
         origin,
@@ -824,6 +866,15 @@ async function defaultFetchSiteIconFromOrigin(origin: string): Promise<string | 
   try {
     const response = await fetchWithTimeout(origin)
     if (!response.ok) return null
+    // A homepage that redirected off-site (SSO, parked domain) is another
+    // product's page; its declared icons must never become this site's icon.
+    if (!responseStaysOnSite(originDomain, response.url)) {
+      iconWarn('resolve site icon: origin redirected off-site, skipping html icons', {
+        origin,
+        finalUrl: response.url,
+      })
+      return null
+    }
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
     if (!contentType.includes('text/html')) return null
 
@@ -925,16 +976,31 @@ function copySqliteDatabase(sourcePath: string): { dbPath: string; cleanup: () =
   }
 }
 
-function chromiumUrlPatterns(domain: string, pageUrl?: string | null): { exact: string | null; likes: string[] } {
+function chromiumUrlPatterns(domain: string, pageUrl?: string | null): {
+  exact: string | null
+  likes: string[]
+  roots: string[]
+} {
   const likes = Array.from(new Set([
     `https://${domain}/%`,
     `http://${domain}/%`,
     `https://www.${domain}/%`,
     `http://www.${domain}/%`,
   ]))
+  // The domain's homepage rows. Without this rank the LIKE fallback picked
+  // whichever page on the domain had the WIDEST stored icon — a special
+  // section's logo could become the icon for the whole site and for every
+  // page whose exact URL missed the cache (DEV-240).
+  const roots = Array.from(new Set([
+    `https://${domain}/`,
+    `http://${domain}/`,
+    `https://www.${domain}/`,
+    `http://www.${domain}/`,
+  ]))
   return {
     exact: pageUrl?.trim() || null,
     likes,
+    roots,
   }
 }
 
@@ -968,24 +1034,26 @@ async function readChromiumFaviconDataUrl(faviconsPath: string, domain: string, 
   try {
     faviconDb = await openReadonlySqlite(copied.dbPath)
     if (!faviconDb) return null
-    const { exact, likes } = chromiumUrlPatterns(domain, pageUrl)
+    const { exact, likes, roots } = chromiumUrlPatterns(domain, pageUrl)
     const where = [
       ...(exact ? ['im.page_url = ?'] : []),
       ...likes.map(() => 'im.page_url LIKE ?'),
     ].join(' OR ')
     const orderPrefix = exact ? 'CASE WHEN im.page_url = ? THEN 0 ELSE 1 END,' : ''
+    const rootsOrder = `CASE WHEN im.page_url IN (${roots.map(() => '?').join(', ')}) THEN 0 ELSE 1 END,`
     const statement = faviconDb.prepare(`
       SELECT fb.image_data AS image_data
       FROM icon_mapping im
       JOIN favicon_bitmaps fb ON fb.icon_id = im.icon_id
       WHERE ${where}
-      ORDER BY ${orderPrefix} fb.width DESC, length(fb.image_data) DESC
+      ORDER BY ${orderPrefix} ${rootsOrder} fb.width DESC, length(fb.image_data) DESC
       LIMIT 1
     `)
     const params = [
       ...(exact ? [exact] : []),
       ...likes,
       ...(exact ? [exact] : []),
+      ...roots,
     ]
     const row = statement.get(...params) as { image_data: Buffer } | undefined
     if (!row?.image_data || row.image_data.length === 0) return null
@@ -1022,25 +1090,27 @@ async function readFirefoxFaviconDataUrl(dbPath: string, domain: string, pageUrl
       return null
     }
 
-    const { exact, likes } = chromiumUrlPatterns(domain, pageUrl)
+    const { exact, likes, roots } = chromiumUrlPatterns(domain, pageUrl)
     const where = [
       ...(exact ? ['p.page_url = ?'] : []),
       ...likes.map(() => 'p.page_url LIKE ?'),
     ].join(' OR ')
     const orderPrefix = exact ? 'CASE WHEN p.page_url = ? THEN 0 ELSE 1 END,' : ''
+    const rootsOrder = `CASE WHEN p.page_url IN (${roots.map(() => '?').join(', ')}) THEN 0 ELSE 1 END,`
     const statement = faviconDb.prepare(`
       SELECT i.data AS image_data, i.mime_type AS mime_type
       FROM moz_pages_w_icons p
       JOIN moz_icons_to_pages ip ON ip.page_id = p.id
       JOIN moz_icons i ON i.id = ip.icon_id
       WHERE ${where}
-      ORDER BY ${orderPrefix} i.width DESC, length(i.data) DESC
+      ORDER BY ${orderPrefix} ${rootsOrder} i.width DESC, length(i.data) DESC
       LIMIT 1
     `)
     const params = [
       ...(exact ? [exact] : []),
       ...likes,
       ...(exact ? [exact] : []),
+      ...roots,
     ]
     const row = statement.get(...params) as { image_data: Buffer; mime_type: string | null } | undefined
     if (!row?.image_data || row.image_data.length === 0) return null
@@ -1156,7 +1226,7 @@ function loadCacheEntry(cacheKey: string, overrides?: IconResolverOverrides): Di
   const inMemory = memoryCache.get(cacheKey)
   if (inMemory) {
     if (isExpired(inMemory)) {
-      iconWarn('cache expired (memory)', { cacheKey, source: inMemory.source })
+      iconLog('cache expired (memory)', { cacheKey, source: inMemory.source })
       removeCacheEntry(cacheKey, overrides)
       return null
     }
@@ -1177,7 +1247,7 @@ function loadCacheEntry(cacheKey: string, overrides?: IconResolverOverrides): Di
       return null
     }
     if (isExpired(parsed)) {
-      iconWarn('cache expired (disk)', { cacheKey, source: parsed.source })
+      iconLog('cache expired (disk)', { cacheKey, source: parsed.source })
       removeCacheEntry(cacheKey, overrides)
       return null
     }
@@ -1417,7 +1487,7 @@ async function resolveAppIconUncached(
     }
   }
 
-  iconWarn('resolve app icon: miss', {
+  iconLog('resolve app icon: miss', {
     request: describeRequest(normalized),
   })
   return { dataUrl: null, source: 'miss' }
@@ -1478,7 +1548,7 @@ async function resolveSiteIconUncached(
     }
   }
 
-  iconWarn('resolve site icon: miss', {
+  iconLog('resolve site icon: miss', {
     request: describeRequest(normalized),
   })
   return { dataUrl: null, source: 'miss' }
@@ -1535,7 +1605,7 @@ async function resolveArtifactIconUncached(
     }
   }
 
-  iconWarn('resolve artifact icon: miss', {
+  iconLog('resolve artifact icon: miss', {
     request: describeRequest(normalized),
   })
   return { dataUrl: null, source: 'miss' }

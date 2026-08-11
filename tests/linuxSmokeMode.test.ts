@@ -73,11 +73,11 @@ test('packaged smoke runs tracking on a fresh isolated profile and waits for per
   )
   assert.match(
     source,
-    /initUpdater\(mainWindow, \{ diagnosticsOnly: SMOKE_TEST \}\)/,
+    /initUpdater\(startupWindow, \{ diagnosticsOnly: SMOKE_TEST \}\)/,
     'packaged smoke must detect updater support without registering handlers or starting update checks',
   )
   assert.match(source, /if \(!SMOKE_TEST\) await initAnalytics\(\)/)
-  assert.match(source, /if \(!SMOKE_TEST\) void prewarmBrowserRegistry\(\)/)
+  assert.match(source, /if \(!REAL_DAY_HARNESS && !SMOKE_TEST\) void prewarmBrowserRegistry\(\)/)
   assert.match(source, /reason: 'offline-packaged-smoke'/)
   assert.match(source, /if \(!SMOKE_TEST\) registerCommandPaletteShortcut/)
   assert.match(source, /if \(!SMOKE_TEST && \(process\.platform === 'win32' \|\| process\.platform === 'linux'\)\) ensureProcessMonitor\(\)/)

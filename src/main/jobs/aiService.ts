@@ -33,11 +33,19 @@ import {
   parseStarterSuggestions,
 } from '../lib/followUpSuggestions'
 import { transformInstruction } from '@shared/answerTransforms'
-import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
-import { partitionDomainsWorkFirst } from '@shared/workKind'
+import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { labelCandidateViolation, labelProvenance, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import { activityCategoryLabel } from '@shared/activityCategories'
+import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
+import { INTERPRETATION_DIRECTIVES } from '@shared/activityDescription'
+import { normalizeSummaryVoice, voiceDirective } from '@shared/summaryVoice'
 import { userProfileDirective } from '@shared/userProfile'
-import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
+import { parseDaySummaryResultText } from '../lib/daySummaryParse'
+import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariants'
+import { claudeCodeChatAvailable, runClaudeCodeChat } from '../agent/claudeCodeChat'
+import { buildAgentSystemPrompt } from '../agent/systemPrompt'
+import { decodeProviderErrorMeta, isHardProviderWall } from '@shared/aiProviderError'
 import {
   resolveDayContext,
 } from '../core/query/attributionResolvers'
@@ -100,6 +108,7 @@ import type {
   FocusSession,
   FocusStartPayload,
   LiveSession,
+  SummaryVoice,
   WorkContextBlock,
   WorkContextInsight,
 } from '@shared/types'
@@ -113,7 +122,7 @@ import {
   type ProviderTextResponse,
   type ResolvedProviderConfig,
 } from '../services/aiOrchestration'
-import { resolveProviderConfigsForJob, recordChatAgentUsage } from '../services/aiOrchestration'
+import { resolveProviderConfigsForJob, recordChatAgentUsage, jobTimeoutMs } from '../services/aiOrchestration'
 import { withProviderCallCount, withProviderRateLimit } from '../services/aiRateLimiter'
 import { friendlyProviderError } from '../services/providerErrors'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
@@ -123,13 +132,14 @@ import {
   userVisibleLabelForBlock,
 } from '../services/workBlocks'
 import { getAppDetailPayload } from '../services/appDetail'
+import { workerAppDetail } from '../services/rangeWorker'
 import { buildCLIProcessPayload, buildCLIProcessSpec } from '../services/cliLaunch'
 import { historyWithUserTurn, toChatCompletionMessages, toGoogleHistory } from '../lib/providerChatMessages'
 import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
 import { registerWrappedQuestionProvider } from '../services/wrappedQuestion'
-import { VOICE_SYSTEM_PROMPT, findBannedVocab } from '../ai/voiceContract'
+import { VOICE_SYSTEM_PROMPT, containsEmDash, findBannedVocab, findPlumbingVocab } from '../ai/voiceContract'
 import { parseDayRegroupGroups } from '../ai/dayRegroup'
 import { maybeStartTrace, setCurrentTrace } from '../ai/trace'
 import { runChatAgentTurn } from '../agent/chatAgent'
@@ -241,9 +251,18 @@ const USER_VISIBLE_ACTIVITY_PROSE_RULE =
   'Never use raw app names as the activity. Describe activity, work threads, artifacts, pages, or context instead of listing tool names as nouns. '
   + 'When listing apps in response to "what were my top apps" or similar, the PROSE SUBJECT of each row must be the work, not the app. '
   + 'Use the dominantBlockLabel field on each app for the activity. The app name appears as tail-attribution after the activity, never as the row\'s bolded headline. The duration goes last. '
-  + 'CORRECT row shape: "Coding in the Building & Testing block (Daylens chat-pipeline work) — Kiro, 1h 19m." '
-  + 'WRONG row shapes: "**Kiro** — coding in the Building & Testing block (1h 19m)" (app is still the headline); "Kiro — 1h 19m" (no activity at all); "Kiro: 1h 19m of coding" (app is the subject). '
-  + 'Do not bold the app name as the row prefix. Do not put the app name before the em-dash. The em-dash separates activity (left) from attribution + duration (right).'
+  + 'CORRECT row shape: "Coding in the Building & Testing block (Daylens chat-pipeline work): Kiro, 1h 19m." '
+  + 'WRONG row shapes: "**Kiro**, coding in the Building & Testing block (1h 19m)" (app is still the headline); "Kiro, 1h 19m" (no activity at all); "Kiro: 1h 19m of coding" (app is the subject). '
+  + 'Do not bold the app name as the row prefix. Do not put the app name before the colon. The colon separates activity (left) from attribution + duration (right). Never use an em dash anywhere in the row.'
+
+// REQ-VIC-004. A block carrying `labelIsTheirOwnWords` was named by the person,
+// not by Daylens. Their wording wins over anything the evidence would suggest,
+// and it is never re-derived from: a name they typed is not something Daylens
+// saw, so it cannot become the basis of an observation about their day.
+const USER_AUTHORED_LABEL_RULE =
+  'Some blocks carry "labelIsTheirOwnWords": the person renamed that stretch themselves. '
+  + 'Use their wording exactly as written, in preference to anything the evidence would suggest for that stretch, and never rewrite, shorten, or "improve" it. '
+  + 'What you must NOT do is treat a name inside it as something Daylens observed. If they called a block "Ridgeline renewal" and no page, title, file, or meeting in the evidence names Ridgeline, you may say they called it that; you may not say they worked on the Ridgeline renewal as a fact, and you may not carry "Ridgeline" into any other sentence as evidence.'
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -280,6 +299,16 @@ function createChatStreamAccumulator(requestId: string | null | undefined, optio
         requestId,
         delta,
         snapshot,
+      }))
+    },
+    /** A line saying what is happening, with no text added to the answer. */
+    async pushStatus(status: string) {
+      if (!status || !requestId || !options?.onStreamEvent) return
+      await Promise.resolve(options.onStreamEvent({
+        requestId,
+        delta: '',
+        snapshot,
+        status,
       }))
     },
     async streamText(text: string) {
@@ -1429,70 +1458,6 @@ function reviewedWorkIntent(block: WorkContextBlock): ReturnType<typeof inferWor
   }
 }
 
-function leadSentenceForIntent(block: WorkContextBlock): string {
-  const duration = formatDuration(blockDurationSeconds(block))
-  const intent = reviewedWorkIntent(block)
-
-  switch (intent.role) {
-    case 'execution':
-      return intent.subject
-        ? `The clearest named block was ${intent.subject} for ${duration}.`
-        : `The clearest block lasted ${duration}, but the label is still broad.`
-    case 'research':
-      return intent.subject
-        ? `A large share of today was captured around ${intent.subject} for ${duration}.`
-        : `A large share of today was browsing or page context for ${duration}, but intent is not certain.`
-    case 'review':
-      return intent.subject
-        ? `A large share of today touched ${intent.subject} for ${duration}.`
-        : `A large share of today looked like review for ${duration}, based on the available titles.`
-    case 'communication':
-      return intent.subject
-        ? `A large share of today was communication around ${intent.subject} for ${duration}.`
-        : `A large share of today was communication for ${duration}.`
-    case 'coordination':
-      return intent.subject
-        ? `A large share of today was coordination around ${intent.subject} for ${duration}.`
-        : `A large share of today was coordination for ${duration}.`
-    case 'ambient':
-      return intent.subject
-        ? `A meaningful chunk of today was browser or app context on ${intent.subject} for ${duration}.`
-        : `A meaningful chunk of today was browser or app context for ${duration}.`
-    case 'ambiguous':
-    default:
-      return intent.subject
-        ? `The day mixed together work touching ${intent.subject} for ${duration}.`
-        : `The day mixed together several threads over ${duration}.`
-  }
-}
-
-function supportingIntentSentence(primary: WorkContextBlock, rankedBlocks: WorkContextBlock[]): string | null {
-  const primaryIntent = reviewedWorkIntent(primary)
-  const supporting = rankedBlocks
-    .slice(1)
-    .map((block) => ({ block, intent: reviewedWorkIntent(block) }))
-    .find(({ intent }) => intent.role !== primaryIntent.role)
-
-  if (!supporting) return null
-
-  if (primaryIntent.role === 'execution' && (supporting.intent.role === 'research' || supporting.intent.role === 'ambient')) {
-    return `${supporting.intent.summary} was supporting context, based on the available titles.`
-  }
-
-  if ((primaryIntent.role === 'research' || primaryIntent.role === 'ambient') && supporting.intent.role === 'execution') {
-    return `The more concrete work evidence showed up in ${supporting.intent.summary.toLowerCase()}.`
-  }
-
-  return null
-}
-
-function focusSentence(payload: DayTimelinePayload): string {
-  if (payload.focusPct >= 70) {
-    return `Focus held for ${formatDuration(payload.focusSeconds)} (${payload.focusPct}% of tracked time).`
-  }
-  return `Focus was more fragmented, with ${formatDuration(payload.focusSeconds)} counted as focused time (${payload.focusPct}%).`
-}
-
 
 // Follow-up chips are fully deterministic and grounded in the answer's own
 // named entities. This is a deliberate three-in-one fix:
@@ -1812,40 +1777,54 @@ async function persistMessageArtifacts(
   }
 }
 
-function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
+// Neutral / placeholder labels that name no real activity — a coarse
+// un-analyzed sitting ("Morning") or an unnamed block. The factual fallback
+// must not present these as "what you worked on".
+const NON_ACTIVITY_LABELS = new Set([
+  'morning', 'afternoon', 'evening', 'night', 'late night',
+  'earlier today', 'active now', 'untitled block',
+])
+
+// The longest block's name, but only when it actually names an activity — never
+// a coarse time-of-day placeholder or an unnamed/provisional block.
+function recapWorthyLabel(block: WorkContextBlock): string | null {
+  if (block.provisional) return null
+  const label = userVisibleBlockLabel(block).trim()
+  if (!label || NON_ACTIVITY_LABELS.has(label.toLowerCase())) return null
+  if (rawLabelForm(label)) return null
+  return label
+}
+
+// The deterministic factual fallback, shown when the AI recap is unavailable.
+// It is deliberately a plain, honest factual line — not prose imitating the AI,
+// and free of internal vocabulary ("trusted blocks", "strongest evidence")
+// (DEV-275). `degraded` marks it as the "AI couldn't run" line so the UI can
+// say so plainly (DEV-270: nothing fails silently).
+function fallbackDaySummary(payload: DayTimelinePayload, degraded = false): AIDaySummaryResult {
   if (payload.totalSeconds === 0) {
     return {
       summary: 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and focus patterns.',
-      questionSuggestions: [
-        'What kinds of questions will you be able to answer once I have more history?',
-        'How should I use Daylens if I am not tracking clients?',
-        'What should I pay attention to the first few days of tracking?',
-      ],
     }
   }
 
-  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-  const rankedBlocks = [...trustedBlocks]
-    .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
+  const blocks = payload.blocks.filter(isTrustedTimelineBlock)
+  const longest = [...blocks].sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))[0]
+  const longestName = longest ? recapWorthyLabel(longest) : null
+  const entities = (payload.dayEntities ?? [])
+    .filter((entity) => entity.seconds >= 300)
     .slice(0, 3)
-  const primary = rankedBlocks[0]
-  const evidence = primary ? namedEvidenceForSummary(primary) : []
+    .map((entity) => entity.name)
 
   const summaryParts = [
-    `You tracked ${formatDuration(payload.totalSeconds)} across ${trustedBlocks.length} trusted block${trustedBlocks.length === 1 ? '' : 's'} today.`,
-    primary ? leadSentenceForIntent(primary) : null,
-    evidence.length > 0 ? `Strongest evidence included ${evidence.join(', ')}.` : null,
-    primary ? supportingIntentSentence(primary, rankedBlocks) : null,
-    focusSentence(payload),
+    `${formatDuration(payload.totalSeconds)} tracked across ${blocks.length} block${blocks.length === 1 ? '' : 's'}.`,
+    longestName
+      ? `Longest stretch: ${longestName} (${formatDuration(blockDurationSeconds(longest))}).`
+      : entities.length > 0 ? `Mostly around ${entities.join(', ')}.` : null,
   ]
 
   return {
     summary: summaryParts.filter((part): part is string => Boolean(part)).join(' '),
-    questionSuggestions: [
-      'What did I actually get done today?',
-      'Which files, docs, or pages did I touch today?',
-      payload.blocks.length >= 3 ? 'Where did my focus break down today?' : 'What should I pick back up next?',
-    ],
+    ...(degraded ? { degraded: true } : {}),
   }
 }
 
@@ -1860,7 +1839,7 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
     ignoredBlockIds: payload.blocks.filter((block) => !isTrustedTimelineBlock(block)).map((block) => block.id),
     blocks: trustedBlocks.map((block) => ({
       id: block.id,
-      label: block.label.current,
+      label: userVisibleBlockLabel(block),
       narrative: block.label.narrative,
       reviewState: block.review.state,
       correctedIntentRole: block.review.correctedIntentRole,
@@ -1887,6 +1866,45 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
 // once — the 10 longest, in chronological order, ranked so the model still
 // knows which dominated — and the JSON is compact. Rich supporting evidence
 // rides only on the top-4 by duration, matching what dominantBlocks carried.
+/**
+ * The recap's cache key. The tone is part of it because the recap IS the
+ * morning brief: without the tone in the key, changing it leaves the cached
+ * recap in the old voice for the life of the process and the toggle reads as
+ * dead (AC-VIC-002.1).
+ */
+export function daySummaryPromptCacheKey(
+  payload: DayTimelinePayload,
+  memoryPrompt: string,
+  variantId: string,
+  voice: SummaryVoice,
+): string {
+  return `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variantId}:${voice}`
+}
+
+/**
+ * The recap's system prompt. Composed here rather than inline in
+ * `generateDaySummary` so the tone and policy rules can be checked by running
+ * the composition, not by scanning this file for a call that might be dead.
+ */
+export function buildDaySummarySystemPrompt(
+  voice: SummaryVoice,
+  parts: {
+    memoryPrompt?: string
+    profileDirective?: string
+    variantDirectives?: readonly string[]
+  } = {},
+): string {
+  return [
+    VOICE_SYSTEM_PROMPT,
+    parts.memoryPrompt,
+    parts.profileDirective,
+    USER_AUTHORED_LABEL_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
+    ...(parts.variantDirectives ?? []),
+  ].filter(Boolean).join('\n')
+}
+
 export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
   const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
 
@@ -1906,7 +1924,14 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
   const blocks = selected.map((block) => {
     const rank = durationRank.get(block.id) ?? Number.MAX_SAFE_INTEGER
     return {
-      label: block.label.current,
+      // The label the Timeline actually shows, never the raw stored one: a
+      // block whose `label.current` is a generic floor ("Development") renders
+      // as its artifact or AI label on screen, and a recap that names the floor
+      // describes a day the person cannot see.
+      label: userVisibleBlockLabel(block),
+      // Their wording, marked as theirs, so the model quotes it instead of
+      // repeating it back as something Daylens observed (AC-VIC-004.3).
+      ...(labelProvenance(block) === 'user' ? { labelIsTheirOwnWords: true } : {}),
       narrative: block.label.narrative,
       timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
       duration: formatDuration(blockDurationSeconds(block)),
@@ -1938,6 +1963,36 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     startedAt: formatClock(session.startTime),
   }))
 
+  // Scheduled calendar events, with the honest scheduling-vs-attendance
+  // distinction the authority order requires: a calendar event proves what was
+  // PLANNED; only "attended" (the person's own confirmation) or a matched
+  // captured block proves it HAPPENED. The model must never assert a meeting
+  // occurred from a calendar row alone.
+  const meetings = (payload.scheduledMeetings ?? []).map((meeting) => ({
+    title: meeting.title,
+    scheduled: `${formatClock(meeting.startMs)}-${formatClock(meeting.endMs)}`,
+    // What the evidence supports about presence, in plain terms for the model.
+    presence: meeting.marked === 'attended'
+      ? 'you confirmed you attended'
+      : meeting.marked === 'skipped'
+        ? 'you marked this skipped'
+        : meeting.marked === 'moved'
+          ? 'you marked this moved'
+          : meeting.marked === 'unrelated'
+            ? 'you marked this unrelated'
+            : meeting.attendance === 'matched'
+              ? 'tracked activity overlaps it (likely occurred)'
+              : 'scheduled only — no evidence it occurred',
+    attendeeCount: meeting.attendeeCount ?? undefined,
+  }))
+
+  // The durable entities the day's evidence supports naming — the real projects,
+  // clients, people, and repositories, so the recap names the work, not the tool.
+  const entities = (payload.dayEntities ?? [])
+    .filter((entity) => entity.seconds >= 60)
+    .slice(0, 8)
+    .map((entity) => ({ type: entity.type, name: entity.name, duration: formatDuration(entity.seconds) }))
+
   return JSON.stringify({
     date: payload.date,
     totals: {
@@ -1952,11 +2007,34 @@ export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     topCategories,
     blocks,
     focusSessions,
+    ...(meetings.length > 0 ? { meetings } : {}),
+    ...(entities.length > 0 ? { entities } : {}),
   })
 }
 
-function parseDaySummaryResult(raw: string, fallbackQuestions: string[]): AIDaySummaryResult | null {
-  return parseDaySummaryResultText(raw, fallbackQuestions)
+function parseDaySummaryResult(raw: string): AIDaySummaryResult | null {
+  return parseDaySummaryResultText(raw)
+}
+
+/** Turn a failed recap call into the words the panel shows and whether a retry
+ *  could possibly help.
+ *
+ *  This reason is put on the result and rendered directly, so it never passes
+ *  through the renderer's error sanitizer: the structured meta the provider
+ *  layer tags onto its messages has to be decoded HERE, or the person reads
+ *  ⟦dlerr:{"code":"credit_exhausted"}⟧ in the middle of the sentence telling
+ *  them what went wrong. */
+export function degradedRecapReason(error: unknown): { degradedReason?: string; degradedNeedsAction?: boolean } {
+  const raw = error instanceof Error ? error.message.trim() : typeof error === 'string' ? error.trim() : ''
+  const { message, meta } = decodeProviderErrorMeta(raw)
+  const clean = message.trim()
+  return {
+    ...(clean ? { degradedReason: /[.!?…]$/.test(clean) ? clean : `${clean}.` } : {}),
+    // A wall only the person can clear (billing, credit, auth, a model that is
+    // gone). Offering "try again" against one of those is a lie — the retry
+    // cannot succeed until they act.
+    ...(meta && isHardProviderWall(meta.code) ? { degradedNeedsAction: true } : {}),
+  }
 }
 
 function currentLocalDateString(): string {
@@ -1964,10 +2042,25 @@ function currentLocalDateString(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryResult> {
+export async function generateDaySummary(
+  dateStr: string,
+  options: {
+    /** Which recap prompt to run. Defaults to the shipped one; the recap lab
+     *  passes each candidate so variants are compared through the exact path
+     *  the app uses, not a parallel copy of it. */
+    variant?: RecapPromptVariant
+    /** The lab needs a fresh call every time; the app wants the cache. */
+    bypassCache?: boolean
+  } = {},
+): Promise<AIDaySummaryResult> {
+  const variant = options.variant ?? shippedRecapVariant()
   const db = getDb()
   const liveSession = dateStr === currentLocalDateString() ? getCurrentSession() : null
-  const payload = getTimelineDayPayload(db, dateStr, liveSession)
+  // Read the day exactly as the timeline shows it (DEV-247): analysis:false, so
+  // the recap describes the same corrected blocks the person sees — an analyzed
+  // day's settled blocks, an un-analyzed day's coarse sittings — never a
+  // divergent fine build the timeline never rendered.
+  const payload = getTimelineDayPayload(db, dateStr, liveSession, { analysis: false })
   const fallback = fallbackDaySummary(payload)
 
   if (payload.totalSeconds === 0) {
@@ -1976,50 +2069,31 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
 
   const [memoryFromMs, memoryToMs] = localDateBoundsFromString(dateStr)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}`
-  const cached = daySummaryCache.get(cacheKey)
+  // The recap IS the morning brief (aiFeatures.ts maps day_summary to "Morning
+  // brief"), so the person's chosen tone belongs here as much as in Wrapped.
+  // It rides the cache key too: without that, changing the tone leaves the
+  // cached recap in the old voice for the life of the process and the toggle
+  // reads as dead.
+  const settings = getSettings()
+  const voice = normalizeSummaryVoice(settings.summaryVoice)
+  const cacheKey = daySummaryPromptCacheKey(payload, memoryPrompt, variant.id, voice)
+  const cached = options.bypassCache ? undefined : daySummaryCache.get(cacheKey)
   if (cached) return cached
 
-  const systemPrompt = [
-    VOICE_SYSTEM_PROMPT,
+  const systemPrompt = buildDaySummarySystemPrompt(voice, {
     memoryPrompt,
-    userProfileDirective(getSettings()),
-    'You are Daylens, writing the opening daily briefing for a desktop work-intelligence app.',
-    'Do not use emoji in any part of your response.',
-    'Turn deterministic local work evidence into a concise, useful summary.',
-    'Focus on what the person was actually working on, what moved forward, and what deserves follow-up.',
-    'Prefer the structured workIntent signal over raw homepage, feed, or generic tab labels when they conflict.',
-    'Treat generic feed/home usage as context unless the evidence clearly says it was the main task.',
-    'Never use raw app names as the subject of a sentence. Instead, describe what the app is used for: Warp or Terminal → "your terminal", a browser (Chrome, Safari, Arc, Firefox) → "your browser", VS Code or Cursor → "your editor", Figma → "your design tool", Slack or Teams → "your messaging app", X.com or Twitter → "social browsing" or a specific activity from the page title. Use the specific app name only when a more descriptive phrase would be unclear.',
-    'Use window titles and page titles as evidence for what the user was doing. Do not use the app name as a proxy for the activity. When a page or thread title is available, prefer describing the specific content over naming the platform.',
-    'Ignore badge-count prefixes like "(4)" when interpreting page or tab titles.',
-    'Mention exact file, document, page, repo, or artifact names only when they appear verbatim in the evidence.',
-    'Do not write like a dashboard, analytics panel, or generic AI recap.',
-    'Avoid filler like "based on the provided data", "top apps", or "productive/unproductive".',
-    'Use specific time ranges and named work blocks when they make the story clearer.',
-    'If the evidence is thin or ambiguous, say so plainly and stay modest.',
-    'The summary must be declarative and must not ask the user a question.',
-    'Return strict JSON with keys "summary" and "questionSuggestions".',
-    '"summary" must be 2-4 sentences.',
-    '"questionSuggestions" must contain exactly 3 clickable next-query chips spoken by the user to Daylens.',
-    'Write questionSuggestions as first-person user queries or direct requests to the assistant, not as questions back to the user.',
-    'Good examples: "What did I actually get done today?", "Which files or pages mattered most today?", "Summarize today as a short report I could share".',
-    'Bad examples: "Are you building a model right now?", "Did task planning settle into place?", "Is this still in discovery phase?".',
-    'Never ask the user to confirm intent, progress, or motivation.',
-  ].filter(Boolean).join('\n')
+    profileDirective: userProfileDirective(settings),
+    variantDirectives: variant.directives,
+  })
 
-  const userMessage = [
-    `Date: ${dateStr}`,
-    '',
-    'Write the opening AI summary card and three suggested next-query chips for this day.',
-    'The user should feel like Daylens understood the work, not like it stitched together a template.',
-    'The chips will be rendered as buttons under an "Ask Daylens" label, so they must read like things the user would click to ask next.',
-    '',
-    'Structured day evidence (JSON):',
-    buildDaySummaryScaffold(payload),
-  ].join('\n')
+  const userMessage = variant.userMessage(dateStr, buildDaySummaryScaffold(payload))
 
   try {
+    // The belt has to live here: executeTextAIJob does not enforce the budget
+    // on its own job definition. It is read from there so the number a caller
+    // holds a job to is the number the table documents, never a second literal
+    // that drifts. The old 15s literal expired mid-call on a real day and the
+    // recap served the factual fallback instead (DEV-292).
     const { text } = await withTimeout(
       executeTextAIJob(
         {
@@ -2031,17 +2105,24 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
         },
         sendWithProvider,
       ),
-      15_000,
+      jobTimeoutMs('day_summary'),
       'Day summary timed out',
     )
 
-    const parsed = parseDaySummaryResult(text, fallback.questionSuggestions)
-    const result = parsed ?? fallback
-    daySummaryCache.set(cacheKey, result)
-    return result
+    const parsed = parseDaySummaryResult(text)
+    if (parsed) {
+      daySummaryCache.set(cacheKey, parsed)
+      return parsed
+    }
+    // The model answered but its output was unusable. Surface the factual
+    // fallback marked degraded, and do NOT cache it, so a later open retries AI.
+    return { ...fallback, degraded: true, degradedReason: 'The model replied in a shape Daylens could not read.' }
   } catch (error) {
+    // The orchestration layer already shapes provider failures into messages a
+    // person can act on ("AI access is paused…", "…timed out"); pass that
+    // reason through instead of burying it in the log (DEV-279).
     console.warn(`[ai] day_summary failed for ${dateStr}:`, error)
-    return fallback
+    return { ...fallback, degraded: true, ...degradedRecapReason(error) }
   }
 }
 
@@ -2126,7 +2207,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
     tracked: formatDuration(payload.totalSeconds),
     focus: formatDuration(payload.focusSeconds),
     focus_pct: payload.focusPct,
-    top_blocks: payload.blocks.slice(0, 3).map((block) => block.label.current).filter(Boolean).join(' | ') || 'No clear blocks',
+    top_blocks: payload.blocks.slice(0, 3).map((block) => userVisibleBlockLabel(block)).filter(Boolean).join(' | ') || 'No clear blocks',
   }))
 
   const renderDeterministic = (): { reportMarkdown: string; assistantResponse: string } => {
@@ -2169,7 +2250,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
       }
       for (const block of blocks) {
         const seconds = blockActiveSeconds(block)
-        const label = block.label.current || `${block.dominantCategory} block`
+        const label = userVisibleBlockLabel(block) || `${block.dominantCategory} block`
         const start = new Date(block.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
         const end = new Date(block.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
         const evidenceBits: string[] = []
@@ -2197,7 +2278,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
     chatLines.push('Day by day:')
     for (const payload of activeDays) {
       const topBlock = payload.blocks.slice().sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))[0]
-      const topBlockLabel = topBlock?.label.current || (topBlock ? `${topBlock.dominantCategory} block` : 'no clear blocks')
+      const topBlockLabel = (topBlock ? userVisibleBlockLabel(topBlock) : '') || (topBlock ? `${topBlock.dominantCategory} block` : 'no clear blocks')
       chatLines.push(`- **${dayName(payload.date)} (${payload.date})** — ${formatDuration(payload.totalSeconds)} tracked, ${formatDuration(payload.focusSeconds)} focused (${payload.focusPct}%); longest block: ${topBlockLabel}`)
     }
     if (bestDay) {
@@ -2236,7 +2317,8 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
           focus: formatDuration(payload.focusSeconds),
           focusPct: payload.focusPct,
           topBlocks: take(payload.blocks, evidenceCost).map((block) => ({
-            label: block.label.current,
+            label: userVisibleBlockLabel(block),
+            ...(labelProvenance(block) === 'user' ? { labelIsTheirOwnWords: true } : {}),
             duration: formatDuration(blockActiveSeconds(block)),
             artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle),
           })),
@@ -2312,8 +2394,11 @@ function dedupeByTitle<T>(rows: T[], title: (row: T) => string): T[] {
 function buildAppNarrativeBundle(
   canonicalAppId: string,
   daysOrDate: number | string = 7,
+  // DEV-227: the caller usually already built this payload — at 30 days it
+  // costs ~1s of blocking main-thread work, so it must never be rebuilt.
+  prebuiltDetail?: ReturnType<typeof getAppDetailPayload>,
 ): ReportContextBundle | null {
-  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
+  const detail = prebuiltDetail ?? getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
   if (detail.totalSeconds <= 0) return null
 
   // DEV-89: "Often used with" is gone from the Apps view, and the recap no
@@ -2565,7 +2650,7 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
     tableRows: packedBlocks.map((block) => ({
       start: formatClock(block.startTime),
       end: formatClock(block.endTime),
-      block: block.label.current,
+      block: userVisibleBlockLabel(block),
       category: block.dominantCategory,
       apps: block.topApps.slice(0, 3).map((app) => app.appName).join(' | ') || 'n/a',
       artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle).join(' | ') || 'n/a',
@@ -2588,7 +2673,10 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
   const [memoryFromMs] = localDateBoundsFromString(weekStart)
   const [, memoryToMs] = localDateBoundsFromString(weekEnd)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt].join('\n'))
+  // Tone is part of the signature so a Settings voice change does not keep
+  // returning a card written in the previous voice (REQ-VIC-002).
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt, voice].join('\n'))
   if (!force) {
     const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
     if (existingSignature === inputSignature) {
@@ -2603,6 +2691,9 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     'You are Daylens, writing the short week-review card for the Timeline week view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
+    USER_AUTHORED_LABEL_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
     'Use only the deterministic local evidence provided.',
     'Focus on the actual work threads, named artifacts, and where the week concentrated.',
     'Avoid dashboard filler or generic productivity language.',
@@ -2650,13 +2741,16 @@ async function generateAppNarrative(
   daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
-  const bundle = buildAppNarrativeBundle(canonicalAppId, daysOrDate)
+  // DEV-227: the detail payload is the expensive multi-day scan — prefer the
+  // range worker so Generate never freezes the UI; inline is the fallback.
+  const detail = await workerAppDetail<ReturnType<typeof getAppDetailPayload>>(
+    canonicalAppId, daysOrDate, getCurrentSession(),
+  ).catch(() => getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession()))
+  const bundle = buildAppNarrativeBundle(canonicalAppId, daysOrDate, detail)
   if (!bundle) {
     console.info(`[ai] app_narrative skipped: no bundle (totalSeconds<=0) for ${canonicalAppId} ${daysOrDate}`)
     return null
   }
-
-  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
   const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
   const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
   const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)
@@ -2677,7 +2771,10 @@ async function generateAppNarrative(
     fromMs: memoryFromMs,
     toMs: memoryToMs,
   })
-  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt].join('\n'))
+  // Tone is part of the signature so a Settings voice change does not keep
+  // returning a card written in the previous voice (REQ-VIC-002).
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt, voice].join('\n'))
   // Force=true must bypass the signature short-circuit. Without this, clicking
   // Generate/Refresh on an app whose evidence has not changed since the last
   // cached narrative returns the same cached row without ever calling the AI,
@@ -2704,6 +2801,8 @@ async function generateAppNarrative(
     'You are Daylens, writing the short narrative card for an app detail view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
     'Explain what this tool was helping with and which artifacts, pages, or sites appeared there. Lead with the work (the domains and pages listed first); mention leisure only briefly if at all.',
     'Use only the deterministic evidence below.',
     'Do not write vanity metrics or generic app summaries.',
@@ -2813,7 +2912,10 @@ function parseWorkBlockInsight(raw: string): WorkContextInsight | null {
   }
 }
 
-function workBlockPrompt(block: WorkContextBlock): string {
+// Exported for the interpretation-agent relabel (services/interpretationAgent.ts),
+// which grounds its tool loop in the SAME per-block evidence prompt the direct
+// relabel uses — one evidence contract, two execution modes.
+export function workBlockPrompt(block: WorkContextBlock): string {
   const durationMinutes = Math.max(1, Math.round(blockActiveSeconds(block) / 60))
 
   // Top websites with duration — highest-signal evidence (browser/AI work)
@@ -2868,16 +2970,19 @@ function workBlockPrompt(block: WorkContextBlock): string {
   const lines = [
     'Analyze this Daylens work block.',
     'Return strict JSON: {"label":"...","narrative":"..."}',
-    'label: a 2-7 word phrase naming what they were DOING — usually verb + object ("Configuring the work network", "Refactoring the timeline engine"). NEVER a raw app name, browser name, page/video title, or bare category ("Chrome", "Cursor", "Watching Netflix", "Browsing", "Development"). NEVER the literal "Computer activity", "Uncategorized", or "Untitled".',
+    'label: a 2-7 word phrase naming what they were DOING, usually verb + object ("Configuring the work network", "Refactoring the timeline engine"). NEVER a raw app name, browser name, page/video title, or bare category ("Chrome", "Cursor", "Watching Netflix", "Browsing", "Development"). NEVER the literal "Computer activity", "Uncategorized", or "Untitled". Never put an em dash in a label; use a comma or the word "and".',
     'narrative: 1-2 plain sentences. Evidence-led, no hype, no "the user" prefix.',
     'Priority rules:',
     '  - Window titles and page titles > artifact names > category descriptions > app names only as last-resort context, never as the label.',
     '  - Browser+AI only ≠ Development → call it Research or Planning.',
     '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
     '  - This block may already combine several stretches of one activity. Name the WHOLE thing in one coherent title that covers all the evidence (e.g. "Setting up the work network with the Ubiquiti dashboard and Terminal"), not just the first app.',
-    '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek — people multi-task with media on the side while actually working.',
+    '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek, since people multi-task with media on the side while actually working.',
+    '  - When a terminal, editor, or agent runner (Ghostty, Warp, Codex, cmux, Claude Code) holds a substantial share of the block alongside media, the WORK is the headline and the media is at most an aside. Media titles are more descriptive than terminal windows, never more important: two hours of terminal time next to browser videos is a work block with videos on the side, not "watching videos".',
+    '  - An AI-chat conversation title (ChatGPT, Claude, Gemini) names a TOPIC DISCUSSED, never a thing accomplished. Label the block as working through or exploring that topic; NEVER use completion or deployment verbs (deployed, shipped, launched, released, fixed, built) on chat or browser evidence alone, because those verbs need a code editor or terminal in this block actually doing it.',
+    '  - Never invent a project, product, or deliverable name. Every proper noun in your label must appear in the evidence above; a plausible-sounding name the evidence does not contain is a fabrication.',
     '  - Name the site or tool where the work happened ("in Notion", "in Google Docs", "in Linear"), not the browser it was rendered in. Mention the browser only as secondary context ("in the Dia browser"), never as the headline location.',
-    '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Cursor, Warp, and Terminal — focused work"). Never announce failure, never say "Computer activity" or "Uncategorized".',
+    '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Focused work in Cursor, Warp, and Terminal"). Never announce failure, never say "Computer activity" or "Uncategorized".',
     '',
     `Duration: ${durationMinutes} minutes`,
     `Dominant category: ${block.dominantCategory}`,
@@ -2986,6 +3091,16 @@ export async function suggestAppCategory(bundleId: string, appName: string): Pro
   return noSuggestion
 }
 
+// The deterministic name used when the model cannot produce a voiced label.
+// The evidence-based fallback is usually fine, but it can itself be a raw
+// artifact form ("handoff.md") — never persist that as an "ai" label; name the
+// category honestly instead (a floor the clarification agent then asks about).
+function voiceSafeFallbackLabel(block: WorkContextBlock): string {
+  const fallback = userVisibleLabelForBlock(block)
+  if (!rawLabelForm(fallback)) return fallback
+  return activityCategoryLabel(block.dominantCategory)
+}
+
 export async function generateWorkBlockInsight(
   block: WorkContextBlock,
   options?: {
@@ -3017,37 +3132,62 @@ export async function generateWorkBlockInsight(
     'Return only valid JSON.',
   ].join(' ')
 
-  try {
-    const { text, config } = await withTimeout(
-      executeTextAIJob(
-        {
-          jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
-          screen: 'timeline_day',
-          triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
-          systemPrompt,
-          userMessage: [
-            workBlockPrompt(block),
-            options?.rejectedLabel?.trim()
-              ? `The previous label "${options.rejectedLabel.trim()}" was marked inaccurate by the user. Produce a clearly different, more accurate label grounded only in the evidence above.`
-              : '',
-            options?.userHint?.trim()
-              ? `The user described their day as: "${options.userHint.trim()}". Treat this as a strong hint for what they were doing, but stay grounded in the evidence above, and only apply it where it fits this block's activity.`
-              : '',
-          ].filter(Boolean).join('\n\n'),
-        },
-        sendWithProvider,
-      ),
-      BLOCK_INSIGHT_TIMEOUT_MS,
-      'Block insight timed out',
-    )
-    options?.onModel?.(config.model)
-    const parsed = parseWorkBlockInsight(text)
+  // The label-voice contract (label-voice.md, DEV-276): the model's label must
+  // clear the invariant rules, must not echo a captured title or a bare app
+  // name, and must not present a tool brand/surface, command line, joined tab
+  // title, or site surface as the work — even behind a verb lead ("Working on
+  // Cursor Agents"). One shared gate (labelCandidateViolation) holds this path
+  // and the interpretation agent to the same standard. A rejected label gets
+  // exactly one corrective retry with the violation named; if that also fails,
+  // the deterministic evidence name (voice gated itself) stands and the block
+  // stays a re-analysis target.
+  // The block kind matters: without it the leisure-shape rule is inert here
+  // and a bare video title would only be caught later by the label chooser.
+  const voiceContext = labelVoiceContextForBlock(block, effectiveBlockKind(block))
+  const labelRejection = (candidate: string | null | undefined): string | null =>
+    labelCandidateViolation(candidate, voiceContext)
 
-    // §3.5 / invariant 3: even the model may not name a block after a raw machine
-    // identifier (AGENT, AGENT-EXECUTION-PLAN.md). If it does, drop to the guarded
-    // evidence-based name rather than persist the raw token as an "ai" label.
-    const aiLabel = parsed?.label?.trim()
-    const label = aiLabel && !looksLikeRawArtifactLabel(aiLabel) ? aiLabel : userVisibleLabelForBlock(block)
+  try {
+    const requestInsight = async (voiceFeedback?: string) => {
+      const { text, config } = await withTimeout(
+        executeTextAIJob(
+          {
+            jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
+            screen: 'timeline_day',
+            triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
+            systemPrompt,
+            userMessage: [
+              workBlockPrompt(block),
+              options?.rejectedLabel?.trim()
+                ? `The previous label "${options.rejectedLabel.trim()}" was marked inaccurate by the user. Produce a clearly different, more accurate label grounded only in the evidence above.`
+                : '',
+              options?.userHint?.trim()
+                ? `The user described their day as: "${options.userHint.trim()}". Treat this as a strong hint for what they were doing, but stay grounded in the evidence above, and only apply it where it fits this block's activity.`
+                : '',
+              voiceFeedback ?? '',
+            ].filter(Boolean).join('\n\n'),
+          },
+          sendWithProvider,
+        ),
+        BLOCK_INSIGHT_TIMEOUT_MS,
+        'Block insight timed out',
+      )
+      options?.onModel?.(config.model)
+      return parseWorkBlockInsight(text)
+    }
+
+    let parsed = await requestInsight()
+    let rejection = labelRejection(parsed?.label)
+    if (rejection && !block.isLive) {
+      parsed = await requestInsight(
+        `Your previous label "${parsed?.label ?? ''}" was rejected: ${rejection}. `
+        + 'Name what the person was DOING in everyday words (verb + object). '
+        + 'Never a window title, page title, filename, app name, ticket text, or JSON.',
+      )
+      rejection = labelRejection(parsed?.label)
+    }
+
+    const label = rejection ? voiceSafeFallbackLabel(block) : parsed!.label!.trim()
     const insight = {
       label,
       narrative: parsed?.narrative || fallbackNarrativeForBlock(block),
@@ -3064,7 +3204,7 @@ export async function generateWorkBlockInsight(
   } catch (error) {
     if (options?.throwOnError) throw error
     const insight = {
-      label: userVisibleLabelForBlock(block),
+      label: voiceSafeFallbackLabel(block),
       narrative: fallbackNarrativeForBlock(block),
     }
     if (!block.isLive && block.aiLabel) {
@@ -3110,14 +3250,14 @@ function dayRegroupPrompt(blocks: WorkContextBlock[], userHint?: string): string
   })
 
   const lines = [
-    'Here are today\'s timeline blocks, in order. They were cut by simple rules and tend to be SPLIT TOO FINELY — one real activity is often broken across several adjacent blocks.',
+    'Here are today\'s timeline blocks, in order. They were cut by simple rules and tend to be SPLIT TOO FINELY: one real activity is often broken across several adjacent blocks.',
     'Your job: group the blocks that are the SAME continued activity into one block. Return strict JSON: {"groups": [[0,1,2],[3],[4,5]]}.',
     'Rules:',
     '  - Each inner array is a run of CONSECUTIVE block indices that are one continued intent/goal/project and should become a single block.',
     '  - Every index 0..N-1 appears exactly once, in order. A block that stands on its own is its own one-element group.',
-    '  - Merge ONLY genuinely-same work: the same task or project continued (e.g. setting up the work network across Terminal, the Ubiquiti dashboard, and diagnostics is ONE thing). A short peek at streaming/social between two stretches of the same work does not break the run — keep merging across it.',
+    '  - Merge ONLY genuinely-same work: the same task or project continued (e.g. setting up the work network across Terminal, the Ubiquiti dashboard, and diagnostics is ONE thing). A short peek at streaming/social between two stretches of the same work does not break the run, so keep merging across it.',
     '  - Keep genuinely DIFFERENT goals separate: coding a feature, a meeting, and unrelated admin are different blocks even when back-to-back. When unsure, keep them separate.',
-    '  - Never group to just shrink the count, and never invent a connection the evidence does not show. You may only GROUP existing blocks — never split one.',
+    '  - Never group to just shrink the count, and never invent a connection the evidence does not show. You may only GROUP existing blocks, never split one.',
     '',
     `Blocks (${blocks.length}):`,
     blockLines.join('\n'),
@@ -3147,7 +3287,7 @@ export async function generateDayRegroupPlan(
     VOICE_SYSTEM_PROMPT,
     'You are Daylens.',
     'You decide which adjacent timeline blocks are the same continued activity and should be one block.',
-    'You only group blocks that are already there — you never split, rename, or invent activity.',
+    'You only group blocks that are already there, and you never split, rename, or invent activity.',
     'Return only valid JSON.',
   ].join(' ')
 
@@ -3197,10 +3337,10 @@ export async function interpretSearchIntent(query: string): Promise<{ terms: str
   if (!trimmed) return null
   const systemPrompt = [
     "You turn a user's natural-language search into keywords for a LOCAL full-text search over their tracked activity (app + window titles, web page titles and domains, timeline block labels, saved AI artifacts).",
-    'Return STRICT JSON only — no prose, no code fence:',
+    'Return STRICT JSON only, no prose, no code fence:',
     '{"terms":["..."],"intent":"<one short clause>"}',
     'Rules:',
-    '- terms: 1-6 short lowercase keywords/phrases — the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
+    '- terms: 1-6 short lowercase keywords/phrases: the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
     '- Never invent specific names the query does not imply.',
     '- intent: a short human clause like "the autoencoders project" or "anything about the migration".',
   ].join('\n')
@@ -3257,6 +3397,9 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     if (answerText) {
       const banned = findBannedVocab(answerText)
       if (banned) console.warn(`[ai:voice] banned vocabulary in chat answer: "${banned}"`)
+      if (containsEmDash(answerText)) console.warn('[ai:voice] em dash in chat answer')
+      const plumbing = findPlumbingVocab(answerText)
+      if (plumbing) console.warn(`[ai:voice] plumbing vocabulary in chat answer: "${plumbing}"`)
     }
     if (recorder) {
       recorder.finish(result.assistantMessage?.content)
@@ -3434,9 +3577,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     agentConfig = { ...agentConfig, model: modelOverride }
   }
 
-  // CLI providers can't make structured tool calls. Say so in one line and
-  // point to Settings — never silently swap providers (invariant 12).
-  if (!providerSupportsAgentTools(agentConfig.provider, agentConfig.transport)) {
+  // A CLI provider cannot make the structured tool calls this loop needs, but
+  // the Claude CLI can run a loop of its own over the Daylens MCP server. That
+  // branch is taken below, once the system prompt it needs has been built.
+  const cliCannotDriveThisLoop = !providerSupportsAgentTools(agentConfig.provider, agentConfig.transport)
+  const claudeCodeCanAnswer = cliCannotDriveThisLoop
+    && agentConfig.provider === 'claude-cli'
+    && claudeCodeChatAvailable()
+  if (cliCannotDriveThisLoop && !claudeCodeCanAnswer) {
     const cliNotice = `Chat answers now come from a live agent over your real data, which needs an API provider — ${providerLabel(agentConfig.provider)} runs through a CLI and can't call tools. Pick an API provider in Settings → AI (or a per-chat model from the catalog) and ask me again.`
     await stream.streamText(cliNotice)
     return persistTurn({
@@ -3473,6 +3621,71 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   const trackingStart = firstSessionRow?.t
     ? new Date(firstSessionRow.t).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : null
+
+  // Chat on the local Claude Code, driving Daylens' own read-only MCP tools.
+  // It gets the same voice contract and operating rules as the in-app agent,
+  // so the answer is held to the same grounding and honesty; what it does not
+  // get yet is citations, memory writes, or correction previews.
+  if (claudeCodeCanAnswer) {
+    const claudeTool = await resolveCLITool('claude')
+    if (!claudeTool) {
+      const missing = 'The Claude CLI is no longer on this machine, so chat has nothing to answer with. Reconnect it in Settings → AI.'
+      await stream.streamText(missing)
+      return persistTurn({
+        assistantText: missing,
+        answerKind: 'error',
+        sourceKind: 'deterministic',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    }
+    try {
+      const text = await runClaudeCodeChat({
+        threadId: String(threadId ?? 'new'),
+        question,
+        systemPrompt: buildAgentSystemPrompt({
+          now: new Date(),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          trackingStart,
+          providerLabel: providerLabel(agentConfig.provider),
+          model: agentConfig.model,
+          homeDir: os.homedir(),
+          extraSystem,
+          summaryVoice: settings.summaryVoice,
+        }),
+        model: agentConfig.model,
+        executablePath: claudeTool.executablePath,
+        onDelta: (delta) => stream.push(delta),
+        onStatus: (label) => { void stream.pushStatus(label) },
+        signal: getAmbientAbortSignal(),
+      })
+      // Already on screen delta by delta; this only fills a gap if the CLI
+      // returned a final result the stream never carried.
+      await stream.streamText(text)
+      return persistTurn({
+        assistantText: text,
+        answerKind: 'freeform_chat',
+        sourceKind: 'freeform',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      // Never silently fall through to another provider (invariant 12): say
+      // what failed and leave the person's choice of provider alone.
+      const message = error instanceof Error ? error.message : String(error)
+      const notice = `Your local Claude Code could not answer this one: ${message}`
+      console.warn('[ai:chat] claude-code path failed:', error)
+      await stream.streamText(notice)
+      return persistTurn({
+        assistantText: notice,
+        answerKind: 'error',
+        sourceKind: 'deterministic',
+        conversationState: null,
+        suggestedFollowUps: [],
+      })
+    }
+  }
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[ai:chat] agent turn → provider=${agentConfig.provider} model=${agentConfig.model}`)
@@ -3547,6 +3760,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       artifactDir: agentArtifactDir(),
       mcpServers: settings.mcpServers ?? [],
       extraSystem,
+      summaryVoice: settings.summaryVoice,
       signal: getAmbientAbortSignal() ?? undefined,
       trackingStart,
       threadId,
@@ -3694,13 +3908,25 @@ export async function getWeekReview(
   weekStartStr: string,
   force = false,
 ): Promise<AISurfaceSummary | null> {
+  if (force) return generateWeekReview(weekStartStr, true)
+
+  const bundle = buildWeekReviewBundle(weekStartStr)
+  if (!bundle) return null
   const scopeKey = `week:${weekStartStr}`
-  if (!force) {
-    const existing = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
-    if (existing && existing.scopeKey === scopeKey) return existing
-    return null
+  const { weekStart, weekEnd } = buildWeekDateRange(weekStartStr)
+  const [memoryFromMs] = localDateBoundsFromString(weekStart)
+  const [, memoryToMs] = localDateBoundsFromString(weekEnd)
+  const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt, voice].join('\n'))
+  const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
+  if (existingSignature === inputSignature) {
+    return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
   }
-  return generateWeekReview(weekStartStr, true)
+  // Evidence or tone moved: surface the stored card as stale rather than
+  // spending a provider call on a read, and rather than pretending the old
+  // voice is current.
+  return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey, { stale: true })
 }
 
 export async function getAppNarrative(
@@ -3708,14 +3934,37 @@ export async function getAppNarrative(
   daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
-  if (!force) {
-    const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
-    const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
+  if (force) return generateAppNarrative(canonicalAppId, daysOrDate, true)
+
+  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
+  const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
+  const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
+  const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)
+  const [memoryFromMs, memoryToMs] = isDate
+    ? localDateBoundsFromString(daysOrDate)
+    : (() => {
+      const [, todayToMs] = dayBounds(new Date())
+      if (days >= ALL_TIME_DAYS) return [0, todayToMs] as const
+      const end = new Date(todayToMs)
+      const fromMs = new Date(
+        end.getFullYear(),
+        end.getMonth(),
+        end.getDate() - days,
+      ).getTime()
+      return [fromMs, todayToMs] as const
+    })()
+  const memoryPrompt = buildDaylensMemoryPromptBlock({
+    fromMs: memoryFromMs,
+    toMs: memoryToMs,
+  })
+  const voice = normalizeSummaryVoice(getSettings().summaryVoice)
+  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt, voice].join('\n'))
+  const existingSignature = getAISurfaceSummarySignature(getDb(), 'app_detail', scopeKey)
+  if (existingSignature === inputSignature) {
     const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
-    if (existing) return existing
-    return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
+    if (!appNarrativeHasStaleMetrics(existing)) return existing
   }
-  return generateAppNarrative(canonicalAppId, daysOrDate, true)
+  return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
 }
 
 export async function testCLITool(tool: CLITool): Promise<{ ok: true; output: string } | { ok: false; error: string }> {

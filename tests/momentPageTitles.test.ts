@@ -98,7 +98,7 @@ function seedYoutubeAfternoon(db: Database.Database, day: Date): void {
       category_distribution_json, switch_count, label_current, label_source,
       label_confidence, narrative_current, evidence_summary_json, is_live,
       heuristic_version, computed_at, invalidated_at
-    ) VALUES (?, ?, ?, ?, 'work', 'entertainment', '{}', 0, ?, 'rule', 0.8, NULL, ?, 0, 'timeline-v10', ?, NULL)
+    ) VALUES (?, ?, ?, ?, 'work', 'entertainment', '{}', 0, ?, 'rule', 0.8, NULL, ?, 0, 'timeline-v11', ?, NULL)
   `).run(
     `blk_${dateStr(day)}_yt`,
     dateStr(day),

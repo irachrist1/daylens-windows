@@ -205,8 +205,11 @@ test('startup identity repairs are marked and skipped after first completion', (
   const identityCount = db.prepare(`SELECT COUNT(*) AS count FROM app_identities`).get() as { count: number }
   assert.equal(identityCount.count, 1)
 
+  // Two repair markers plus the range-facts evidence epoch the repair bumps
+  // (the repair UPDATEs evidence in place, which must invalidate cached
+  // range facts — see rangeFactsCache.ts).
   const markerCount = db.prepare(`SELECT COUNT(*) AS count FROM maintenance_runs`).get() as { count: number }
-  assert.equal(markerCount.count, 2)
+  assert.equal(markerCount.count, 3)
 
   db.prepare(`UPDATE app_sessions SET raw_app_name = NULL`).run()
   repairStoredIdentityColumns(db)

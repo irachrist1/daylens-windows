@@ -5,6 +5,7 @@ import { applyAppearanceSettings } from '@shared/activityColors'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
+import CaptureBlindBanner from './components/CaptureBlindBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import DayWrapped from './components/DayWrapped'
 import PeriodWrapped from './components/PeriodWrapped'
@@ -226,6 +227,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   return (
     <>
       <UpdateBanner />
+      <CaptureBlindBanner />
       {paletteOpen && (
         <CommandPalette
           isOpen={paletteOpen}
@@ -352,8 +354,16 @@ export default function App() {
     )
   }
 
-  // Loading — wait for settings before rendering anything
-  if (!settings) return null
+  if (!settings) {
+    return (
+      <div className="flex flex-col h-full overflow-hidden" style={{ fontFamily: 'var(--font-sans)' }}>
+        <TitleBar />
+        <main className="flex-1 grid place-items-center bg-[var(--color-bg)]">
+          <p className="text-[13px] text-[var(--color-text-tertiary)]">Opening Daylens…</p>
+        </main>
+      </div>
+    )
+  }
 
   const onboardingDone = settings.onboardingComplete && settings.onboardingState.stage === 'complete'
 

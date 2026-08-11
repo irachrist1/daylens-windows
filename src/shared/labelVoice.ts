@@ -1,4 +1,13 @@
+import {
+  JUDGMENT_RE,
+  LABEL_HYPE_VOCAB,
+  LABEL_PLUMBING_VOCAB,
+  activityDescriptionFindings,
+  type DescriptionProvenance,
+  type DescriptionVoiceFinding,
+} from './activityDescription'
 import { looksLikeRawArtifactLabel } from './blockLabel'
+import { workNameGuardLabelViolation } from './workNameGuards'
 
 // The executable label-voice rubric (label-voice.md). A block label describes
 // what the person was doing in their own everyday words; this module turns that
@@ -43,7 +52,7 @@ export const LABEL_VOICE_RULES: readonly LabelVoiceRule[] = [
     id: 'no-raw-artifact-forms',
     tier: 'invariant',
     requirement:
-      'No raw machine forms: URLs, bare domains, data/office file extensions, underscore filenames, SCREAMING identifiers, notification counts, browser-tab soup, or trailing browser names.',
+      'No raw machine forms: URLs, bare domains, email addresses, data/office file extensions, underscore filenames, SCREAMING identifiers, notification counts, browser-tab soup, or trailing browser names.',
   },
   {
     id: 'no-plumbing-or-hype',
@@ -118,45 +127,29 @@ const RAW_URL_RE = /https?:\/\/|www\./i
 const RAW_FILE_EXTENSION_RE = /\.(ipynb|pdf|docx?|xlsx?|pptx?|csv|key|numbers|pages)\b/i
 const UNDERSCORE_FILENAME_RE = /[a-z0-9]_[a-z0-9]/i
 const NOTIFICATION_COUNT_RE = /^\(\d+\)\s/
+// A label that is nothing but a date is an internal key, not an activity, and
+// must never rank as "what mattered". Rejects a bare ISO or slashed date as the
+// WHOLE label; a date inside a real phrase ("Reviewed the FY2026 report") is
+// untouched.
+const BARE_DATE_RE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/
 // Common web TLDs only, so a code filename ("run.ts") never reads as a domain.
 const BARE_DOMAIN_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|io|dev|app|net|ai|co|edu|gov)$/i
+// An email address is a machine form wherever it sits in the label. The bare-
+// domain rule missed these because the "@" stops the whole string matching, so
+// two of one real day's ten blocks were headlined
+// "christian.tonny@rw.Andersen.com" — lifted out of a Microsoft Teams calendar
+// window title. An address is never what a person was doing.
+const EMAIL_ADDRESS_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i
 const TRAILING_BROWSER_RE =
   /\s[-—–]\s(?:Google Chrome|Safari|Arc|Firefox|Brave|Microsoft Edge|Chrome|Dia)$/i
 
-// Capture plumbing a person would never say about their own day. Kept tight to
-// unambiguous telemetry vocabulary so real work ("Reviewing evidence for the
-// Harris case") is never punished for its subject matter.
-const PLUMBING_TERMS = [
-  'foreground',
-  'window title',
-  'app session',
-  'browser session',
-  'captured signal',
-  'capture source',
-  'telemetry',
-  'bundle id',
-]
-
-// The subset of the assistant voice contract's banned vocabulary that could
-// plausibly surface in a short label.
-const HYPE_TERMS = [
-  'dive into',
-  'deep dive',
-  'unleash',
-  'game-changing',
-  'seamless',
-  'elevate',
-  'harness the power',
-  'empower',
-  'streamline',
-  'navigate the landscape',
-]
-
-// The block observation contract: never judge productivity, focus, distraction,
-// or personal worth. Naming a real focus-timer session stays allowed, so
-// "focus" itself is not in this list.
-const JUDGMENT_RE =
-  /\b(?:productive|unproductive|productivity|wasted|wasting|time.wasting|distraction|distracted|procrastinat\w*|lazy|slacking|doomscroll\w*)\b/i
+// Capture plumbing, hype, and judgment all come from the one policy module
+// (activityDescription.ts) so a term added there binds on labels and on prose
+// at once. The label scope is deliberately stricter than the prose scope:
+// "window title" is a legitimate word in an answer about what Daylens captures
+// and is never a legitimate label.
+const PLUMBING_TERMS: readonly string[] = LABEL_PLUMBING_VOCAB
+const HYPE_TERMS: readonly string[] = LABEL_HYPE_VOCAB
 
 const LEISURE_ACTIVITY_SHAPE_RE = /^(watching|on |listening|browsing)/i
 
@@ -217,23 +210,67 @@ function wordCount(value: string): number {
   return value.split(/\s+/).filter(Boolean).length
 }
 
+// A label that is one token ending in a file extension is the artifact, not
+// the activity ("handoff.md", "run.ts"). DEV-276 recorded that a filename is
+// never a label — including ordinary code filenames, which an earlier design
+// allowed as deterministic fallbacks. Requires a letter-led extension so a
+// version number ("1.0.45") or trailing ellipsis never matches.
+const BARE_FILENAME_RE = /^[\w()[\]#@~+-]+\.[a-z][a-z0-9]{0,5}$/i
+// Structural JSON: an opening brace, an array of objects/strings, or a quoted
+// key whose colon is followed by a JSON value opener. A colon in prose
+// ("Sprint planning: retro", 'Reviewed the "Q3 Roadmap": key priorities') and
+// a bracketed title fragment ("[Week 1]") never match.
+const JSON_FRAGMENT_RE = /^\{|^\[\s*[{["]|"[^"]*"\s*:\s*[{[\d"]/
+// A label that is nothing but a bracketed fragment is tab-title cruft
+// ("[Week 1]"), never an activity.
+const BRACKETED_FRAGMENT_RE = /^\[[^\]]*\]$/
+
 /**
  * The raw machine form a label carries, or null when it carries none.
  * Also used for intent subjects: a subject must not be a machine artifact
- * either. Ordinary code filenames and repo paths ("run.ts", "src/main") are
- * deliberately allowed here — rejecting those is the AI naming path's job and
- * is scored by the target-tier rules instead.
+ * either. Repo paths ("src/main") remain allowed; single filenames do not
+ * (DEV-276: a raw window title, a filename, a ticket description, or a JSON
+ * string is never a label).
  */
+// The two-tab sibling of "browser-tab soup". A browsing block's floor label is
+// built by joining the two biggest site names with " + ", which produced
+// "Campus + App" (campus.datacamp.com + app.datacamp.com), "Coursera +
+// Datacamp", "Instagram + Google", "X (Twitter) + Factory", "Netflix +
+// YouTube". Each names software, never an activity.
+//
+// Deliberately narrow, because "+" is legitimate mid-phrase: both sides must be
+// at most two words AND every word must be capitalised, which is the shape of
+// joined proper names and not of a written phrase. "Design + build the
+// onboarding" keeps its lowercase "build" and survives.
+function isTwoTabMashup(text: string): boolean {
+  const parts = text.split(/\s\+\s/)
+  if (parts.length !== 2) return false
+  return parts.every((part) => {
+    const words = part.trim().split(/\s+/).filter(Boolean)
+    if (words.length === 0 || words.length > 2) return false
+    return words.every((word) => {
+      const firstLetter = word.replace(/^[^\p{L}]+/u, '')[0]
+      return firstLetter === undefined || firstLetter === firstLetter.toUpperCase()
+    })
+  })
+}
+
 export function rawLabelForm(value: string | null | undefined): string | null {
   const text = (value ?? '').trim()
   if (!text) return null
   if (RAW_URL_RE.test(text)) return 'raw URL'
+  if (BARE_DATE_RE.test(text)) return 'bare date'
   if (BARE_DOMAIN_RE.test(text)) return 'bare domain'
+  if (EMAIL_ADDRESS_RE.test(text)) return 'email address'
   if (RAW_FILE_EXTENSION_RE.test(text)) return 'file extension'
   if (UNDERSCORE_FILENAME_RE.test(text)) return 'underscore filename'
   if (looksLikeRawArtifactLabel(text)) return 'machine identifier'
+  if (BARE_FILENAME_RE.test(text)) return 'filename'
+  if (JSON_FRAGMENT_RE.test(text)) return 'JSON fragment'
+  if (BRACKETED_FRAGMENT_RE.test(text)) return 'bracketed title fragment'
   if (NOTIFICATION_COUNT_RE.test(text)) return 'notification count'
   if (text.split(/\s*\|\s*/).filter(Boolean).length >= 3) return 'browser-tab soup'
+  if (isTwoTabMashup(text)) return 'browser-tab mashup'
   if (TRAILING_BROWSER_RE.test(text)) return 'trailing browser name'
   return null
 }
@@ -341,6 +378,33 @@ export function evaluateLabelVoice(
 }
 
 /**
+ * The ONE relabel-time rejection both AI label paths enforce — the direct
+ * relabel (generateWorkBlockInsight's labelRejection in jobs/aiService.ts)
+ * and the interpretation agent (agentLabelViolation): every invariant rule,
+ * the two target rules that catch echoed window titles and bare app names,
+ * and the shared work-name-guard vocabulary (tool brands/surfaces, command
+ * lines, joined tab titles, site surfaces — including a disqualified subject
+ * hiding behind a verb lead, "Working on Cursor Agents"). Returns the
+ * violation to feed the one corrective retry, or null when the label passes.
+ */
+export function labelCandidateViolation(
+  label: string | null | undefined,
+  context: LabelVoiceContext = {},
+): string | null {
+  const candidate = label?.trim()
+  if (!candidate) return 'the label was empty'
+  for (const finding of evaluateLabelVoice(candidate, context)) {
+    if (finding.passed) continue
+    if (finding.tier === 'invariant'
+      || finding.rule === 'no-verbatim-window-title'
+      || finding.rule === 'activity-not-software') {
+      return finding.detail ?? finding.rule
+    }
+  }
+  return workNameGuardLabelViolation(candidate)
+}
+
+/**
  * Context for a label evaluation, read off a timeline block. Field access is
  * structural and defensive because the projection and payload paths carry
  * slightly different page-reference shapes.
@@ -381,6 +445,47 @@ export function labelVoiceContextForBlock(
     kind: kind ?? null,
     hasSubjectEvidence: windowTitles.length > 0 || pageTitles.length > 0 || files.length > 0,
   }
+}
+
+// ── Label provenance (REQ-VIC-004) ─────────────────────────────────────────
+// A person's own wording for their own work outranks anything Daylens infers,
+// and it is never policy-checked: the rules exist to stop Daylens from writing
+// badly, not to correct someone's name for their own day. What the rules DO
+// still govern is how that wording travels — a name the person supplied is not
+// evidence, so no surface may re-derive a fact from it.
+//
+// Two paths produce a user-authored label and both must count: a
+// `block_label_overrides` row sets `label.override`, and a corrected block
+// review sets `label.source = 'user'` (and writes the same text into both).
+// Read structurally, like `labelVoiceContextForBlock`, because the projection
+// and payload paths carry slightly different block shapes.
+
+export interface LabelProvenanceBlock {
+  label?: {
+    current?: string | null
+    source?: string | null
+    override?: string | null
+  } | null
+}
+
+/** The person's own wording for this block, verbatim, or null when the label
+ *  is Daylens's. Never trimmed of anything but surrounding whitespace: the
+ *  wording is theirs, including punctuation the policy would strip. */
+export function userAuthoredLabel(block: LabelProvenanceBlock): string | null {
+  const override = block.label?.override?.trim()
+  if (override) return override
+  if (block.label?.source === 'user') {
+    const current = block.label?.current?.trim()
+    if (current) return current
+  }
+  return null
+}
+
+/** Where this block's user-visible label came from. `user` wording must be
+ *  presented as the person's name for the stretch and never as an observation
+ *  (AC-VIC-004.3). */
+export function labelProvenance(block: LabelProvenanceBlock): DescriptionProvenance {
+  return userAuthoredLabel(block) === null ? 'evidence' : 'user'
 }
 
 export interface EvaluatedLabel {
@@ -432,6 +537,18 @@ export function summarizeLabelVoice(evaluated: EvaluatedLabel[]): LabelVoiceSumm
     rules,
   }
 }
+
+// ── Recap voice ────────────────────────────────────────────────────────────
+// The prose check moved to activityDescription.ts. ADR-002 of the Voice & Label
+// Policy blueprint puts label evaluation here and generated-prose evaluation
+// there, and a recap or block narrative is prose. These two names stay exported
+// for the callers that already import them; there is now one implementation
+// behind them instead of a second copy of the same scans.
+
+export type RecapVoiceFinding = DescriptionVoiceFinding
+
+/** Voice violations in a generated recap or block narrative. Empty = clean. */
+export const recapVoiceFindings = activityDescriptionFindings
 
 /** Markdown-ready lines for a review report's label-voice section. */
 export function labelVoiceReportLines(summary: LabelVoiceSummary): string[] {

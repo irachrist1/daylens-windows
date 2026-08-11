@@ -1,6 +1,7 @@
 export const ANALYTICS_EVENT = {
   APP_LAUNCHED: 'app_launched',
   APP_CRASHED: 'app_crashed',
+  MAIN_THREAD_STALLED: 'main_thread_stalled',
   VIEW_OPENED: 'view_opened',
   ANALYZE_DAY_CLICKED: 'analyze_day_clicked',
   AI_CHAT_SENT: 'ai_chat_sent',

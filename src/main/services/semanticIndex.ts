@@ -105,6 +105,32 @@ function bookkeepingAvailable(db: Database.Database): boolean {
   ).get() != null
 }
 
+/**
+ * Does the vector store hold anything this embedder can actually match against?
+ *
+ * The same model/version pair `searchSemanticMoments` filters on: a vector
+ * written by an older embedder is invisible to the k-NN join, so a store full of
+ * stale rows is, for retrieval purposes, an empty one.
+ *
+ * This is an availability question, not a result question. Backfill is
+ * incremental and runs in the background, so "the model is installed and the
+ * extension loaded, but nothing has been embedded yet" is an ordinary state on a
+ * fresh install and after every embedder-version bump. Reporting that as a
+ * successful search returning no matches asserts something untrue — that meaning
+ * was compared and nothing was close — when meaning was never compared at all.
+ * The planner (AC-SM-001.6) is built to say a path could not contribute, so the
+ * honest answer is unavailable-with-a-reason.
+ */
+function embeddingsAvailable(db: Database.Database, model: string, version: number): boolean {
+  try {
+    return db.prepare(
+      `SELECT 1 FROM memory_record_vectors WHERE model = ? AND model_version = ? LIMIT 1`,
+    ).get(model, version) != null
+  } catch {
+    return false
+  }
+}
+
 // ─── Incremental embedding ───────────────────────────────────────────────────
 
 interface PendingRow {
@@ -373,12 +399,21 @@ export function startSemanticIndexBackfill(
         return
       }
       const loaded = await loadSemanticEmbedder()
-      if (!loaded.ok) return // honest absence — status explains why
+      if (!loaded.ok) {
+        // Honest absence — status explains why. Absence can be transient (a
+        // crashed embed worker, a model restored while running), so keep the
+        // loop alive at the idle cadence instead of stopping until restart.
+        indexTimer = setTimeout(() => void step(), idleDelayMs)
+        return
+      }
       progress = await semanticIndexStep(getDatabase(), loaded.embedder, {
         batchSize: options.batchSize,
       })
     } catch (error) {
       console.error('[semanticIndex] background step failed', error)
+      if (!indexTimer) {
+        indexTimer = setTimeout(() => void step(), idleDelayMs)
+      }
       return
     }
     if (!indexTimer) {
@@ -397,6 +432,71 @@ export function stopSemanticIndexBackfill(): void {
 
 // ─── Query path ──────────────────────────────────────────────────────────────
 
+export interface SemanticSearchOutcome {
+  results: SessionSearchResult[]
+  /** False when the model, runtime, extension, or vector store is missing. */
+  available: boolean
+  /** Empty when available; a person-readable sentence otherwise. */
+  reason: string
+}
+
+/**
+ * Find memory by meaning, reporting whether the path could run at all.
+ *
+ * `searchByMeaning` collapses "ran, matched nothing" and "cannot run here" into
+ * the same `[]`, which is right for a purely additive palette section and wrong
+ * for the retrieval planner: AC-SM-001.6 requires the planner to return the
+ * other paths' results *and say* that semantic retrieval was unavailable. This
+ * variant carries that distinction; `searchByMeaning` is its wrapper.
+ */
+export async function searchByMeaningWithStatus(
+  db: Database.Database,
+  query: string,
+  opts: SearchOptions = {},
+): Promise<SemanticSearchOutcome> {
+  const trimmed = query.trim()
+  if (trimmed.length < 2) {
+    return { results: [], available: false, reason: 'The query is too short to match by meaning.' }
+  }
+  try {
+    if (!bookkeepingAvailable(db)) {
+      return { results: [], available: false, reason: 'The local semantic index has not been created yet.' }
+    }
+    const loaded = await loadSemanticEmbedder()
+    if (!loaded.ok) {
+      return { results: [], available: false, reason: 'The local embedding model is not available on this device.' }
+    }
+    const store = ensureVectorStore(db)
+    if (!store.ok) {
+      return { results: [], available: false, reason: 'Local vector search is not available on this device.' }
+    }
+    if (!embeddingsAvailable(db, loaded.embedder.model, loaded.embedder.version)) {
+      return {
+        results: [],
+        available: false,
+        reason: 'Nothing has been indexed for meaning-based search on this device yet.',
+      }
+    }
+    const [queryVector] = await loaded.embedder.embed([trimmed])
+    if (!queryVector) {
+      return { results: [], available: false, reason: 'The query could not be embedded locally.' }
+    }
+    return {
+      results: searchSemanticMoments(
+        db,
+        queryVector,
+        { model: loaded.embedder.model, version: loaded.embedder.version },
+        opts,
+      ),
+      available: true,
+      reason: '',
+    }
+  } catch (error) {
+    console.error('[semanticIndex] by-meaning search failed', error)
+    return { results: [], available: false, reason: 'Semantic retrieval failed on this device.' }
+  }
+}
+
 /**
  * Find memory by meaning: embed the query locally, k-NN over the embedded
  * records, corrected/deleted content filtered exactly like the exact readers.
@@ -409,26 +509,7 @@ export async function searchByMeaning(
   query: string,
   opts: SearchOptions = {},
 ): Promise<SessionSearchResult[]> {
-  const trimmed = query.trim()
-  if (trimmed.length < 2) return []
-  try {
-    if (!bookkeepingAvailable(db)) return []
-    const loaded = await loadSemanticEmbedder()
-    if (!loaded.ok) return []
-    const store = ensureVectorStore(db)
-    if (!store.ok) return []
-    const [queryVector] = await loaded.embedder.embed([trimmed])
-    if (!queryVector) return []
-    return searchSemanticMoments(
-      db,
-      queryVector,
-      { model: loaded.embedder.model, version: loaded.embedder.version },
-      opts,
-    )
-  } catch (error) {
-    console.error('[semanticIndex] by-meaning search failed', error)
-    return []
-  }
+  return (await searchByMeaningWithStatus(db, query, opts)).results
 }
 
 // ─── Status (Settings surface) ───────────────────────────────────────────────

@@ -1,0 +1,42 @@
+# Ground truth from the owner's Obsidian journal (Sunday planning day).
+date: "2026-05-31"
+confidence: journal
+sources:
+  - "Obsidian journal 2026-05-31 ('what actually happened' + against-the-plan)"
+summary: >
+  Sunday with an off-computer morning; the working day started on paper
+  around 12:30 — goals, long-term direction, and the week's shape. Screen
+  time after noon was ~6 hours, dominated by Safari: school deadline
+  triage across Coursera, Perusall, Intranet, and ChatGPT, closing the
+  day's school deadlines with AI help and finishing the Coursera NN&DL
+  course. Texted the Formative 2 team (due Jun 7). Built the June plan in
+  the vault and synced system docs (memory, integrations, shipping
+  checklist, Notion via MCP), plus Notion and TickTick cleanup. The CBC
+  hackathon result was locked: 2nd place presenting Daylens. X (~44 min)
+  and YouTube (~27 min) were in the mix, with Cursor in bursts for school
+  agents.
+primaryWork:
+  - name: School deadline triage (Coursera NN&DL, Perusall)
+    aliases: [coursera, perusall, school, deadline, nn&dl, neural networks]
+  - name: June planning + vault system sync
+    aliases: [june plan, vault, planning, second brain, system docs]
+secondary:
+  - name: Notion / TickTick cleanup
+    aliases: [notion, ticktick]
+  - name: Formative 2 coordination
+    aliases: [formative]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { until: "12:00", desc: "off computer all morning (a tempo run was on the calendar); no screen work" }
+  - { from: "12:30", until: "14:30", desc: "paper planning session — goals, long-term direction, the week's shape — with light screen use starting after noon" }
+  - { from: "14:00", until: "21:00", desc: "school deadline triage (Coursera NN&DL finished, Perusall, Intranet, ChatGPT), June plan built in the vault, system doc sync, Notion + TickTick cleanup; X and YouTube mixed in" }
+gaps:
+  - { from: "01:30", to: "12:00", reason: "off-computer morning; the day started on paper around 12:30" }
+notes: >
+  The journal gives no clock times for the afternoon threads — the order
+  of school triage versus June-plan/vault work is not pinned, so judge
+  ordering leniently. Capture ends at 21:07 with nothing after. The 2nd
+  place CBC result was recorded/closed this day, not presented this day —
+  do not expect hackathon work on the timeline.

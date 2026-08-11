@@ -1,5 +1,7 @@
 # Connectors
 
+Status: removed from the product 2026-07-26 — the OAuth connector framework was dropped (too much setup for target users); calendar/git enrichment remains via externalSignals.
+
 **Status:** Ready for review.
 
 This specification defines how Daylens connects external sources to personal memory. Connectors add facts that desktop observation cannot reliably infer while preserving explicit consent, narrow read-only permissions, provenance, and deletion.

@@ -33,7 +33,9 @@ import type {
   LiveSession,
   WorkContextBlock,
 } from '@shared/types'
+import { activityCategoryLabel } from '@shared/activityCategories'
 import { localDayBounds } from '../lib/localDate'
+import { absenceSpannedBy, formatAbsenceRange } from '../lib/absenceGuard'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { getCorrectedAppSummariesForRange } from './activityFacts'
 import { applyTimelineBlockEdit } from './timelineBlockEdits'
@@ -170,15 +172,23 @@ function describeCommand(
         parts.push(`Rename "${label(blocks[0])}" to "${command.label.trim()}"`)
       }
       if (command.category && command.category !== blocks[0].dominantCategory) {
-        parts.push(parts.length > 0 ? `change its category to ${command.category}` : `Change the category of "${label(blocks[0])}" to ${command.category}`)
+        // Human vocabulary, never the raw enum: "AI Tools", not "aiTools".
+        const categoryName = activityCategoryLabel(command.category)
+        parts.push(parts.length > 0 ? `change its category to ${categoryName}` : `Change the category of "${label(blocks[0])}" to ${categoryName}`)
       }
       if (command.startMs !== undefined || command.endMs !== undefined) {
         parts.push(parts.length > 0 ? 'adjust its time range' : `Adjust the time range of "${label(blocks[0])}"`)
       }
       return parts.length > 0 ? parts.join(', ') : `Edit "${label(blocks[0])}"`
     }
-    case 'merge':
-      return `Merge ${blocks.length} blocks into one`
+    case 'merge': {
+      // A merge across time away is allowed (DEV-233, decided) but never
+      // silent: the preview names the gap so the person merges knowingly.
+      const gap = absenceSpannedBy(blocks.flatMap((block) => block.sessions))
+      return gap
+        ? `Merge ${blocks.length} blocks into one. They're separated by time away (${formatAbsenceRange(gap)}) — that time stays untracked`
+        : `Merge ${blocks.length} blocks into one`
+    }
     case 'split': {
       const at = new Date(command.cutMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       return `Split "${label(blocks[0])}" at ${at}`
@@ -491,13 +501,13 @@ function surfaceNotes(
       if (command.label?.trim()) {
         notes.push(`Search and the AI will know this block as "${command.label.trim()}".`)
       }
-      if (category) notes.push(`Apps and Timeline recolor this stretch as ${category}.`)
+      if (category) notes.push(`Apps and Timeline recolor this stretch as ${activityCategoryLabel(category)}.`)
       if (command.startMs !== undefined) {
         notes.push('Trimmed-off minutes re-form into their own block; nothing is lost.')
       }
       break
     case 'merge':
-      notes.push('The merged block survives every re-analysis; search finds one block instead of several.')
+      notes.push('You get one block, and it stays one block when you leave and come back. Search finds one block instead of several.')
       break
     case 'split':
       notes.push('The cut survives every re-analysis; each side keeps its own evidence.')

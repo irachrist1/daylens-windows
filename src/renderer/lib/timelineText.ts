@@ -1,9 +1,9 @@
 import type { AppCategory, WorkContextBlock } from '@shared/types'
 import { sanitizeForModel } from '@shared/aiSanitize'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel } from '@shared/blockLabel'
+import { isArtifactCompatibleWithBlockCategory, naturalizeLabel } from '@shared/blockLabel'
+import { rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
-import { formatDisplayAppName } from './apps'
 import { formatDuration } from './format'
 
 const PAGE_ARTIFACT_LABEL_CATEGORIES: ReadonlySet<AppCategory> = new Set([
@@ -20,6 +20,15 @@ function pageArtifactLabelAllowed(block: WorkContextBlock): boolean {
 
 export function safeTimelineText(text: string): string {
   return sanitizeForModel(text)
+}
+
+// Terminal window titles arrive with a leading status glyph — a braille spinner
+// (⠿, ⣷…), an activity mark (✳, ✶…), or a bullet — that is process chrome, not
+// content. Strip it for display so a row reads "Traycer", not "⠿ Traycer".
+const LEADING_STATUS_GLYPH_RE = /^[\s⠀-⣿✳✶✽✻✼✱✲✦✧✻●○◌◍◎◦∙·•▪▸▹►▶◆◇*]+/u
+
+export function cleanTitleForDisplay(text: string): string {
+  return safeTimelineText(text.replace(LEADING_STATUS_GLYPH_RE, '').trim())
 }
 
 export function shortDomainLabel(domain: string): string {
@@ -41,7 +50,7 @@ function categoryVerbPhrase(category: WorkContextBlock['dominantCategory']): { v
     case 'entertainment': return { verb: 'watching', noun: 'video content' }
     case 'social': return { verb: 'on', noun: 'social' }
     case 'system': return { verb: 'on', noun: 'system tasks' }
-    default: return { verb: 'spent on', noun: 'mixed work' }
+    default: return { verb: 'on', noun: 'mixed work' }
   }
 }
 
@@ -56,10 +65,12 @@ function artifactPhraseForCategory(
   return artifactTitle
 }
 
-/** Deterministic renderer fallback only. Persisted main-process narrative wins. */
+/** Deterministic renderer fallback only. Persisted main-process narrative wins.
+ *  It describes the ACTIVITY, never the tools (DEV-280): the subject when a
+ *  clean artifact names one, the category mix otherwise — no "mostly in
+ *  Cursor" clauses, no window titles. */
 export function blockShortSummary(block: WorkContextBlock): string {
   const duration = formatDuration(blockActiveSeconds(block))
-  const allApps = block.topApps.filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
   const sites = pageArtifactLabelAllowed(block)
     ? block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
     : []
@@ -69,33 +80,26 @@ export function blockShortSummary(block: WorkContextBlock): string {
   ))
   const rawArtifact = topArtifact ? safeTimelineText(topArtifact.displayTitle.trim()) : null
   const cleanArtifact = rawArtifact ? naturalizeLabel(rawArtifact) || rawArtifact : null
-  const naturalizedArtifact = cleanArtifact && !looksLikeRawArtifactLabel(cleanArtifact) ? cleanArtifact : null
+  const naturalizedArtifact = cleanArtifact && !rawLabelForm(cleanArtifact) ? cleanArtifact : null
 
-  const orderedApps = (() => {
-    if (!topArtifact) return allApps
-    if (topArtifact.artifactType === 'page') {
-      const browsers = allApps.filter((app) => app.isBrowser)
-      return browsers.length > 0 ? browsers : allApps
-    }
-    if (topArtifact.ownerBundleId) {
-      const owners = allApps.filter((app) => app.bundleId === topArtifact.ownerBundleId)
-      return owners.length > 0 ? owners : allApps
-    }
-    return allApps
-  })()
-  const appNames = orderedApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
-  const primaryApp = appNames[0] ?? null
-  const secondaryApp = appNames[1] ?? null
   const { verb, noun } = categoryVerbPhrase(block.dominantCategory)
-  const supportingClause = secondaryApp
-    ? `, mostly in ${primaryApp} with ${secondaryApp} as supporting context`
-    : primaryApp ? `, mostly in ${primaryApp}` : ''
+  // The other real activities inside the block, so a long mixed block is not
+  // summarized by its top category alone (the "ignores my morning" failure).
+  const otherActivities = Object.entries(block.categoryDistribution ?? {})
+    .filter((entry): entry is [AppCategory, number] =>
+      typeof entry[1] === 'number' && entry[1] >= 60
+      && entry[0] !== block.dominantCategory
+      && entry[0] !== 'system' && entry[0] !== 'uncategorized')
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([category]) => activityCategoryLabel(category).toLowerCase())
+  const alongside = otherActivities.length > 0
+    ? `, with ${otherActivities.join(' and ')} alongside`
+    : ''
 
   if (naturalizedArtifact) {
-    return `Spent ${duration} ${verb} ${artifactPhraseForCategory(naturalizedArtifact, topArtifact!.artifactType, block.dominantCategory)}${supportingClause}.`
+    return `Spent ${duration} ${verb} ${artifactPhraseForCategory(naturalizedArtifact, topArtifact!.artifactType, block.dominantCategory)}${alongside}.`
   }
-  if (primaryApp && sites.length > 0) return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}${supportingClause}.`
-  if (primaryApp) return `Spent ${duration} ${verb} ${noun}${supportingClause}.`
-  if (sites.length > 0) return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}.`
-  return `Spent ${duration} on ${activityCategoryLabel(block.dominantCategory).toLowerCase()}.`
+  if (sites.length > 0) return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}${alongside}.`
+  return `Spent ${duration} ${verb} ${noun}${alongside}.`
 }

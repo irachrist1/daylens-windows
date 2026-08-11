@@ -18,7 +18,11 @@ import {
 
 // Bump when segmentation or labeling logic changes. Reprojection rewrites
 // any rows whose stored version is older. Idempotent.
-export const PROJECTION_VERSION = 1
+// v2: app_deactivated only closes the session it belongs to — a stale
+// deactivation of the PREVIOUS app no longer kills the newly activated one —
+// and idle_started ends the open session (idle_ended resumes it when focus
+// never moved), so a walk-away without lock/sleep is not counted as active.
+export const PROJECTION_VERSION = 2
 
 const IDLE_GAP_MS = 15 * 60 * 1000   // 15 min boundary between blocks
 const MIN_SESSION_MS = 1000          // drop sub-second flicker
@@ -121,6 +125,12 @@ export function projectSessionsFromFocusEvents(
 function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): DerivedSessionRow[] {
   const out: DerivedSessionRow[] = []
   let open: OpenSession | null = null
+  let lastEventTs: number | null = null
+  // The session an idle_started interrupted, remembered so idle_ended can
+  // resume it: a user who walks away and comes back to the same app produces
+  // no app_activated on return, and without the resume the stretch from
+  // idle_ended to the next event would vanish.
+  let resumeAfterIdle: OpenSession | null = null
 
   const close = (atMs: number) => {
     if (!open) return
@@ -135,8 +145,26 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
 
   for (const ev of events) {
     switch (ev.event_type) {
+      case 'capture_stopped': {
+        // Capture is down from here: whatever was focused stops accruing.
+        close(ev.ts_ms)
+        resumeAfterIdle = null
+        break
+      }
+      case 'capture_started': {
+        // A session still open at a capture start means the previous run died
+        // without a capture_stopped (crash, kill, wedged shutdown). Its
+        // evidence truly ends at the last event that run managed to record —
+        // extending it across the dead stretch would count downtime as
+        // activity (observed: an overnight crash loop rendered as a night of
+        // continuous app use).
+        if (open) close(lastEventTs ?? ev.ts_ms)
+        resumeAfterIdle = null
+        break
+      }
       case 'app_activated': {
         close(ev.ts_ms)
+        resumeAfterIdle = null
         open = {
           start_ts_ms: ev.ts_ms,
           app_bundle_id: ev.app_bundle_id,
@@ -154,6 +182,7 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
         // on the same app + new tab url. Spec: tab boundaries are real
         // boundaries even when the app didn't change.
         if (open) close(ev.ts_ms)
+        resumeAfterIdle = null
         open = {
           start_ts_ms: ev.ts_ms,
           app_bundle_id: ev.app_bundle_id,
@@ -165,10 +194,59 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
         }
         break
       }
-      case 'app_deactivated':
+      case 'app_deactivated': {
+        // Capture emits the new app's activation BEFORE the old app's
+        // deactivation (same timestamp, ordered by id). Closing whatever is
+        // open on any deactivation let the old app's trailing event kill the
+        // session that had just opened — apps that emit no tab events to
+        // resurrect them (terminals, agent runners) lost nearly all their
+        // time (a 212-minute Ghostty day projected as 12 minutes). Only the
+        // deactivated app's own session closes; an event that carries no app
+        // identity keeps the old unconditional close.
+        if (deactivationClosesOpenSession(open, ev)) close(ev.ts_ms)
+        // A deactivation for the idle-interrupted app means focus really
+        // moved while the user was away — nothing to resume.
+        if (resumeAfterIdle && deactivationClosesOpenSession(resumeAfterIdle, ev)) {
+          resumeAfterIdle = null
+        }
+        break
+      }
+      case 'idle_started': {
+        // The user stopped giving input: whatever is focused stops accruing,
+        // exactly like the day-ownership span automaton. Without this cut, a
+        // walk-away without lock/sleep counts the whole idle stretch as
+        // active session time (a lunch break narrated as a deep-work run).
+        // Copied field-by-field, not aliased: tsc 5.9's loop flow analysis
+        // mis-narrows a nullable let aliased from another narrowed one.
+        if (open) {
+          resumeAfterIdle = {
+            start_ts_ms: open.start_ts_ms,
+            app_bundle_id: open.app_bundle_id,
+            app_name: open.app_name,
+            window_title: open.window_title,
+            url: open.url,
+            page_title: open.page_title,
+            confidence: open.confidence,
+          }
+          close(ev.ts_ms)
+        }
+        break
+      }
+      case 'idle_ended': {
+        // Input resumed. If focus never moved while away (no activation,
+        // deactivation, or boundary since), the interrupted session resumes
+        // from here — the idle stretch itself stays excluded.
+        const interrupted: OpenSession | null = resumeAfterIdle
+        if (!open && interrupted) {
+          open = { ...interrupted, start_ts_ms: ev.ts_ms }
+        }
+        resumeAfterIdle = null
+        break
+      }
       case 'sleep':
       case 'lock': {
         close(ev.ts_ms)
+        resumeAfterIdle = null
         break
       }
       case 'window_changed': {
@@ -179,6 +257,7 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
       default:
         break
     }
+    lastEventTs = ev.ts_ms
   }
 
   // Open session at end of window — close at day end. (For past days this is
@@ -186,6 +265,26 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
   close(dayEnd)
 
   return out
+}
+
+/** Whether an app_deactivated event closes the currently open session: yes
+ *  when ANY comparable identity axis (bundle id or app name) matches the open
+ *  session — different capture sources can stamp different bundle ids for the
+ *  same app — or when no axis is comparable at all (conservative unconditional
+ *  close). Only a deactivation whose identity is known and disagrees on every
+ *  comparable axis is skipped: that is the previous app's stale trailing
+ *  event, not the open session's end. */
+function deactivationClosesOpenSession(
+  open: OpenSession | null,
+  ev: Pick<StoredFocusEvent, 'app_bundle_id' | 'app_name'>,
+): boolean {
+  if (!open) return false
+  const bundleComparable = Boolean(ev.app_bundle_id && open.app_bundle_id)
+  const nameComparable = Boolean(ev.app_name && open.app_name)
+  if (!bundleComparable && !nameComparable) return true
+  if (bundleComparable && ev.app_bundle_id === open.app_bundle_id) return true
+  if (nameComparable && ev.app_name === open.app_name) return true
+  return false
 }
 
 function buildSessionRow(open: OpenSession, endMs: number): DerivedSessionRow {

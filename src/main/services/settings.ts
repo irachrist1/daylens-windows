@@ -20,7 +20,10 @@ async function getStore() {
   return _store
 }
 
-const DEFAULTS: AppSettings = {
+export const DEFAULTS: AppSettings = {
+  mcpServers: [],
+  granolaAccessEnabled: true,
+  terminalAccessEnabled: false,
   shareAIFeedbackExamples: false,
   launchOnLogin: true,
   theme: 'system',
@@ -44,11 +47,18 @@ const DEFAULTS: AppSettings = {
   openrouterModel: 'anthropic/claude-sonnet-4.6',
   aiFallbackOrder: ['anthropic', 'openai', 'google'],
   aiModelStrategy: 'balanced',
-  aiChatProvider: 'anthropic',
+  // Undefined means "chat has no opinion of its own, follow Settings". A
+  // concrete default here made the `?? aiProvider` fallback in providerRouting
+  // dead: chat stayed pinned to Anthropic forever while Settings said something
+  // else, so connecting the Claude CLI left chat still billing the API.
+  aiChatProvider: undefined,
   aiBackgroundEnrichment: false,
   aiActiveBlockPreview: false,
   aiPromptCachingEnabled: true,
   aiSpendSoftLimitUsd: 10,
+  backgroundAiEnabled: true,
+  aiFeatureDailyBudgetUsd: 0.5,
+  aiFeatureBudgetOverridesUsd: {},
   aiRedactFilePaths: false,
   aiRedactEmails: false,
   allowThirdPartyWebsiteIconFallback: false,
@@ -57,10 +67,10 @@ const DEFAULTS: AppSettings = {
   morningNudgeEnabled: true,
   weeklyBriefEnabled: true,
   activityFreeNotificationText: false,
-  interpretationAgentEnabled: false,
+  interpretationAgentEnabled: true,
   distractionAlertThresholdMinutes: 10,
   distractionAlertsEnabled: true,
-  mcpServerEnabled: false,
+  mcpServerEnabled: true,
   workMemoryConsolidationEnabled: true,
   useRemoteAI: false,
   // T3 — opt-in, off by default. Private/incognito windows are excluded
@@ -72,9 +82,6 @@ const DEFAULTS: AppSettings = {
   billingInstallationId: '',
   activityColorOverrides: {},
   dimLeisureBlocks: true,
-  // DEV-186: connected sources are allowed by default, but nothing syncs until
-  // a connector is explicitly connected AND capture consent is current.
-  connectedSourcesEnabled: true,
 }
 
 // M1: model ids that have been shut down at the provider and now 404. Existing
@@ -91,7 +98,21 @@ function liveModelId(stored: string): string {
   return DEPRECATED_MODEL_REMAP[stored] ?? stored
 }
 
+// Worker-only seam (DEV-227): the range-facts worker subprocess has no
+// electron-store, but the shared activity query reads settings (focusApps)
+// deep inside. The worker primes this snapshot from each request so its
+// facts match what the main process would compute. Never set in the main
+// process.
+let _workerSettingsOverride: Partial<AppSettings> | null = null
+
+export function primeWorkerSettingsOverride(partial: Partial<AppSettings>): void {
+  _workerSettingsOverride = partial
+}
+
 export function getSettings(): AppSettings {
+  if (_workerSettingsOverride) {
+    return { ...DEFAULTS, ..._workerSettingsOverride }
+  }
   if (!_store) {
     // Synchronous fallback before async init — return defaults
     return { ...DEFAULTS }
@@ -99,6 +120,11 @@ export function getSettings(): AppSettings {
   const onboardingComplete = (_store.get('onboardingComplete', false) as boolean)
   const onboardingState = normalizeOnboardingState(_store.get('onboardingState', null), onboardingComplete)
   return {
+    // User-configured MCP servers for the chat agent. Must be read here or
+    // aiService's `settings.mcpServers ?? []` silently drops every entry.
+    mcpServers: (_store.get('mcpServers', []) as AppSettings['mcpServers']) ?? [],
+    granolaAccessEnabled: (_store.get('granolaAccessEnabled', true) as boolean),
+    terminalAccessEnabled: (_store.get('terminalAccessEnabled', false) as boolean),
     shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', false) as boolean),
     launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
@@ -123,11 +149,14 @@ export function getSettings(): AppSettings {
     openrouterModel: liveModelId(_store.get('openrouterModel', 'anthropic/claude-sonnet-4.6') as string),
     aiFallbackOrder: (_store.get('aiFallbackOrder', ['anthropic', 'openai', 'google']) as AppSettings['aiFallbackOrder']),
     aiModelStrategy: (_store.get('aiModelStrategy', 'balanced') as AppSettings['aiModelStrategy']),
-    aiChatProvider: (_store.get('aiChatProvider', 'anthropic') as AppSettings['aiChatProvider']),
+    aiChatProvider: (_store.get('aiChatProvider', undefined) as AppSettings['aiChatProvider']),
     aiBackgroundEnrichment: (_store.get('aiBackgroundEnrichment', false) as boolean),
     aiActiveBlockPreview: (_store.get('aiActiveBlockPreview', false) as boolean),
     aiPromptCachingEnabled: (_store.get('aiPromptCachingEnabled', true) as boolean),
     aiSpendSoftLimitUsd: (_store.get('aiSpendSoftLimitUsd', 10) as number),
+    backgroundAiEnabled: (_store.get('backgroundAiEnabled', true) as boolean),
+    aiFeatureDailyBudgetUsd: (_store.get('aiFeatureDailyBudgetUsd', 0.5) as number),
+    aiFeatureBudgetOverridesUsd: (_store.get('aiFeatureBudgetOverridesUsd', {}) as Record<string, number>),
     aiRedactFilePaths: (_store.get('aiRedactFilePaths', false) as boolean),
     aiRedactEmails: (_store.get('aiRedactEmails', false) as boolean),
     allowThirdPartyWebsiteIconFallback: (_store.get('allowThirdPartyWebsiteIconFallback', false) as boolean),
@@ -136,10 +165,10 @@ export function getSettings(): AppSettings {
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     weeklyBriefEnabled: (_store.get('weeklyBriefEnabled', true) as boolean),
     activityFreeNotificationText: (_store.get('activityFreeNotificationText', false) as boolean),
-    interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', false) as boolean),
+    interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', true) as boolean),
-    mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
+    mcpServerEnabled: (_store.get('mcpServerEnabled', true) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
     useRemoteAI: (_store.get('useRemoteAI', false) as boolean),
     trackingControlsEnabled: (_store.get('trackingControlsEnabled', false) as boolean),
@@ -151,7 +180,9 @@ export function getSettings(): AppSettings {
     billingInstallationId: (_store.get('billingInstallationId', '') as string),
     activityColorOverrides: sanitizeActivityColorOverrides(_store.get('activityColorOverrides', {})),
     dimLeisureBlocks: (_store.get('dimLeisureBlocks', true) as boolean),
-    connectedSourcesEnabled: (_store.get('connectedSourcesEnabled', true) as boolean),
+    // DEV-252: setSettings persisted this key but getSettings never read it
+    // back, so every enrichment toggle silently reverted on the next read.
+    enrichmentSources: (_store.get('enrichmentSources', {}) as Record<string, boolean>),
     // Screen-context experiment (DEV-197/DEV-198). Absent means not consented;
     // the experiment surface (screenContext/experiment.ts) is the only writer.
     screenContextExperimentEnabled: (_store.get('screenContextExperimentEnabled', false) as boolean),

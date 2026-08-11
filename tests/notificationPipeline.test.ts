@@ -44,10 +44,3 @@ test('handleDeliverySuccess / handleDeliveryFailure: do not throw', async () => 
   await assert.doesNotReject(handleDeliverySuccess())
   await assert.doesNotReject(handleDeliveryFailure())
 })
-
-test('initNotificationPermissions: does not throw', async () => {
-  const { initNotificationPermissions } =
-    await import('../src/main/services/notificationPermissions.ts')
-
-  assert.doesNotThrow(() => initNotificationPermissions())
-})

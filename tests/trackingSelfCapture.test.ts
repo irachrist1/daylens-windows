@@ -50,6 +50,24 @@ test('development tool sessions with Daylens project titles are excluded from ca
   db.close()
 })
 
+test('the dev build\'s raw Electron shell is excluded — Daylens still watching itself', () => {
+  assert.equal(trackedForegroundSessionExclusionReason({
+    bundleId: 'com.github.Electron',
+    appName: 'Electron',
+    windowTitle: 'Daylens',
+    rawAppName: 'Electron',
+  }), 'daylens_self_capture')
+})
+
+test('a real third-party Electron app (Slack) is NOT excluded', () => {
+  assert.equal(trackedForegroundSessionExclusionReason({
+    bundleId: 'com.tinyspeck.slackmacgap',
+    appName: 'Slack',
+    windowTitle: 'general — Acme',
+    rawAppName: 'Slack',
+  }), null)
+})
+
 test('an ordinary foreground session is not excluded', () => {
   const reason = trackedForegroundSessionExclusionReason({
     bundleId: 'com.todesktop.230313mzl4w4u92',

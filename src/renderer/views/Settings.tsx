@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
+import { ChevronDown, Search } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import type {
   AppCategory,
@@ -9,6 +10,7 @@ import type {
   AppUsageSummary,
   BillingAccessSnapshot,
   BillingUsageReport,
+  SpendGuardrailsReport,
   ClientRecord,
   TrackingDiagnosticsPayload,
   NotificationPermissionState,
@@ -18,16 +20,16 @@ import type {
   EnrichmentSourcesState,
 } from '@shared/types'
 import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
+import { formatJobFeature } from '@shared/aiFeatures'
 import { ipc } from '../lib/ipc'
 import { EntityMemorySection } from './settings/EntityMemorySection'
 import { SuppliedMemorySection } from './settings/SuppliedMemorySection'
 import { FileAccessSection } from './settings/FileAccessSection'
 import { ScreenContextSection } from './settings/ScreenContextSection'
 import { ContextPacketSection } from './settings/ContextPacketSection'
-import { ConnectionsSection } from './settings/ConnectionsSection'
 import { ExportSection } from './settings/ExportSection'
 import { track } from '../lib/analytics'
-import { setPendingChatSeed } from '../lib/aiSeed'
+import { MEMORY_CHAT_SEED_PROMPT, setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
 import type { DaylensSemanticSearchStatus, UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
@@ -35,16 +37,20 @@ import { formatUsdAmount } from '@shared/formatUsd'
 import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, type ChangelogEntry } from '@shared/changelog'
 import { ALL_ACTIVITY_CATEGORY_OPTIONS } from '@shared/activityCategories'
 import { claudeDesktopConfigDisplayPath } from '@shared/platformPaths'
+import { describeMcpConnection, type McpClientConfig } from '@shared/mcpConnection'
 import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
+import { useCompactLayout } from '../hooks/useCompactLayout'
 
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = ALL_ACTIVITY_CATEGORY_OPTIONS
 
 function Toggle({
   checked,
   onChange,
+  label,
 }: {
   checked: boolean
   onChange: (value: boolean) => void
+  label?: string
 }) {
   return (
     <button
@@ -52,26 +58,31 @@ function Toggle({
       onClick={() => onChange(!checked)}
       role="switch"
       aria-checked={checked}
+      aria-label={label}
       style={{
-        width: 42,
-        height: 24,
+        width: 44,
+        height: 26,
         borderRadius: 999,
-        border: 'none',
-        background: checked ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
+        border: `1px solid ${checked ? 'var(--color-primary-glow)' : 'var(--color-border-ghost)'}`,
+        background: checked ? 'var(--color-primary-glow)' : 'var(--color-surface-high)',
         position: 'relative',
         cursor: 'pointer',
         padding: 0,
+        flexShrink: 0,
+        transition: 'background 160ms, border-color 160ms',
       }}
     >
       <span style={{
         position: 'absolute',
         top: 3,
-        left: checked ? 22 : 3,
+        left: 3,
         width: 18,
         height: 18,
         borderRadius: '50%',
         background: '#fff',
-        transition: 'left 120ms',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.28)',
+        transform: checked ? 'translateX(18px)' : 'translateX(0)',
+        transition: 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1)',
       }} />
     </button>
   )
@@ -795,7 +806,7 @@ function CaptureHealthContent({
 
   const tone: 'success' | 'warning' | 'neutral' = titleStatus === 'healthy'
     ? 'success'
-    : titleStatus === 'missing'
+    : titleStatus === 'missing' || titleStatus === 'degraded'
       ? 'warning'
       : 'neutral'
   const captureHelperUnhealthy = captureHealth.captureHelperRunning === false
@@ -815,7 +826,9 @@ function CaptureHealthContent({
     : tone === 'warning'
       ? (permissions.platformNote
           ? permissions.platformNote
-          : 'Daylens sees which apps are open but not the titles inside them. Granting the screen/accessibility permission usually fixes this.')
+          : titleStatus === 'degraded'
+            ? `Fewer than half of recent samples carried a window title, so parts of your day are being captured blind.${platform === 'darwin' ? ' Re-granting the Accessibility permission usually fixes this.' : ''}`
+            : 'Daylens sees which apps are open but not the titles inside them. Granting the screen/accessibility permission usually fixes this.')
       : 'Daylens needs a few minutes of activity to confirm it\u2019s capturing properly.'
   const accent = tone === 'success'
     ? { border: '1px solid rgba(79, 219, 200, 0.24)', background: 'rgba(79, 219, 200, 0.08)' }
@@ -1077,7 +1090,7 @@ function TrackingControlsContent({
         <SettingsRow
           first
           title="Activity capture is off"
-          description="Allow Daylens to record foreground apps, window titles, active browser pages, and machine state on this computer. Private windows, screenshots, audio, keystrokes, message bodies, and file contents are never captured."
+          description="Let Daylens record which apps, window titles, and pages you use, and when your machine is active. It never captures private windows, screenshots, audio, keystrokes, message contents, or file contents."
           control={(
             <button
               type="button"
@@ -1100,16 +1113,16 @@ function TrackingControlsContent({
       <SettingsRow
         first={consentCurrent}
         title="Pause tracking"
-        description="Temporarily stop recording all activity. Stays paused until you turn it back on, even after a restart."
+        description="Stop recording until you turn it back on, even across restarts."
         control={<Toggle checked={settings.trackingPaused ?? false} onChange={(value) => void persist({ trackingPaused: value })} />}
       />
       <SettingsRow
         title="Private / incognito windows"
-        description="Never recorded. Daylens keeps nothing from a browser's private or incognito window — no URL, page title, or session. This protection is always on and cannot be turned off."
+        description="Never recorded. This protection is always on and cannot be turned off."
       />
       <SettingsRow
         title="Limit what's tracked"
-        description="Off by default — Daylens records everything. Turn this on to keep specific apps and sites out of your history and AI answers."
+        description="Keep specific apps and sites out of your history and AI answers. Excluding one also deletes its activity history."
         control={<Toggle checked={enabled} onChange={(value) => void persist({ trackingControlsEnabled: value })} />}
       />
       {enabled && (
@@ -1144,7 +1157,7 @@ function TrackingControlsContent({
 type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory' | 'entities' | 'fileAccess'
-  | 'labels' | 'clients' | 'connections' | 'privacy' | 'screenContext' | 'export'
+  | 'labels' | 'clients' | 'privacy' | 'screenContext' | 'export'
   | 'mcp' | 'enrichment' | 'capture' | 'updates' | 'help'
 
 interface SectionDef { id: SectionId; label: string; keywords: string }
@@ -1166,7 +1179,9 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
       { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you what the ai saw context packet disclosure' },
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
-      { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed' },
+      { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed granola meeting notes terminal commands capability' },
+      { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
+      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
     ],
   },
   {
@@ -1174,19 +1189,16 @@ const SECTION_GROUPS: SectionGroup[] = [
     items: [
       { id: 'labels', label: 'Labels', keywords: 'category app override propagate zen browsing' },
       { id: 'clients', label: 'Clients', keywords: 'project attribution company work' },
-      { id: 'connections', label: 'Connections', keywords: 'connector connected sources external google calendar outlook github linear granola ics import sync disconnect scopes' },
       { id: 'privacy', label: 'Privacy & tracking', keywords: 'pause exclude excluded incognito private analytics local data' },
+      { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples diagnostics' },
       { id: 'screenContext', label: 'Screen context', keywords: 'experiment screenshot screen capture sample frame ocr consent opt-in backlog quarantine retry delete wipe' },
       { id: 'export', label: 'Export your data', keywords: 'export download backup take your data portability history json jsonl csv manifest verify complete local' },
     ],
   },
   {
-    label: 'System',
+    label: 'Application',
     items: [
-      { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
-      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
-      { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples' },
-      { id: 'updates', label: 'Updates', keywords: 'version install download release' },
+      { id: 'updates', label: 'Updates', keywords: 'version install download release changelog' },
       { id: 'help', label: 'Help & support', keywords: 'chat support contact message question bug feedback talk intercom' },
     ],
   },
@@ -1212,7 +1224,6 @@ function SectionIcon({ id }: { id: SectionId }) {
     fileAccess: <><path d="M3 2.6h6l3 3v7.8H3Z" /><path d="M9 2.6v3h3" /><rect x="6" y="8" width="4" height="3.2" rx="0.8" /><path d="M7 8V7a1 1 0 0 1 2 0v1" /></>,
     labels: <><path d="M2.6 7.4 7.2 2.8h4.2v4.2L6.8 11.6Z" /><circle cx="9.4" cy="5.6" r="0.85" fill="currentColor" stroke="none" /></>,
     clients: <><rect x="2.3" y="5" width="11.4" height="7.6" rx="1.2" /><path d="M6 5V3.6h4V5" /></>,
-    connections: <><path d="M6.8 9.2 9.2 6.8" /><path d="M7.6 4.4 9 3a2.4 2.4 0 0 1 3.4 3.4l-1.4 1.4" /><path d="M8.4 11.6 7 13a2.4 2.4 0 0 1-3.4-3.4L5 8.2" /></>,
     privacy: <path d="M8 1.9 13 3.7v4.1c0 3-2.2 5-5 6.3-2.8-1.3-5-3.3-5-6.3V3.7Z" />,
     screenContext: <><rect x="2" y="3" width="12" height="8.4" rx="1.4" /><path d="M5.6 13.4h4.8" /><circle cx="8" cy="7.2" r="1.7" /></>,
     export: <><path d="M8 9.8V2.8" /><path d="M5.2 5.4 8 2.6l2.8 2.8" /><path d="M3 9.6v3.2h10V9.6" /></>,
@@ -1284,6 +1295,7 @@ function SettingsRail({
   search: string
   onSearch: (value: string) => void
 }) {
+  const [searchFocused, setSearchFocused] = useState(false)
   const query = search.trim().toLowerCase()
   const matches = (item: SectionDef) =>
     query === ''
@@ -1299,7 +1311,7 @@ function SettingsRail({
         width: 232,
         flexShrink: 0,
         height: '100%',
-        overflowY: 'auto',
+        overflow: 'hidden',
         boxSizing: 'border-box',
         borderRight: '1px solid var(--color-border-ghost)',
         background: 'var(--color-sidebar-bg)',
@@ -1309,26 +1321,45 @@ function SettingsRail({
         gap: 16,
       }}
     >
-      <input
-        type="text"
-        value={search}
-        onChange={(event) => onSearch(event.target.value)}
-        placeholder="Search settings…"
-        aria-label="Search settings"
+      <div
         style={{
           width: '100%',
-          height: 32,
-          padding: '0 10px',
-          borderRadius: 8,
-          border: '1px solid var(--color-border-ghost)',
-          background: 'var(--color-surface-high)',
-          color: 'var(--color-text-primary)',
-          fontSize: 12.5,
-          outline: 'none',
+          height: 42,
+          padding: '0 13px',
+          borderRadius: 10,
+          border: `1px solid ${searchFocused ? 'var(--color-primary-glow)' : 'var(--color-border-ghost)'}`,
+          background: 'var(--color-surface)',
           boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          flexShrink: 0,
+          gap: 10,
+          boxShadow: searchFocused ? '0 0 0 3px var(--color-accent-dim)' : 'none',
+          transition: 'border-color 140ms, box-shadow 140ms',
         }}
-      />
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      >
+        <Search size={17} strokeWidth={1.9} color={searchFocused ? 'var(--color-primary-glow)' : 'var(--color-text-tertiary)'} aria-hidden="true" />
+        <input
+          type="text"
+          value={search}
+          onChange={(event) => onSearch(event.target.value)}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+          placeholder="Search settings…"
+          aria-label="Search settings"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            border: 'none',
+            padding: 0,
+            background: 'transparent',
+            color: 'var(--color-text-primary)',
+            fontSize: 13.5,
+            outline: 'none',
+          }}
+        />
+      </div>
+      <nav className="settings-rail-nav" style={{ display: 'flex', flexDirection: 'column', gap: 20, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {groups.length === 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', padding: '4px 2px', lineHeight: 1.5 }}>
             No settings match “{search.trim()}”.
@@ -1562,32 +1593,9 @@ function BillingPage({
   )
 }
 
-// Roll the raw `job_type` of each AI call up into a user-facing feature so spend
-// is attributed to things people recognise ("Timeline labeling", "AI chat")
-// rather than internal job names. Used by both the chart's "Group: Feature"
-// view and the per-feature breakdown below the chart.
-const JOB_FEATURE_GROUPS: Record<string, string> = {
-  block_label_preview: 'Timeline labeling',
-  block_label_finalize: 'Timeline labeling',
-  block_cleanup_relabel: 'Timeline labeling',
-  attribution_assist: 'Timeline labeling',
-  day_summary: 'Morning brief',
-  wrapped_narrative: 'Evening wrap-up',
-  wrapped_period_narrative: 'Weekly & monthly wrap',
-  week_review: 'Week review',
-  app_narrative: 'App insights',
-  chat_answer: 'AI chat',
-  chat_followup_suggestions: 'Suggestions',
-  search_intent: 'Search',
-  report_generation: 'Reports',
-  memory_write: 'Memory writes',
-  weekly_brief: 'Weekly brief',
-}
-
-function formatJobFeature(feature: string | null | undefined) {
-  if (!feature) return 'Other'
-  return JOB_FEATURE_GROUPS[feature] ?? feature.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
+// The job_type → user-facing feature rollup lives in shared/aiFeatures.ts so
+// the per-feature spend budgets enforced in the main process (DEV-228) use
+// exactly the feature names this screen displays.
 
 // Local-calendar day key (YYYY-MM-DD). Must match the backend's bucketing so a
 // call's day on the chart axis lines up with the day it was aggregated under.
@@ -1622,6 +1630,10 @@ function UsagePage() {
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10))
   const [report, setReport] = useState<BillingUsageReport | null>(null)
   const [access, setAccess] = useState<BillingAccessSnapshot | null>(null)
+  const [guardrails, setGuardrails] = useState<SpendGuardrailsReport | null>(null)
+  const [backgroundAiExpanded, setBackgroundAiExpanded] = useState(false)
+  const [featureSpendExpanded, setFeatureSpendExpanded] = useState(false)
+  const [aiCostTableExpanded, setAiCostTableExpanded] = useState(false)
   const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -1653,6 +1665,30 @@ function UsagePage() {
       .catch(() => { /* access is optional context for summary split */ })
     return () => { cancelled = true }
   }, [])
+
+  const refreshGuardrails = () => {
+    void ipc.billing.getSpendGuardrails()
+      .then(setGuardrails)
+      .catch(() => { /* the card simply stays hidden */ })
+  }
+  useEffect(refreshGuardrails, [])
+
+  // Kill switch + budgets persist through the ordinary settings store, then
+  // the card re-reads the authoritative report from the main process.
+  const persistGuardrailSetting = async (partial: Partial<AppSettings>) => {
+    try {
+      await ipc.settings.set(partial)
+    } finally {
+      refreshGuardrails()
+    }
+  }
+
+  const setFeatureBudget = async (feature: string, budgetUsd: number) => {
+    const current = await ipc.settings.get()
+    const overrides = { ...(current.aiFeatureBudgetOverridesUsd ?? {}) }
+    overrides[feature] = budgetUsd
+    await persistGuardrailSetting({ aiFeatureBudgetOverridesUsd: overrides })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -1905,11 +1941,11 @@ function UsagePage() {
           {spendSourceNote}{spendSourceNote && refreshing ? ' ' : ''}{refreshing ? 'Updating…' : ''}
         </div>
       )}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         {summaryCards.map(([label, value]) => (
-          <div key={label} style={{ padding: '18px 16px', border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)' }}>
+          <div key={label} style={{ minWidth: 0, padding: '18px 16px', border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)' }}>
             <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)' }}>{showCardLoading ? '…' : value}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)', overflowWrap: 'anywhere' }}>{showCardLoading ? '…' : value}</div>
           </div>
         ))}
       </div>
@@ -1920,12 +1956,12 @@ function UsagePage() {
             <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Your Usage</div>
             <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>Your usage {chart?.granularity === 'hour' ? 'per hour today' : 'per day across this range'}</div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={inputStyle(170)}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: '100%' }}>
+            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={{ ...inputStyle(170), maxWidth: '100%' }}>
               <option value="model">Group: Model</option>
               <option value="type">Group: Feature</option>
             </select>
-            <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={inputStyle(125)}>
+            <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={{ ...inputStyle(125), maxWidth: '100%' }}>
               <option value="spend">Spend</option>
               <option value="tokens">Tokens</option>
             </select>
@@ -2068,15 +2104,110 @@ function UsagePage() {
         </div>
       </div>
 
-      {featureBreakdown && (
-        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Spend by feature</div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-              Where your AI usage went across this range — cost and tokens per feature.
+      {guardrails && (
+        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px' }}>
+            <button
+              type="button"
+              aria-expanded={backgroundAiExpanded}
+              onClick={() => setBackgroundAiExpanded((expanded) => !expanded)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, padding: 0, border: 'none', background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+            >
+              <ChevronDown
+                size={16}
+                strokeWidth={1.8}
+                aria-hidden="true"
+                style={{ flexShrink: 0, color: 'var(--color-text-tertiary)', transform: backgroundAiExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}
+              />
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: 14, fontWeight: 620, color: 'var(--color-text-primary)' }}>Background AI</span>
+                <span style={{ display: 'block', marginTop: 2, fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {guardrails.backgroundAiEnabled ? `${guardrails.features.length} feature budgets` : 'Paused'}
+                </span>
+              </span>
+            </button>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: guardrails.backgroundAiEnabled ? 'var(--color-text-secondary)' : 'var(--color-text-tertiary)' }}>
+                {guardrails.backgroundAiEnabled ? 'On' : 'Off'}
+              </span>
+              <Toggle
+                checked={guardrails.backgroundAiEnabled}
+                label="Background AI"
+                onChange={(value) => void persistGuardrailSetting({ backgroundAiEnabled: value })}
+              />
             </div>
           </div>
-          <div style={{ display: 'grid', gap: 10 }}>
+          {backgroundAiExpanded && (
+            <div style={{ borderTop: '1px solid var(--color-border-ghost)', padding: '14px 16px 16px' }}>
+              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.55, marginBottom: 10 }}>
+                Each feature pauses for the day when it reaches its budget. Turning Background AI off stops these automatic tasks, while things you ask for still work.
+              </div>
+              <div style={{ display: 'grid' }}>
+                {guardrails.features.map((item, index) => (
+                  <div key={item.feature} style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: index === 0 ? 'none' : '1px solid var(--color-border-ghost)', fontSize: 12 }}>
+                    <span style={{ color: 'var(--color-text-primary)', fontWeight: 540, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.feature}
+                      {item.exhausted && (
+                        <span style={{ marginLeft: 8, color: 'var(--color-danger, #d4494c)', fontSize: 11.5, fontWeight: 600 }}>
+                          Background paused
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ display: 'inline-flex', gap: 7, alignItems: 'center', flexShrink: 0 }}>
+                      <span style={{ color: item.exhausted ? 'var(--color-danger, #d4494c)' : 'var(--color-text-tertiary)' }}>
+                        ${item.spentTodayUsd.toFixed(2)} today
+                      </span>
+                      <span style={{ color: 'var(--color-text-tertiary)' }}>of</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.25}
+                        defaultValue={item.budgetUsd}
+                        onBlur={(event) => {
+                          // An emptied field is an abandoned edit, not a $0 budget.
+                          if (event.target.value.trim() === '') {
+                            event.target.value = String(item.budgetUsd)
+                            return
+                          }
+                          const next = Math.max(0, Number(event.target.value))
+                          if (Number.isFinite(next) && next !== item.budgetUsd) void setFeatureBudget(item.feature, next)
+                        }}
+                        style={{ width: 64, height: 28, boxSizing: 'border-box', padding: '0 8px', borderRadius: 7, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12 }}
+                        aria-label={`${item.feature} daily budget in dollars`}
+                      />
+                      <span style={{ color: 'var(--color-text-tertiary)' }}>/day</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {featureBreakdown && (
+        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)', overflow: 'hidden' }}>
+          <button
+            type="button"
+            aria-expanded={featureSpendExpanded}
+            onClick={() => setFeatureSpendExpanded((expanded) => !expanded)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '14px 16px', border: 'none', background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+          >
+            <ChevronDown
+              size={16}
+              strokeWidth={1.8}
+              aria-hidden="true"
+              style={{ flexShrink: 0, color: 'var(--color-text-tertiary)', transform: featureSpendExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}
+            />
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: 14, fontWeight: 620, color: 'var(--color-text-primary)' }}>Spend by feature</span>
+              <span style={{ display: 'block', marginTop: 2, fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                {featureBreakdown.items.length} features across this range
+              </span>
+            </span>
+          </button>
+          {featureSpendExpanded && (
+          <div style={{ display: 'grid', gap: 10, borderTop: '1px solid var(--color-border-ghost)', padding: '14px 16px 16px' }}>
             {featureBreakdown.items.map((item, index) => {
               const share = featureBreakdown.useSpend
                 ? (featureBreakdown.totalCost > 0 ? item.costUsd / featureBreakdown.totalCost : 0)
@@ -2107,11 +2238,33 @@ function UsagePage() {
               )
             })}
           </div>
+          )}
         </div>
       )}
 
-      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820, fontSize: 12 }}>
+      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)', overflow: 'hidden' }}>
+        <button
+          type="button"
+          aria-expanded={aiCostTableExpanded}
+          onClick={() => setAiCostTableExpanded((expanded) => !expanded)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '14px 16px', border: 'none', background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+        >
+          <ChevronDown
+            size={16}
+            strokeWidth={1.8}
+            aria-hidden="true"
+            style={{ flexShrink: 0, color: 'var(--color-text-tertiary)', transform: aiCostTableExpanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 160ms' }}
+          />
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 14, fontWeight: 620, color: 'var(--color-text-primary)' }}>AI cost details</span>
+            <span style={{ display: 'block', marginTop: 2, fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+              {(report?.rows.length ?? 0).toLocaleString()} calls in this range
+            </span>
+          </span>
+        </button>
+        {aiCostTableExpanded && (
+        <div style={{ borderTop: '1px solid var(--color-border-ghost)', overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820, fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--color-surface-low)', color: 'var(--color-text-tertiary)', textAlign: 'left' }}>
               {['Date', 'Feature', 'Type', 'Model', 'Tokens', 'Cost'].map((heading) => <th key={heading} style={{ padding: '11px 14px', fontWeight: 620 }}>{heading}</th>)}
@@ -2120,7 +2273,10 @@ function UsagePage() {
           <tbody>
             {(report?.rows ?? []).slice(0, 200).map((row) => (
               <tr key={row.id} style={{ borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-secondary)' }}>
-                <td style={{ padding: '11px 14px' }}>{new Date(row.occurredAt).toLocaleString()}</td>
+                {/* DEV-249: the timestamp must never wrap or truncate — nowrap
+                    forces the column to its content width and the wrapper's
+                    horizontal scroll carries the overflow. */}
+                <td style={{ padding: '11px 14px', whiteSpace: 'nowrap' }}>{new Date(row.occurredAt).toLocaleString()}</td>
                 <td style={{ padding: '11px 14px' }}>{formatJobFeature(row.feature)}</td>
                 <td style={{ padding: '11px 14px' }}>{formatUsageType(row.type)}</td>
                 <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
@@ -2129,19 +2285,22 @@ function UsagePage() {
               </tr>
             ))}
           </tbody>
-        </table>
-        {(report?.rows.length ?? 0) > 200 && (
-          <div style={{ padding: '10px 14px', borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-tertiary)', fontSize: 11.5 }}>
-            Showing the latest 200 calls. Export CSV includes the full selected range.
-          </div>
+          </table>
+          {(report?.rows.length ?? 0) > 200 && (
+            <div style={{ padding: '10px 14px', borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-tertiary)', fontSize: 11.5 }}>
+              Showing the latest 200 calls. Export CSV includes the full selected range.
+            </div>
+          )}
+          {!showCardLoading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
+        </div>
         )}
-        {!showCardLoading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
       </div>
     </SectionPage>
   )
 }
 
 export default function Settings({ initialSettings = null }: { initialSettings?: AppSettings | null } = {}) {
+  const isCompact = useCompactLayout()
   const [settings, setSettings] = useState<AppSettings | null>(initialSettings)
   // Which section the content pane shows. Honors a ?section= deep link on first
   // mount (so other surfaces can jump straight to e.g. Billing), then is local.
@@ -2151,6 +2310,13 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     const requested = searchParams.get('section')
     return isSectionId(requested) ? requested : 'general'
   })
+  // A deep link can also arrive while Settings is already mounted (a
+  // notification click, the capture-blind banner). Follow it — but only when
+  // the param actually changes, so ordinary in-page section clicks stay local.
+  useEffect(() => {
+    const requested = searchParams.get('section')
+    if (isSectionId(requested)) setActiveSection(requested)
+  }, [searchParams])
   const [sectionSearch, setSectionSearch] = useState('')
   const [resetAndUninstallBusy, setResetAndUninstallBusy] = useState(false)
   const [navOrigin, setNavOrigin] = useState<SectionId | null>(null)
@@ -2190,7 +2356,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [memoryAudit, setMemoryAudit] = useState<MemoryAuditEntry[] | null>(null)
   // DEV-180: local semantic-search status shown in the Memory section.
   const [semanticStatus, setSemanticStatus] = useState<DaylensSemanticSearchStatus | null>(null)
-  const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
+  const [mcpConfig, setMcpConfig] = useState<McpClientConfig | null>(null)
+  // Distinguishes "not asked yet" from "asked and got nothing", so the section
+  // can tell a person their install cannot run the server instead of showing an
+  // empty panel under an enabled toggle.
+  const [mcpFetch, setMcpFetch] = useState<'idle' | 'loading' | 'settled'>('idle')
+  const [mcpConfigError, setMcpConfigError] = useState<string | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [mcpAdvancedOpen, setMcpAdvancedOpen] = useState(false)
   const [enrichmentSources, setEnrichmentSources] = useState<EnrichmentSourcesState | null>(null)
@@ -2343,10 +2514,25 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     void ipc.settings.hasApiKey(selectedAiProvider).then((access) => setHasApiKey(access))
   }, [activeSection, cliTools, selectedAiProvider])
 
+  const loadMcpConfig = useCallback(async (): Promise<void> => {
+    setMcpFetch('loading')
+    setMcpConfigError(null)
+    try {
+      setMcpConfig(await ipc.mcp.getConfig())
+    } catch (error) {
+      // A failed lookup is not the same as "this install cannot run the server",
+      // and neither may be shown as a ready-to-copy configuration.
+      setMcpConfig(null)
+      setMcpConfigError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setMcpFetch('settled')
+    }
+  }, [])
+
   useEffect(() => {
     if (activeSection !== 'mcp' || !settings?.mcpServerEnabled) return
-    void ipc.mcp.getConfig().then((cfg) => setMcpConfig(cfg))
-  }, [activeSection, settings?.mcpServerEnabled])
+    void loadMcpConfig()
+  }, [activeSection, loadMcpConfig, settings?.mcpServerEnabled])
 
   useEffect(() => {
     if (activeSection !== 'enrichment') return
@@ -2381,8 +2567,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       // value must still win in the controlled UI.
       setSettings((current) => current ? { ...current, ...partial } : current)
       if ('mcpServerEnabled' in partial && partial.mcpServerEnabled) {
-        const cfg = await ipc.mcp.getConfig()
-        setMcpConfig(cfg)
+        // The same loader the section entry uses, so the just-toggled state and
+        // the reopened-section state cannot diverge.
+        await loadMcpConfig()
       }
       return true
     } catch (error) {
@@ -2859,6 +3046,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   }
 
   const linuxDesktop = trackingDiagnostics?.linuxDesktop ?? null
+  const mcpConnection = describeMcpConnection({
+    enabled: settings.mcpServerEnabled ?? false,
+    fetch: mcpFetch,
+    config: mcpConfig,
+    error: mcpConfigError,
+  })
   const selectSection = (id: SectionId) => { setNavOrigin(null); setActiveSection(id) }
   const crossLinkToAI = (from: SectionId) => { setNavOrigin(from); setActiveSection('ai') }
   let content: ReactNode = null
@@ -2966,6 +3159,14 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             onConnected={() => { void refreshAIAccess() }}
             onModelChange={() => { void refreshAIAccess() }}
           />
+          <div style={{ display: 'grid', gap: 0, marginTop: 22 }}>
+            <SettingsRow
+              first
+              title="Interpretation agent"
+              description="Day analysis may pull extra context (titles, calendar, git) before naming low-confidence blocks."
+              control={<Toggle checked={settings.interpretationAgentEnabled ?? false} onChange={(value) => void persist({ interpretationAgentEnabled: value })} />}
+            />
+          </div>
         </SectionPage>
       )
       break
@@ -2977,7 +3178,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <button
                 type="button"
                 onClick={() => {
-                  setPendingChatSeed("I want to talk about my work patterns and what you know about me — let's start there.")
+                  setPendingChatSeed(MEMORY_CHAT_SEED_PROMPT)
                   navigate('/ai')
                 }}
                 style={{ ...inlineButtonStyle, background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: 'none' }}
@@ -3400,9 +3601,23 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Agent file access"
-          description="Control which files the AI may read. Observed activity is always on; contents need an explicit grant."
+          description="Choose what the AI can reach on this machine. It always sees which files were open; file contents, meeting notes, and commands each need your say-so."
           maxWidth={760}
         >
+          <div style={{ marginBottom: 22 }}>
+            <GroupLabel>Capabilities</GroupLabel>
+            <SettingsRow
+              first
+              title="Granola meeting notes"
+              description="When on, the AI can read the meeting notes stored in Granola's local cache on this machine and quote them in answers."
+              control={<Toggle checked={settings.granolaAccessEnabled !== false} onChange={(value) => void persist({ granolaAccessEnabled: value })} />}
+            />
+            <SettingsRow
+              title="Terminal access"
+              description="When on, the AI can run read-only commands from a fixed allowlist (like git log) and see their output. Off by default; the first use each session still asks you."
+              control={<Toggle checked={settings.terminalAccessEnabled ?? false} onChange={(value) => void persist({ terminalAccessEnabled: value })} />}
+            />
+          </div>
           <FileAccessSection />
         </SectionPage>
       )
@@ -3411,7 +3626,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage
           title="Screen context"
-          description="An opt-in experiment: fleeting screen snapshots, read once for useful details and then destroyed — everything stays on this machine, and you can leave and wipe it all at any time."
+          description="An opt-in experiment. Screen snapshots are read once for useful details, then destroyed. Everything stays on this machine."
           maxWidth={760}
         >
           <ScreenContextSection />
@@ -3426,17 +3641,6 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           maxWidth={760}
         >
           <ExportSection />
-        </SectionPage>
-      )
-      break
-    case 'connections':
-      content = (
-        <SectionPage
-          title="Connections"
-          description="External sources that will add what this machine can't see — meetings, commits, issues. Every connection is read-only, consent-gated, and fully disconnectable; each becomes connectable here as its adapter ships."
-          maxWidth={760}
-        >
-          <ConnectionsSection />
         </SectionPage>
       )
       break
@@ -3726,7 +3930,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'mcp':
       content = (
-        <SectionPage title="MCP server" description="Let other AI apps — Claude Desktop, Cursor, Claude Code — read your Daylens activity so you can ask them about your work. Off by default, and everything stays on your machine.">
+        <SectionPage title="MCP server" description="Let other AI apps — Claude Desktop, Cursor, Claude Code — read your Daylens activity so you can ask them about your work. On by default, and everything stays on your machine.">
           <div>
             <SettingsRow
               first
@@ -3739,10 +3943,46 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 />
               }
             />
-            {(settings.mcpServerEnabled ?? false) && mcpConfig && (
+            {mcpConnection.kind === 'off' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)', fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                Access is off, so Daylens is not running the MCP server.
+              </div>
+            )}
+            {mcpConnection.kind === 'checking' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)', fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
+                Checking whether this install can run the Daylens MCP server…
+              </div>
+            )}
+            {mcpConnection.kind === 'unavailable' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-primary)', lineHeight: 1.6 }}>
+                  Connection unavailable
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginTop: 4 }}>
+                  {mcpConnection.reason}
+                </div>
+              </div>
+            )}
+            {mcpConnection.kind === 'failed' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-primary)', lineHeight: 1.6 }}>
+                  Daylens could not check the connection
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginTop: 4 }}>
+                  {mcpConnection.reason}
+                </div>
+                <button type="button" style={{ ...inlineButtonStyle, marginTop: 10 }} onClick={() => void loadMcpConfig()}>
+                  Try again
+                </button>
+              </div>
+            )}
+            {mcpConnection.kind === 'ready' && (
               <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                  Daylens is ready to connect. In your AI app, add Daylens as an MCP server using the configuration below.
+                  {mcpConnection.config.running
+                    ? 'Daylens is ready to connect. In your AI app, add Daylens as an MCP server using the configuration below.'
+                    : 'Access is on and the configuration below is ready. Daylens starts the server itself a few seconds after launch; '
+                      + 'your AI app can start it directly from this configuration at any time.'}
                 </div>
                 <button
                   type="button"
@@ -3775,9 +4015,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                     {JSON.stringify({
                       mcpServers: {
                         daylens: {
-                          command: mcpConfig.command,
-                          args: mcpConfig.args,
-                          env: mcpConfig.env,
+                          command: mcpConnection.config.command,
+                          args: mcpConnection.config.args,
+                          env: mcpConnection.config.env,
                         },
                       },
                     }, null, 2)}
@@ -3788,9 +4028,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                       const snippet = JSON.stringify({
                         mcpServers: {
                           daylens: {
-                            command: mcpConfig.command,
-                            args: mcpConfig.args,
-                            env: mcpConfig.env,
+                            command: mcpConnection.config.command,
+                            args: mcpConnection.config.args,
+                            env: mcpConnection.config.env,
                           },
                         },
                       }, null, 2)
@@ -3817,12 +4057,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   </button>
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 8, lineHeight: 1.55 }}>
-                  Reads <code style={{ fontSize: 11 }}>{mcpConfig.dbPath}</code> — your real local database.
+                  Reads <code style={{ fontSize: 11 }}>{mcpConnection.config.dbPath}</code> — your real local database.
                 </div>
-                {!mcpConfig.isPackaged && (
+                {!mcpConnection.config.isPackaged && (
                   <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>
                     Dev build — the paths above point at your source checkout. A packaged install runs the bundled
-                    server from inside the app and ships with this server off by default.
+                    server from inside the app and ships with this server on by default.
                   </div>
                 )}
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>
@@ -3909,7 +4149,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'privacy':
       content = (
-        <SectionPage title="Privacy & tracking" description="Decide what Daylens sees. Your history stays on this machine, and exclusions are honored everywhere — including data already captured before you excluded them.">
+        <SectionPage title="Privacy & tracking" description="Decide what Daylens records. Everything stays on this machine.">
           <div style={{ display: 'grid', gap: 24 }}>
             <div>
               <GroupLabel>Preferences</GroupLabel>
@@ -3924,7 +4164,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <SettingsRow
                 first
                 title="Analytics"
-                description="Anonymous product telemetry — event names and counts only. No titles, URLs, or file paths ever leave this machine."
+                description="Anonymous event counts only. No titles, URLs, or file paths ever leave this machine."
                 control={<StatusPill label="Anonymous" />}
               />
               <SettingsRow
@@ -3934,7 +4174,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               />
               <SettingsRow
                 title="Reset and uninstall"
-                description="Remove Daylens from this computer: the launch-at-login entry is cleared, and you choose whether your local data is deleted or kept."
+                description="Remove Daylens from this computer. You choose whether your local data is deleted or kept."
                 control={(
                   <button
                     type="button"
@@ -3970,7 +4210,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         onSearch={setSectionSearch}
       />
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
-        <div key={activeSection} style={{ padding: '34px 44px 72px' }}>
+        <div key={activeSection} style={{ padding: isCompact ? '28px 24px 56px' : '34px 44px 72px' }}>
           {settingsWriteError && (
             <div role="alert" style={{ ...infoPanelStyle, color: '#f87171', marginTop: 0, marginBottom: 16 }}>
               {settingsWriteError}

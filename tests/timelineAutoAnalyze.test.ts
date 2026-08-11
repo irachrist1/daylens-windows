@@ -76,6 +76,9 @@ test('the automatic analyze pipeline merges same-intent neighbours without a man
 
   assert.equal(result.merged, true, 'the regroup must have merged at least one group')
   assert.equal(currentBlockCount(db), 1, 'the over-split day must collapse to one merged block')
+  // DEV-231: the run reports what it actually did so the UI can say
+  // "merged N blocks" instead of a fixed success message.
+  assert.equal(result.mergedCount, before.blocks.length - 1, 'mergedCount is the number of blocks absorbed by the merge')
 
   // The merge rode the durable boundary-correction path (invariant 8) — it is a
   // persisted correction, not a one-shot relabel, so it survives every rebuild.

@@ -1,0 +1,54 @@
+# Machine-reconstructed: no journal entry. Ground truth model: the day is what
+# the HUMAN did at the keyboard. Here git and foreground mostly agree — the
+# TARS commit window is Ghostty-terminal-heavy (Claude Code-assisted, hands at
+# the terminal) — but git missed the morning ALU coursework and the evening is
+# leisure, not open. Anchored on raw app/domain facts + git authorship.
+date: "2026-06-10"
+confidence: machine
+sources:
+  - "git: tars (15 commits, 10:39-19:27, incl. npm publish v0.1.4, author Christian Tonny)"
+  - "git: daylens + portfolio + second-brain (three problem-first README rewrites 16:48/16:49/16:52)"
+  - "foreground: Ghostty 3.5h dominating 10:26-17:00, matching the tars commit stream"
+  - "browser: ALU malaria formative-2 work 09:37-10:16 (Google Docs reports, Colab notebooks, Canvas, Meet 'submit report formative 2' 09:58)"
+  - "domains: youtube.com 2.4h (mostly evening), netflix.com 21min, docs.google.com 19min, rw-andersen.odoo.com 16min"
+summary: >
+  Mostly a TARS day, with real bookends git can't see. The morning starts
+  with browsing and a short ALU group-work sprint around 09:37-10:16: the
+  malaria-diagnosis CNN reports in Google Docs, the group's Colab notebooks,
+  Canvas, and a "submit report formative 2" Google Meet at 09:58. From 10:26
+  the terminal takes over — Ghostty nearly continuously until about 17:00 —
+  while 15 TARS commits land (index-centered architecture docs, the
+  chief-of-staff pivot, the npx installer, npm publish by 14:49, v0.1.4 with
+  the viral README by 16:30, then the landing page 18:17-18:35 and a
+  front-end-markdown skill at 19:27). In the same minutes, 16:48-16:52,
+  daylens, portfolio and second-brain all get problem-first README rewrites —
+  a batched sweep. A Teams call sits at 17:18 (~11 min) and an Odoo laptop
+  quotation at 12:36. From about 18:00 the screen is mostly YouTube, then
+  Netflix around 22:00, with scattered Codex/Cursor/Feedback Assistant
+  touches.
+primaryWork:
+  - name: TARS (chief-of-staff skill, npm publish, landing page)
+    aliases: [tars, chief-of-staff, chief of staff]
+secondary:
+  - name: ALU malaria formative-2 group report (Docs, Colab, Meet)
+    aliases: [malaria, formative, alu, colab, group report]
+  - name: README rewrites (daylens + portfolio + second-brain)
+    aliases: [readme]
+bannedAsWork:
+  - "cursor agents"
+  - "new chat"
+shape:
+  - { from: "08:12", until: "09:30", desc: "warm-up browsing (Pioneer AI page, X)" }
+  - { from: "09:37", until: "10:16", desc: "ALU malaria formative 2: report docs, Colab notebooks, Canvas, 'submit report formative 2' Meet at 09:58" }
+  - { from: "10:26", until: "17:00", desc: "TARS in the terminal (Ghostty, Claude Code-assisted): strategy docs, chief-of-staff skill, npx installer, npm publish, v0.1.4 viral README; README sweep across daylens/portfolio/second-brain 16:48-16:52; Odoo quotation glance 12:36; midday YouTube/documentary break ~12:49-14:10" }
+  - { from: "17:18", until: "17:30", desc: "Microsoft Teams call (~11 min)" }
+  - { from: "18:00", until: "19:30", desc: "YouTube-heavy with the TARS landing page and front-end-markdown commits landing 18:17-19:27" }
+  - { from: "19:30", desc: "evening leisure: YouTube, Netflix ~22:00, scattered Cursor/Feedback Assistant/System Settings touches" }
+notes: >
+  Machine-reconstructed; no journal exists for this day. The TARS work reads
+  as genuinely terminal-hands-on (Ghostty foreground tracks the commit
+  times), though Claude Code sessions inside the terminal did the typing for
+  parts of it. The three simultaneous README rewrites at 16:48-16:52 across
+  different repos are one batched agent action, not three separate efforts.
+  Capture is continuous 08:12-22:46. The evening is verifiable leisure
+  (YouTube titles, Netflix) — do not describe it as unaccounted or as work.

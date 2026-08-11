@@ -34,16 +34,15 @@ import type {
   AIProviderMode,
   BrowserLinkResult,
   BillingAccessSnapshot,
-  ConnectorId,
-  ConnectorListing,
-  ConnectorSyncSummary,
   HistoryExportPlan,
   ScreenContextBacklogFrame,
   ScreenContextStatus,
   HistoryExportProgress,
   HistoryExportRunResult,
   HistoryExportVerification,
+  WrapSlidesExportResult,
   BillingUsageReport,
+  SpendGuardrailsReport,
   IntercomIdentity,
   CategoryOverrideEffect,
   ClientRecord,
@@ -53,6 +52,10 @@ import type {
   BreakRecommendation,
   CalendarRangeDay,
   DayTimelinePayload,
+  RebuildTimelineDayResult,
+  TimelineAnalyzeProgress,
+  TimelineClarification,
+  TimelineClarificationAnswer,
   DistractionCostPayload,
   FocusReflectionSavePayload,
   FocusSession,
@@ -72,6 +75,7 @@ import type {
   PurgeTrackedEvidencePayload,
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
+  CaptureVerificationState,
   TrackingPermissionDetails,
   TrackingPermissionState,
   NotificationPermissionState,
@@ -117,6 +121,16 @@ export interface SearchOptions {
   startDate?: string
   endDate?: string
   limit?: number
+  // The scopes a person can narrow a search to. Whatever is set here restricts
+  // every eligible retrieval path; a path whose tables cannot express a set
+  // filter returns nothing rather than rows that ignore it.
+  applications?: string[]
+  websites?: string[]
+  projects?: string[]
+  clients?: string[]
+  people?: string[]
+  meetings?: string[]
+  sources?: ('observed' | 'connected' | 'supplied' | 'inferred')[]
 }
 
 export type DaylensSearchResult =
@@ -192,6 +206,53 @@ export interface DaylensNaturalSearchResult {
   usedProvider: boolean
 }
 
+export type DaylensRetrievalPath = 'structured' | 'exact' | 'semantic'
+
+// One reconciled result: the activity, not one table's row for it. A result
+// carrying more than one `foundBy` was produced independently by that many
+// paths, and `representations` holds the raw rows behind it.
+export interface DaylensRetrievalResult {
+  id: string
+  kind: 'entity' | 'moment' | 'structured'
+  title: string
+  startTime: number
+  endTime: number
+  date: string
+  excerpt: string
+  sourceType: 'observed' | 'connected' | 'supplied' | 'inferred'
+  foundBy: DaylensRetrievalPath[]
+  matchExplanation: string
+  score: number
+  representations: DaylensSearchResult[]
+}
+
+export interface DaylensRetrievalResponse {
+  plan: {
+    query: string
+    scope: {
+      startDate?: string
+      endDate?: string
+      timeRangeSource: 'filter' | 'query-text' | 'none'
+      lexicalText: string
+      entities: Array<{
+        id: string
+        name: string
+        entityType: string
+        matchedAlias: string | null
+        groupIds: string[]
+      }>
+      // The query named something that resolved to more than one entity at the
+      // same strength; the candidates are kept separate rather than merged.
+      ambiguousEntity: boolean
+    }
+    paths: DaylensRetrievalPath[]
+    unavailable: Array<{ path: DaylensRetrievalPath; reason: string }>
+  }
+  results: DaylensRetrievalResult[]
+  // An eligible path could not run. The query still succeeded.
+  degraded: boolean
+}
+
 // DEV-180: local semantic-search status for the Settings surface — which
 // engine and model run on this device, whether the artifact is present, and
 // how far the background embedding has gotten.
@@ -218,8 +279,17 @@ const api = {
   },
   db: {
     getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
-    rebuildTimelineDay: (date: string, hint?: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
-    getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
+    rebuildTimelineDay: (date: string, hint?: string): Promise<RebuildTimelineDayResult> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
+    // Subscribe to analyze progress ticks (DEV-270) for the duration of one run.
+    onAnalyzeProgress: (callback: (update: TimelineAnalyzeProgress) => void): (() => void) => {
+      const handler = (_e: unknown, update: TimelineAnalyzeProgress): void => callback(update)
+      ipcRenderer.on(IPC.DB.ANALYZE_PROGRESS, handler)
+      return () => { ipcRenderer.removeListener(IPC.DB.ANALYZE_PROGRESS, handler) }
+    },
+    // The day-analysis agent's answer-or-skip questions, and the channel to
+    // resolve one (DEV-247/270 clarification).
+    getDayClarifications: (date: string): Promise<TimelineClarification[]> => ipcRenderer.invoke(IPC.DB.GET_DAY_CLARIFICATIONS, date),
+    resolveDayClarification: (date: string, answer: TimelineClarificationAnswer): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.DB.RESOLVE_DAY_CLARIFICATION, date, answer),
     getTimelineRangeBlocks: (fromDate: string, toDate: string): Promise<CalendarRangeDay[]> =>
       ipcRenderer.invoke(IPC.DB.GET_TIMELINE_RANGE_BLOCKS, fromDate, toDate),
     getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
@@ -374,6 +444,11 @@ const api = {
       ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
   },
   search: {
+    // The unified boundary: the planner scopes, retrieves, reconciles, and
+    // ranks, and hands back one ordered result set plus the plan that produced
+    // it. The single-path calls below remain for surfaces not yet migrated.
+    unified: (query: string, opts?: SearchOptions): Promise<DaylensRetrievalResponse> =>
+      ipcRenderer.invoke('search:unified', { query, opts }),
     all: (query: string, opts?: SearchOptions): Promise<DaylensSearchResult[]> =>
       ipcRenderer.invoke('search:all', { query, opts }),
     sessions: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'session' }>[]> =>
@@ -417,6 +492,8 @@ const api = {
     exportUsageCsv: (from: number, to: number): Promise<{ canceled: boolean; path?: string }> =>
       ipcRenderer.invoke(IPC.BILLING.EXPORT_USAGE_CSV, { from, to }),
     getPayments: (): Promise<PaymentRecord[]> => ipcRenderer.invoke(IPC.BILLING.GET_PAYMENTS),
+    getSpendGuardrails: (): Promise<SpendGuardrailsReport> =>
+      ipcRenderer.invoke(IPC.BILLING.GET_SPEND_GUARDRAILS),
   },
   intercom: {
     getIdentity: (): Promise<IntercomIdentity> => ipcRenderer.invoke(IPC.INTERCOM.GET_IDENTITY),
@@ -427,6 +504,16 @@ const api = {
     getPermissionState: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_STATE),
     getPermissionDetails: (): Promise<TrackingPermissionDetails> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_DETAILS),
     requestScreenPermission: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.REQUEST_SCREEN_PERMISSION),
+    getCaptureVerification: (): Promise<CaptureVerificationState | null> =>
+      ipcRenderer.invoke(IPC.TRACKING.GET_CAPTURE_VERIFICATION),
+    // DEV-229: pushed by the main-process permission watcher on every status
+    // change, so a revoked Accessibility grant surfaces within seconds even
+    // when no settings page is polling.
+    onCaptureVerificationChanged: (callback: (state: CaptureVerificationState) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, state: CaptureVerificationState) => callback(state)
+      ipcRenderer.on(IPC.TRACKING.CAPTURE_VERIFICATION_CHANGED, handler)
+      return () => { ipcRenderer.removeListener(IPC.TRACKING.CAPTURE_VERIFICATION_CHANGED, handler) }
+    },
     deleteAppHistory: (payload: { bundleId?: string | null; appName?: string | null }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
       ipcRenderer.invoke(IPC.TRACKING.DELETE_APP_HISTORY, payload),
     deleteSiteHistory: (payload: { domain: string }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
@@ -520,6 +607,10 @@ const api = {
       ipcRenderer.invoke(IPC.ENTITIES.LIST, payload),
     detail: (entityId: string) => ipcRenderer.invoke(IPC.ENTITIES.DETAIL, entityId),
     suggestedMerges: () => ipcRenderer.invoke(IPC.ENTITIES.SUGGESTED_MERGES),
+    mergeAllDuplicates: (
+      payload: { excludedPairs?: Array<{ leftId: string; rightId: string }> } = {},
+    ): Promise<{ merged: number; failed: number; lastCorrectionId: string | null; lastDescription: string | null }> =>
+      ipcRenderer.invoke(IPC.ENTITIES.MERGE_ALL_DUPLICATES, payload),
     previewCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.PREVIEW_CORRECTION, command),
     applyCorrection: (command: unknown) => ipcRenderer.invoke(IPC.ENTITIES.APPLY_CORRECTION, command),
     undoCorrection: (correctionId: string) => ipcRenderer.invoke(IPC.ENTITIES.UNDO_CORRECTION, correctionId),
@@ -536,29 +627,6 @@ const api = {
       ipcRenderer.invoke(IPC.FILE_ACCESS.LIST_DISCLOSURES, payload),
     pickPath: (payload: { scopeKind?: 'file' | 'folder' } = {}): Promise<{ path: string; scopeKind: 'file' | 'folder' } | null> =>
       ipcRenderer.invoke(IPC.FILE_ACCESS.PICK_PATH, payload),
-  },
-  connectors: {
-    // DEV-186 listing + DEV-188 lifecycle. The renderer only ever receives
-    // the ConnectorListing projection and sanitized action summaries — never
-    // credentials, cursors, or paths. `connect` runs the provider's
-    // authorization flow (for OAuth connectors this opens the system browser)
-    // and the first sync; `disconnect` carries the person's explicit
-    // keep-or-delete choice for already-imported data.
-    list: (): Promise<ConnectorListing[]> => ipcRenderer.invoke(IPC.CONNECTORS.LIST),
-    connect: (connectorId: ConnectorId, config: Record<string, unknown> = {}): Promise<ConnectorSyncSummary> =>
-      ipcRenderer.invoke(IPC.CONNECTORS.CONNECT, connectorId, config),
-    sync: (connectorId: ConnectorId): Promise<ConnectorSyncSummary> =>
-      ipcRenderer.invoke(IPC.CONNECTORS.SYNC, connectorId),
-    disconnect: (connectorId: ConnectorId, options: { deleteData: boolean }): Promise<void> =>
-      ipcRenderer.invoke(IPC.CONNECTORS.DISCONNECT, connectorId, options),
-    onConnectProgress: (
-      callback: (event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing'; notice?: string }) => void,
-    ): (() => void) => {
-      const handler = (_e: Electron.IpcRendererEvent, event: { connectorId: ConnectorId; phase: 'authorizing' | 'syncing'; notice?: string }) =>
-        callback(event)
-      ipcRenderer.on(IPC.CONNECTORS.PROGRESS, handler)
-      return () => { ipcRenderer.removeListener(IPC.CONNECTORS.PROGRESS, handler) }
-    },
   },
   screenContext: {
     // DEV-198: the screen-context experiment surface. Status, the explicit
@@ -602,6 +670,10 @@ const api = {
       ipcRenderer.on(IPC.EXPORT.PROGRESS, handler)
       return () => { ipcRenderer.removeListener(IPC.EXPORT.PROGRESS, handler) }
     },
+    // DEV-248: the wrap deck's per-slide export — one folder pick, one PNG per
+    // slide. Rejects (never resolves) when a write fails, so the deck can say so.
+    wrapSlides: (payload: { stem: string; files: Array<{ filename: string; bytes: Uint8Array }> }): Promise<WrapSlidesExportResult> =>
+      ipcRenderer.invoke(IPC.EXPORT.WRAP_SLIDES, payload),
   },
   contextPackets: {
     // DEV-181: the recorded, deterministic bundle behind an AI exchange.

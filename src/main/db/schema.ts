@@ -453,6 +453,20 @@ CREATE TABLE IF NOT EXISTS meeting_attendance_marks (
 CREATE INDEX IF NOT EXISTS idx_meeting_attendance_marks_date
   ON meeting_attendance_marks (date);
 
+-- Dismissed day-analysis clarifications. When the interpretation agent asks a
+-- clarifying question about the day and the person skips it, the dismissal is
+-- remembered so the same question is not re-asked. An answered question needs
+-- no row — it resolves through its durable correction. LOCAL-ONLY: never synced.
+CREATE TABLE IF NOT EXISTS timeline_clarification_skips (
+  date TEXT NOT NULL,
+  clarification_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (date, clarification_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_timeline_clarification_skips_date
+  ON timeline_clarification_skips (date);
+
 -- Undo ledger for correction commands. Each applied correction snapshots the
 -- correction-ledger rows it may touch (reviews, boundary corrections, label
 -- overrides, evidence exclusions, work-session attribution); undo restores the

@@ -1193,6 +1193,10 @@ const DAYLENS_SELF_BUNDLE_IDS = new Set([
   'com.daylens.app.dev',
   'daylens',
   'daylens.desktop',
+  // Dev builds run under the raw Electron runner's identity, not Daylens's —
+  // this is still Daylens watching itself and must be excluded, not shown as
+  // "Electron · Development" evidence about the user.
+  'com.github.electron',
 ])
 
 const DAYLENS_SELF_PROCESS_NAMES = new Set([
@@ -1200,6 +1204,9 @@ const DAYLENS_SELF_PROCESS_NAMES = new Set([
   'daylens desktop',
   'daylens windows',
   'daylenswindows',
+  // The dev runner reports its product name as "Electron"; a real Electron app
+  // (VS Code, Slack, Figma) reports its own product name, never bare "electron".
+  'electron',
 ])
 
 function normalizedSelfIdentity(value: string | null | undefined): string {
@@ -1803,6 +1810,17 @@ async function poll(): Promise<void> {
           flushCurrent(idleStartMs, 'away')
           flushActiveBrowserContext(getDb(), idleStartMs)
           console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
+        } else if (idleState !== 'away') {
+          // Tracking started (or restarted after a crash) while the user was
+          // already away: there is no session to flush, but the projection
+          // still needs the boundary — the capture helper keeps emitting
+          // focus events (app restarts steal focus, background windows change
+          // titles), and without an away_start those read as presence. This
+          // is how an unattended overnight machine was once counted as a
+          // night without sleep.
+          const idleStartMs = provisionalIdleStart ?? (nowMs() - Math.round(idleSec) * 1_000)
+          recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec), inferredFrom: 'startup_idle' }, idleStartMs)
+          console.log(`[tracking] started while user away ${Math.round(idleSec)}s — away boundary recorded`)
         }
         idleState = 'away'
         provisionalIdleStart = null

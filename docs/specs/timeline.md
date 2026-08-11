@@ -48,6 +48,22 @@ Each block contains:
 
 Applications and pages are evidence inside a block. They do not automatically define its intent or boundaries.
 
+## Attention accounting
+
+Every derived number must be creditable to *attention*, and attention is bounded: one foreground window at a time, at roughly 5-second poll resolution. Any pipeline that can credit more seconds to a domain than the browser was foregrounded is wrong by construction.
+
+1. **Foreground app sessions are the spine.** `app_sessions` is the only source that measures attention. Everything else — browser history, calendar, git, artifacts — is *context* that explains attention, never a source of additional time.
+2. **Browser history explains, never adds.** Per-domain credit inside any interval is the interval-union of that domain's visits, clamped so the sum over all domains never exceeds the browser app's foreground seconds in that interval. Overlapping duplicate rows (browser history emits several per second) merge by union before any sum. `reconcileWebsiteVisits` exists for this; every consumer goes through it — no raw `SUM(duration_sec)` anywhere.
+3. **Media domains are ambience unless they own the foreground.** An entertainment domain gets *activity* status only when the browser was foregrounded on it for a sustained run (its page title in the foreground title stream, or it holds the majority of the browser's clamped budget). Otherwise it is an aside ("Netflix was open in a tab"), surfaced as ambience and excluded from kind voting. The same applies to native passive-presence apps such as Spotify.
+4. **Kind voting uses clamped seconds only.** A block's work/leisure/personal kind is decided from reconciled, clamped credits — never raw website seconds, which invert rule 1.
+
+## Interleaving: threads, not fragments
+
+Real days interleave. Segmentation by time-contiguity alone either fragments the day or merges over real seams.
+
+- Within a block, the account is the dominant activity plus a bounded set of *threads*: secondary activities with at least 15% of the block's attention, each named by the same ladder as labels. "ML course, threaded with Daylens Slack" — one line, honest.
+- Threads are not detours to hide and not reasons to split the block; they are the block's real texture.
+
 ## Segmentation
 
 Strong block boundaries are:
@@ -60,7 +76,18 @@ Strong block boundaries are:
 
 Brief tool switches, page checks, messages, and supporting research remain inside the surrounding block when their entities and timing support the same activity.
 
+An unobserved gap of 30 minutes or more always ends a block. No block may span an untracked gap; bridging one (a lunch break inside a single "block") propagates invented continuity into every downstream account of the day.
+
 Segmentation is deterministic for the same facts, projection version, and corrections. A model may propose a label or relationship but cannot own durations or silently change block boundaries.
+
+### Heuristic version bumps
+
+Every persisted block is stamped with the segmentation heuristic version that shaped it (`TIMELINE_HEURISTIC_VERSION` in `workBlocks.ts`; bump it whenever a change alters block boundaries or kind). After a bump, a historical day converges as follows:
+
+- An un-processed day rebuilds from sessions on its next analysis read and renders coarse until then; the bump changes nothing.
+- A processed (AI/user-labeled or corrected) day heals on read: opening it re-derives the deterministic segmentation once. Corrections re-apply in full, AI labels re-attach where their stretch of work survived, and stretches whose label stranded fall to deterministic labels — ordinary re-analysis targets.
+- The heal never spends an AI call. Wrap narratives converge lazily through the facts-hash comparison, only for days whose facts genuinely moved.
+- The heal declines — keeping the sealed shape, refreshing only category facts — when sessions can no longer re-derive the day, when re-segmentation would revert an analyzed day, or when a corrected label would strand. Explicit re-analyze remains the path that reshapes such a day.
 
 ## Labels and descriptions
 
@@ -71,6 +98,15 @@ A label describes the activity, not the software:
 - “Researched television upgrade options”
 
 “Cursor,” “Chrome browsing,” and “Editor activity” are fallback evidence labels, not acceptable final labels when Daylens knows the subject.
+
+The naming ladder, in strict order:
+
+1. **Durable entity** (project, client, repository, course), when the block's evidence maps to one through entities and aliases: "Daylens", "Andrew Ng's ML course".
+2. **Subject inferred from content signals**: document names, repository names, page titles that name a *thing being worked on*.
+3. **App-qualified activity** ("coding in Cursor") — only when tiers 1–2 are empty.
+4. Never: agent-surface titles ("Cursor Agents", "New chat - Claude", "AI Chat", "Copilot"). These are tools talking to tools; they are disqualified as subjects (`workNameGuards`). When an AI-surface title co-occurs with a real subject elsewhere in the block, the subject wins; when nothing else exists, fall to tier 3 ("working with AI agents in Cursor").
+
+Chat evidence carries subjects too: a persistent Slack channel artifact ("#daylens") is a project alias candidate, not communication noise. No email address ever enters a subject.
 
 A block may include one short observation when it is supported and useful. It must not judge productivity, focus, distraction, or personal worth.
 

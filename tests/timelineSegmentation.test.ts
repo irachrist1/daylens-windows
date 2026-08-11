@@ -314,9 +314,9 @@ test('edge titleless browser activity is not absorbed as a sliver', () => {
 })
 
 // FIX (the YouTube-with-a-break case): the same video, a 2-minute detour, back
-// to the same video — one continuous block, not three. Kept under the 2-hour
-// span ceiling so this isolates detour-absorption from the (separate) ceiling
-// split; a >2h single activity legitimately splits at TIMELINE_MAX_BLOCK_SPAN_MS.
+// to the same video — one continuous block, not three. There is no duration
+// ceiling (DEV-232), so this stays one block however long it runs; the test
+// isolates detour-absorption from the real-absence split.
 test('same video with a short detour is one block', () => {
   const db = freshDb()
   const sessions = [

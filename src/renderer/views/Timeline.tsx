@@ -2,10 +2,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { useSearchParams } from 'react-router-dom'
 import { EyeOff, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, AttributionProject, CalendarRangeBlock, CalendarRangeDay, ClientRecord, CorrectionCommand, DayTimelinePayload, RebuildTimelineDayResult, TimelineAnalyzeProgress, TimelineClarification, TimelineClarificationAnswer, TimelineGapSegment, TimelineScheduledMeeting, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
-import { calendarCardHeights } from '../lib/timelineBlockLayout'
-import { blockActiveSeconds } from '@shared/blockDuration'
+import { assignLanes, calendarCardHeights } from '../lib/timelineBlockLayout'
+import { blockActiveSeconds, blockDisplayedSpanSeconds } from '@shared/blockDuration'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { blockTypeTag, effectiveBlockKind } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
@@ -32,7 +32,7 @@ import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, formatFullDate, shiftDateString, todayString, weekStartString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
 import { activityCategoryLabel, EDITABLE_BLOCK_CATEGORY_OPTIONS } from '@shared/activityCategories'
-import { blockShortSummary, safeTimelineText, shortDomainLabel } from '../lib/timelineText'
+import { blockShortSummary, cleanTitleForDisplay, safeTimelineText, shortDomainLabel } from '../lib/timelineText'
 
 // The types a user can assign a block in Edit → Type. Category drives the
 // block's color everywhere, so this doubles as the recolor control. The
@@ -72,6 +72,29 @@ function blockNarrative(block: WorkContextBlock): string | null {
 const DAY_HOUR_HEIGHT = 88
 const WEEK_HOUR_HEIGHT = 52
 const TIME_GUTTER_WIDTH = 56
+// Day/week zoom (DEV-235): shortcut/gesture-driven only — ⌘+/⌘−/⌘0 and
+// pinch (or ⌘-scroll) on the grid; no persistent on-screen control. Day and
+// week each keep their own zoom level, persisted so the choice sticks.
+const TIMELINE_ZOOM_MIN = 0.6
+const TIMELINE_ZOOM_MAX = 1.8
+const TIMELINE_ZOOM_STEP = 0.2
+type ZoomableView = 'day' | 'week'
+const TIMELINE_ZOOM_KEYS: Record<ZoomableView, string> = {
+  day: 'daylens.timeline.zoom.day',
+  week: 'daylens.timeline.zoom.week',
+}
+// The pre-split single-factor key; migrated into both views on first load.
+const TIMELINE_ZOOM_LEGACY_KEY = 'daylens.timeline.zoom'
+function loadTimelineZoom(): Record<ZoomableView, number> {
+  if (typeof localStorage === 'undefined') return { day: 1, week: 1 }
+  const legacy = Number(localStorage.getItem(TIMELINE_ZOOM_LEGACY_KEY))
+  const fallback = Number.isFinite(legacy) && legacy >= TIMELINE_ZOOM_MIN && legacy <= TIMELINE_ZOOM_MAX ? legacy : 1
+  const load = (view: ZoomableView): number => {
+    const stored = Number(localStorage.getItem(TIMELINE_ZOOM_KEYS[view]))
+    return Number.isFinite(stored) && stored >= TIMELINE_ZOOM_MIN && stored <= TIMELINE_ZOOM_MAX ? stored : fallback
+  }
+  return { day: load('day'), week: load('week') }
+}
 // Smallest drawable card. The engine's 15-minute floor means a real block at
 // the day scale is ≥ 22px; this only catches meetings and edge-case slivers,
 // and 22px is the least height at which a one-line title still reads.
@@ -211,6 +234,8 @@ function CalendarBlockCard({
   block,
   top,
   height,
+  left,
+  width,
   compact,
   isSelected,
   inMergeRange = false,
@@ -221,6 +246,10 @@ function CalendarBlockCard({
   block: WorkContextBlock
   top: number
   height: number
+  // Google-Calendar lane geometry: overlapping cards share the track by
+  // column, so `left`/`width` are CSS lengths, not the old fixed inset.
+  left: string
+  width: string
   compact: boolean
   isSelected: boolean
   // True when this block sits inside the shift-selected merge span (but isn't
@@ -228,9 +257,11 @@ function CalendarBlockCard({
   // pending merge, without claiming the single-selection panel.
   inMergeRange?: boolean
   // True when a tag filter is active and this block isn't in it. Filtered
-  // blocks fade but stay in place — the shape of the day never lies.
+  // blocks become flat neutral gray ghost cards — full-size, text dimmed but
+  // readable, still clickable — so the shape of the day never lies (decided
+  // Jul 22, DEV-235).
   dimmed?: boolean
-  onClick?: () => void
+  onClick?: (event: ReactMouseEvent) => void
   onContextMenu?: (event: ReactMouseEvent) => void
 }) {
   // timeline.md §3.4 rule 4: color coding is universal — every block is drawn
@@ -246,14 +277,13 @@ function CalendarBlockCard({
   const label = userVisibleBlockLabel(block)
   const timeRange = `${formatClockTime(block.startTime)} – ${formatClockTime(block.endTime)}`
   const showTime = height >= (compact ? 34 : 40)
-  const showSummary = !compact && height >= 128
   const titleLines = height >= (compact ? 48 : 56) ? 2 : 1
 
   return (
     <button
       type="button"
       data-timeline-block-id={block.id}
-      aria-label={`Open ${label}, ${formatDuration(blockActiveSeconds(block))}`}
+      aria-label={`Open ${label}, ${formatDuration(blockDisplayedSpanSeconds(block))}`}
       aria-pressed={isSelected}
       onClick={onClick}
       onContextMenu={onContextMenu}
@@ -262,8 +292,8 @@ function CalendarBlockCard({
         position: 'absolute',
         top,
         height,
-        left: compact ? 2 : 4,
-        right: compact ? 2 : 8,
+        left,
+        width,
         // Explicit top-aligned column: a calendar event's title sits at its
         // start time. (A bare <button> vertically centers its content, which
         // floated the title into the middle of tall blocks.)
@@ -273,48 +303,58 @@ function CalendarBlockCard({
         justifyContent: 'flex-start',
         textAlign: 'left',
         cursor: 'pointer',
-        borderRadius: compact ? 6 : 8,
-        // The thin border stays on every block so neighbouring blocks read as
-        // separate cards; the solid accent stripe on the left carries the
-        // category colour unmistakably at every size (the low-alpha fills
-        // alone read as "no colour" on the light theme).
-        // The live block reads as "happening now": solid accent border and a
-        // stronger fill, against the quieter tint of finished blocks.
-        border: block.isLive
-          ? `1.5px solid ${accent}`
-          : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
-        borderLeft: `3px solid ${accent}`,
-        // Frosted glass: a stronger tint over a backdrop blur, so the hour
-        // lines behind the card haze out instead of striking through the
-        // title and summary text.
-        background: (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
-        backdropFilter: 'blur(10px) saturate(1.4)',
-        WebkitBackdropFilter: 'blur(10px) saturate(1.4)',
+        // Tight radius, flat fill: the calendar-app card shape. The old 3px
+        // border-left rounded into pill caps at the stripe's ends — the accent
+        // stripe is now an inset element (below) with square ends.
+        borderRadius: compact ? 4 : 5,
+        border: dimmed
+          ? '1px solid var(--color-border-ghost)'
+          : block.isLive
+            ? `1.5px solid ${accent}`
+            : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}26`,
+        background: dimmed
+          ? 'var(--color-surface-low, var(--color-surface))'
+          : (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}33` : `${accent}26`,
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
-        transition: 'border-color 120ms, background 120ms',
-        padding: compact ? '2px 6px' : '4px 9px',
+        transition: 'border-color 120ms, background 120ms, opacity 120ms',
+        padding: compact ? '2px 6px 2px 9px' : '4px 9px 4px 12px',
         // Day view: overflow stays visible so the sticky content wrapper below
         // can slide within the block. (overflow:hidden would make the card its
         // own scrollport and freeze the sticky text at the block top.) The
         // week's compact cards keep the clip — they're too small to stick.
-        overflow: compact ? 'hidden' : 'visible',
+        // A ghosted (filtered-out) block clips too: its dimmed text truncates
+        // instead of overflowing onto a matching block or an event (DEV-234).
+        overflow: (compact || dimmed) ? 'hidden' : 'visible',
         minWidth: 0,
-        opacity: dimmed ? 0.22 : muted ? 0.75 : 1,
+        opacity: dimmed ? 0.55 : muted ? 0.75 : 1,
         zIndex: isSelected ? 3 : 1,
       }}
     >
+      {/* The category stripe: inset with square ends so it never rounds into
+          pill caps, hidden on ghosted blocks so only matches carry color. */}
+      {!dimmed && (
+        <span aria-hidden style={{
+          position: 'absolute',
+          left: compact ? 2 : 3,
+          top: compact ? 2 : 3,
+          bottom: compact ? 2 : 3,
+          width: 3,
+          borderRadius: 1,
+          background: accent,
+        }} />
+      )}
       {/* The text pins into view while a tall block spans past the top of the
           scrollport — the block stays fixed in its time slot; only the timeline
           scrolls. Sticky keeps the title, time, and summary fully readable at
           every scroll position, with a small breathing offset. */}
-      <div style={compact ? undefined : { position: 'sticky', top: 8, minWidth: 0 }}>
+      <div style={(compact || dimmed) ? undefined : { position: 'sticky', top: 8, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'start', gap: 6, minWidth: 0 }}>
         <span style={{
           flex: 1,
           minWidth: 0,
           fontSize: compact ? 11 : 12.5,
-          fontWeight: 650,
-          color: 'var(--color-text-primary)',
+          fontWeight: dimmed ? 550 : 650,
+          color: dimmed ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
           lineHeight: 1.25,
           display: '-webkit-box',
           WebkitBoxOrient: 'vertical',
@@ -337,28 +377,45 @@ function CalendarBlockCard({
           }} />
         )}
       </div>
+      {/* Title + time on every card — the narrative lives in the detail panel
+          (day view) or the popover (week view), shown on click. A TALL card
+          additionally carries its one-line account, so hours of the day are
+          never a large empty rectangle (DEV-286); short cards stay calm. */}
       {showTime && (
-        <div style={{ fontSize: compact ? 10 : 11, color: 'var(--color-text-tertiary)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {timeRange} · {formatDuration(blockActiveSeconds(block))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: compact ? 10 : 11, color: 'var(--color-text-tertiary)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <ClockGlyph size={compact ? 9 : 10} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {timeRange} · {formatDuration(blockDisplayedSpanSeconds(block))}
+          </span>
         </div>
       )}
-      {showSummary && (
-        <p style={{
-          fontSize: 12,
+      {!compact && !dimmed && height >= 110 && (
+        <div style={{
+          marginTop: 6,
+          fontSize: 11.5,
           lineHeight: 1.5,
           color: 'var(--color-text-secondary)',
-          margin: '4px 0 0',
           display: '-webkit-box',
           WebkitBoxOrient: 'vertical',
-          WebkitLineClamp: Math.max(1, Math.floor((height - 64) / 18)),
+          WebkitLineClamp: 3,
           overflow: 'hidden',
           overflowWrap: 'break-word',
         }}>
           {blockNarrative(block) ?? blockShortSummary(block)}
-        </p>
+        </div>
       )}
       </div>
     </button>
+  )
+}
+
+// A tiny clock, Apple-Calendar style, marking a line as a time range.
+function ClockGlyph({ size = 10 }: { size?: number }) {
+  return (
+    <svg aria-hidden width={size} height={size} viewBox="0 0 12 12" style={{ flexShrink: 0, opacity: 0.75 }}>
+      <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6 3.4 V6 L7.8 7.4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
 
@@ -437,7 +494,7 @@ function CalendarDayTrack({
   nowMs?: number | null
   // When set, blocks outside the active tag filter render dimmed.
   dimBlock?: (block: WorkContextBlock) => boolean
-  onBlockClick?: (block: WorkContextBlock) => void
+  onBlockClick?: (block: WorkContextBlock, event: ReactMouseEvent) => void
   // Right-click on a block, Google-Calendar style (day view only).
   onBlockContextMenu?: (block: WorkContextBlock, event: ReactMouseEvent) => void
 }) {
@@ -450,10 +507,47 @@ function CalendarDayTrack({
   const showNowLine = nowMinutes != null && nowMinutes >= trackStartMin && nowMinutes <= trackEndMin
   const hourCount = Math.max(0, bounds.endHour - bounds.startHour + 1)
 
+  // The columns have ONE meaning (calendar-and-blocks spec, DEV-286): blocks
+  // are the spine and always start at the left; scheduled events are quieter
+  // context in their own column on the right, only where they overlap tracked
+  // time. Blocks are a partition of the day and never overlap each other, so
+  // they never split among themselves; events may overlap other events and
+  // lane only against each other. Edge insets: 4px outer margin, 6px gutter.
+  const unmatchedMeetings = compact ? [] : scheduledMeetings.filter((m) => m.matchedBlockId == null)
+  const laneKeyForMeeting = (m: TimelineScheduledMeeting) => `m:${m.startMs}:${m.title}`
+  const blockLayoutEnd = (block: WorkContextBlock): number =>
+    block.isLive && nowMs != null ? Math.max(block.endTime, nowMs) : block.endTime
+  const spansOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: number): boolean =>
+    Math.min(aEnd, bEnd) - Math.max(aStart, bStart) > 0
+  // The event column's share of the track where an event sits beside a block.
+  const EVENT_COLUMN_PCT = 38
+  const eventLaneInputs = unmatchedMeetings.map((m) => ({ key: laneKeyForMeeting(m), start: m.startMs, end: m.endMs }))
+  const eventPlacements = assignLanes(eventLaneInputs)
+  const eventLaneByKey = new Map(eventLaneInputs.map((input, i) => [input.key, eventPlacements[i]]))
+  const blockGeometry = (block: WorkContextBlock): { left: string; width: string } => {
+    const besideEvent = unmatchedMeetings.some((m) =>
+      spansOverlap(block.startTime, blockLayoutEnd(block), m.startMs, m.endMs))
+    return besideEvent
+      ? { left: '4px', width: `calc(${100 - EVENT_COLUMN_PCT}% - 10px)` }
+      : { left: '4px', width: 'calc(100% - 8px)' }
+  }
+  const meetingGeometry = (meeting: TimelineScheduledMeeting): { left: string; width: string } => {
+    const placement = eventLaneByKey.get(laneKeyForMeeting(meeting)) ?? { lane: 0, lanes: 1 }
+    const besideBlock = blocks.some((block) =>
+      spansOverlap(block.startTime, blockLayoutEnd(block), meeting.startMs, meeting.endMs))
+    const regionLeftPct = besideBlock ? 100 - EVENT_COLUMN_PCT : 0
+    const regionWidthPct = besideBlock ? EVENT_COLUMN_PCT : 100
+    const columnPct = regionWidthPct / placement.lanes
+    return {
+      left: `calc(${regionLeftPct + placement.lane * columnPct}% + ${besideBlock ? 0 : 4}px)`,
+      width: `calc(${columnPct}% - ${besideBlock || placement.lanes > 1 ? 6 : 8}px)`,
+    }
+  }
+
   return (
     <div style={{ position: 'relative', height: trackHeight, minWidth: 0 }}>
-      {/* Faint hour lines, Google-Calendar style: the grid reads as a grid
-          without any wrapping chrome, in both the day and week tracks. */}
+      {/* Hour lines, quieter than any card border: the grid should be felt,
+          not read — a whisper under the blocks in both day and week tracks. */}
       {Array.from({ length: hourCount }, (_, index) => (
         <div
           key={index}
@@ -463,6 +557,7 @@ function CalendarDayTrack({
             left: 0,
             right: 0,
             borderTop: '1px solid var(--color-border-ghost)',
+            opacity: 0.45,
             pointerEvents: 'none',
           }}
         />
@@ -474,6 +569,12 @@ function CalendarDayTrack({
         const top = topFor(gap.startTime)
         const gapHeight = topFor(gap.endTime) - top
         if (gapHeight < 26) return null
+        // A scheduled event can span the same empty stretch ("Wind down for
+        // bed" over an idle evening). The caption keeps its own readable
+        // backdrop and sits above the event outline so the two never render
+        // as colliding text (DEV-286).
+        const overlapsEvent = unmatchedMeetings.some((m) =>
+          spansOverlap(gap.startTime, gap.endTime, m.startMs, m.endMs))
         return (
           <div
             key={`gap:${gap.startTime}`}
@@ -487,9 +588,20 @@ function CalendarDayTrack({
               alignItems: 'center',
               justifyContent: 'center',
               pointerEvents: 'none',
+              zIndex: 2,
             }}
           >
-            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+            <span style={{
+              fontSize: 11,
+              color: 'var(--color-text-tertiary)',
+              whiteSpace: 'nowrap',
+              ...(overlapsEvent ? {
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border-ghost)',
+                borderRadius: 999,
+                padding: '2px 8px',
+              } : {}),
+            }}>
               {gap.label} · {formatDuration(Math.max(60, Math.round((gap.endTime - gap.startTime) / 1000)))}
             </span>
           </div>
@@ -506,42 +618,80 @@ function CalendarDayTrack({
         const top = topFor(meeting.startMs)
         const ghostHeight = Math.max(20, topFor(meeting.endMs) - top)
         const confirmed = meeting.attendance === 'matched'
+        const declined = meeting.marked === 'skipped' || meeting.marked === 'unrelated'
+        // Calendar-and-blocks spec: when tracked activity overlaps the event,
+        // the blocks are the spine and the event is faint context beside them
+        // — never a filled slab competing with the real work (DEV-285). Only
+        // an event over genuinely empty time keeps the attended hatch, and it
+        // says plainly that nothing was captured.
+        const overlapsActivity = blocks.some((block) =>
+          Math.min(block.endTime, meeting.endMs) - Math.max(block.startTime, meeting.startMs) > 0)
+        // Outlined ghost card (decided Jul 22, DEV-264): a real card spanning
+        // the event's scheduled duration — hairline border, near-transparent
+        // fill. Dashed = unconfirmed plan; solid + check = you attended;
+        // struck title, fainter = you said you didn't. "Planned" next to the
+        // solid "happened" blocks — never activity, never counted time.
         const stateLine = confirmed
-          ? 'Attended · you confirmed'
+          ? (overlapsActivity ? '✓ Attended' : '✓ Attended · nothing captured')
           : meeting.marked === 'skipped'
-            ? 'Skipped · your mark'
+            ? 'Skipped'
             : meeting.marked === 'moved'
-              ? 'Moved · your mark'
+              ? 'Moved'
               : meeting.marked === 'unrelated'
-                ? 'Unrelated · your mark'
-                : 'Scheduled · no observed activity'
+                ? 'Unrelated'
+                : (overlapsActivity ? 'Scheduled' : 'Scheduled · nothing captured')
         return (
           <div
             key={`scheduled:${meeting.startMs}:${meeting.title}`}
             title={confirmed
-              ? `${meeting.title} — you marked this attended`
+              ? (overlapsActivity
+                ? `${meeting.title} — you marked this attended; the tracked blocks beside it are the observed activity`
+                : `${meeting.title} — you marked this attended; no screen activity was captured in this window`)
               : `${meeting.title} — on your calendar; no observed activity supports that you attended`}
             onClick={onScheduledMeetingClick ? (event) => onScheduledMeetingClick(meeting, event) : undefined}
             style={{
               position: 'absolute',
               top,
-              height: ghostHeight,
-              left: 4,
-              right: 8,
-              borderRadius: 10,
-              border: confirmed ? '1.5px solid var(--color-border)' : '1.5px dashed var(--color-border)',
-              padding: '3px 10px',
+              // The seam: every event card stops 2px short of its slot, so
+              // back-to-back events read as two cards with daylight between
+              // them (the Apple/Google convention) — imperceptible on a lone
+              // event, decisive in a stack.
+              height: Math.max(18, ghostHeight - 2),
+              ...meetingGeometry(meeting),
+              borderRadius: 5,
+              // --color-border is transparent by design; events need a real
+              // (still hairline) edge to exist against their faint fill.
+              border: confirmed ? '1px solid rgba(127, 127, 127, 0.35)' : '1px dashed rgba(127, 127, 127, 0.35)',
+              // Attended reads as "consumed": the Apple-Calendar diagonal
+              // hatch — but only over empty time. Over tracked activity the
+              // blocks carry the story and the event stays a quiet outline.
+              background: confirmed && !overlapsActivity
+                ? 'repeating-linear-gradient(-45deg, rgba(127, 127, 127, 0.13) 0 3px, transparent 3px 8px)'
+                : 'rgba(127, 127, 127, 0.05)',
+              padding: '3px 9px',
               overflow: 'hidden',
               cursor: onScheduledMeetingClick ? 'pointer' : 'default',
+              opacity: declined ? 0.55 : 1,
               zIndex: 1,
             }}
           >
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--color-text-secondary)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              textDecoration: declined ? 'line-through' : 'none',
+            }}>
               {meeting.title}
             </div>
-            {ghostHeight >= 40 && (
-              <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
-                {stateLine}
+            {ghostHeight >= 36 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums' }}>
+                <ClockGlyph size={9} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {formatClockTime(meeting.startMs)} – {formatClockTime(meeting.endMs)} · {stateLine}
+                </span>
               </div>
             )}
           </div>
@@ -571,11 +721,12 @@ function CalendarDayTrack({
             block={block}
             top={top}
             height={height}
+            {...blockGeometry(block)}
             compact={compact}
             isSelected={selectedBlockId === block.id}
             inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
             dimmed={dimBlock ? dimBlock(block) : false}
-            onClick={onBlockClick ? () => onBlockClick(block) : undefined}
+            onClick={onBlockClick ? (event) => onBlockClick(block, event) : undefined}
             onContextMenu={onBlockContextMenu ? (event) => onBlockContextMenu(block, event) : undefined}
           />
         )
@@ -1506,12 +1657,153 @@ function SplitBlockDialog({
 
 const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
 
-function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
+// Report what Analyze / Re-analyze actually did (DEV-231) rather than a fixed
+// success line — the real re-labeled and merged counts, or "already up to date"
+// when the run touched nothing.
+// A truthful line for each phase the analyze pipeline is actually in (DEV-270),
+// so the button says what the system is doing instead of a blank "Analyzing…".
+function analyzeProgressMessage(progress: TimelineAnalyzeProgress): string {
+  switch (progress.stage) {
+    case 'preparing': return 'Reading the day…'
+    case 'merging': return 'Joining continued work…'
+    case 'naming': return progress.total > 0 ? `Naming your work… ${progress.done}/${progress.total}` : 'Naming your work…'
+    case 'finishing': return 'Finishing up…'
+    default: return 'Analyzing…'
+  }
+}
+
+function analyzeOutcomeMessage(result: RebuildTimelineDayResult, provisional: boolean): string {
+  const plural = (n: number) => (n === 1 ? '' : 's')
+  if (provisional) {
+    const count = result.payload.blocks.filter((block) => !block.isLive).length
+    return count > 0 ? `Shaped the day into ${count} block${plural(count)}` : 'Day shaped into blocks'
+  }
+  if (!result.changed) return 'All labels already up to date'
+  const parts: string[] = []
+  if (result.relabeled > 0) parts.push(`Re-labeled ${result.relabeled} block${plural(result.relabeled)}`)
+  if (result.mergedCount > 0) parts.push(`merged ${result.mergedCount} block${plural(result.mergedCount)}`)
+  let message = parts.length > 0 ? parts.join(' · ') : 'Refreshed the day'
+  if (result.failed > 0) {
+    // Never a bare failure count (DEV-278): say why and how to finish the job.
+    const rawReason = result.failureReason?.trim()
+    const reason = rawReason ? (/[.!?…]$/.test(rawReason) ? rawReason : `${rawReason}.`) : null
+    message += reason
+      ? ` · ${result.failed} couldn’t be named — ${reason} Re-analyze retries them.`
+      : ` · ${result.failed} couldn’t be named — Re-analyze retries them.`
+  }
+  return message
+}
+
+// The analyze run-state, lifted OUT of DaySummaryInspector so it survives the
+// panel swapping to a block's detail mid-run (DEV-270: the outcome/progress no
+// longer vanishes when you click a block while Analyze is working). Owned by the
+// Timeline component; the inspector and the block-detail status pill both read it.
+export interface DayAnalysisController {
+  analyzing: boolean
+  status: string | null
+  progress: TimelineAnalyzeProgress | null
+  run: (hint?: string) => Promise<RebuildTimelineDayResult | null>
+}
+
+function useDayAnalysis(dateStr: string, provisional: boolean, onRefresh?: () => Promise<void>): DayAnalysisController {
+  const [analyzing, setAnalyzing] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+  const [progress, setProgress] = useState<TimelineAnalyzeProgress | null>(null)
+  // The outcome line belongs to the day it described; clear it when the day changes.
+  useEffect(() => { setStatus(null); setProgress(null) }, [dateStr])
+  const run = useCallback(async (hint?: string): Promise<RebuildTimelineDayResult | null> => {
+    if (analyzing) return null
+    track(ANALYTICS_EVENT.ANALYZE_DAY_CLICKED, { date: dateStr })
+    setAnalyzing(true)
+    setStatus(null)
+    setProgress(null)
+    const unsubscribe = ipc.db.onAnalyzeProgress((update) => setProgress(update))
+    try {
+      const result = await ipc.db.rebuildTimelineDay(dateStr, hint)
+      daySummaryRecapCache.delete(dateStr)
+      await onRefresh?.()
+      setStatus(analyzeOutcomeMessage(result, provisional))
+      return result
+    } catch (error) {
+      const { message } = sanitizeIpcError(error, 'Analysis failed. Try again in a moment.')
+      setStatus(message)
+      return null
+    } finally {
+      unsubscribe()
+      setAnalyzing(false)
+      setProgress(null)
+    }
+  }, [analyzing, dateStr, provisional, onRefresh])
+  return { analyzing, status, progress, run }
+}
+
+// One answer-or-skip question the day-analysis agent has for the person — the
+// same pattern Cursor / Claude Code / Codex use. Answering writes a durable
+// correction; Skip dismisses it for good. Never blocks the recap.
+function ClarificationCard({ clarification, onResolve }: {
+  clarification: TimelineClarification
+  onResolve: (answer: TimelineClarificationAnswer) => void
+}) {
+  const [customText, setCustomText] = useState('')
+  const isMeeting = clarification.kind === 'unconfirmed-meeting'
+
+  const chooseOption = (option: { id: string; label: string }) => {
+    if (isMeeting) {
+      onResolve({ id: clarification.id, kind: 'unconfirmed-meeting', action: 'answer', eventKey: clarification.eventKey, attendance: option.id as TimelineClarificationAnswer['attendance'] })
+    } else {
+      onResolve({ id: clarification.id, kind: 'unnamed-block', action: 'answer', blockId: clarification.blockId, label: option.label })
+    }
+  }
+  const submitCustom = () => {
+    const label = customText.trim()
+    if (!label) return
+    onResolve({ id: clarification.id, kind: 'unnamed-block', action: 'answer', blockId: clarification.blockId, label })
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 8, padding: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', lineHeight: 1.5 }}>{clarification.question}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {clarification.options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            onClick={() => chooseOption(option)}
+            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 8, padding: '5px 10px', fontSize: 12.5, cursor: 'pointer' }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {!isMeeting && (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            value={customText}
+            onChange={(event) => setCustomText(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') submitCustom() }}
+            placeholder="Or describe it in your own words…"
+            style={{ flex: 1, minWidth: 0, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-primary)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5 }}
+          />
+          <button type="button" onClick={submitCustom} disabled={!customText.trim()} style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 8, padding: '5px 10px', fontSize: 12.5, fontWeight: 600, cursor: customText.trim() ? 'pointer' : 'default', opacity: customText.trim() ? 1 : 0.5 }}>Save</button>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => onResolve({ id: clarification.id, kind: clarification.kind, action: 'skip' })}
+        style={{ justifySelf: 'start', border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11.5, cursor: 'pointer', padding: 0 }}
+      >
+        Skip
+      </button>
+    </div>
+  )
+}
+
+function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayload; analysis: DayAnalysisController; onSelectBlock?: (blockId: string) => void }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
-  const [analyzing, setAnalyzing] = useState(false)
-  const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null)
+  const [clarifications, setClarifications] = useState<TimelineClarification[]>([])
+  const { analyzing, status: analyzeStatus, progress: analyzeProgress, run: runAnalyze } = analysis
   // The optional-note step of Analyze day: a one-line hint grounds the AI.
   const [wrapOpen, setWrapOpen] = useState(false)
   const [wrapNote, setWrapNote] = useState('')
@@ -1520,48 +1812,46 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   // Daylens makes no claim about the day until it has enough to work with.
   const enoughToAnalyze = trackedSecondsFor(payload) >= ANALYZE_MIN_SECONDS
 
+  const loadClarifications = useCallback(() => {
+    void ipc.db.getDayClarifications(payload.date).then(setClarifications).catch(() => setClarifications([]))
+  }, [payload.date])
+
   useEffect(() => {
-    setAnalyzeStatus(null)
     setRecapError(null)
     setWrapOpen(false)
     setWrapNote('')
     const cached = daySummaryRecapCache.get(payload.date)
     setRecap(cached ?? null)
     setRecapLoading(false)
-  }, [payload.date])
+    loadClarifications()
+  }, [payload.date, loadClarifications])
 
   useEffect(() => ipc.projections.onInvalidated((event) => {
     if (event.scope !== 'timeline' && event.scope !== 'all') return
     if (event.date && event.date !== payload.date) return
     daySummaryRecapCache.delete(payload.date)
     setRecap(null)
-  }), [payload.date])
+    loadClarifications()
+  }), [payload.date, loadClarifications])
+
+  // Answer or skip one question. An answer writes a durable correction in the
+  // main process (which invalidates the day, refreshing the timeline and recap);
+  // either way the card leaves the list immediately.
+  const resolveClarification = (answer: TimelineClarificationAnswer) => {
+    setClarifications((current) => current.filter((item) => item.id !== answer.id))
+    void ipc.db.resolveDayClarification(payload.date, answer).catch(() => loadClarifications())
+  }
 
   // Analyze Day (today) / Re-analyze (a past day): finalize the provisional day
   // into named blocks and refresh deterministic-floor / low-confidence labels.
-  // An optional hint (what the user typed they did) grounds the AI when the
-  // evidence is thin.
+  // The run itself (ipc call, progress subscription, outcome) lives in the
+  // lifted controller so it survives selecting a block mid-run (DEV-270); this
+  // only clears the optional-note step on success.
   const handleAnalyze = async (hint?: string) => {
-    if (analyzing) return
-    track(ANALYTICS_EVENT.ANALYZE_DAY_CLICKED, {
-      date: payload.date,
-      tracked_hours: payload.totalSeconds / 3600,
-      block_count_before: payload.blocks.length,
-    })
-    setAnalyzing(true)
-    setAnalyzeStatus(null)
-    try {
-      await ipc.db.rebuildTimelineDay(payload.date, hint)
-      daySummaryRecapCache.delete(payload.date)
-      await onRefresh?.()
+    const result = await runAnalyze(hint)
+    if (result) {
       setWrapOpen(false)
       setWrapNote('')
-      setAnalyzeStatus(provisional ? 'Day shaped into blocks' : 'Labels refreshed')
-    } catch (error) {
-      const { message } = sanitizeIpcError(error, 'Analysis failed. Try again in a moment.')
-      setAnalyzeStatus(message)
-    } finally {
-      setAnalyzing(false)
     }
   }
 
@@ -1609,8 +1899,19 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
         <>
           {/* The day recap — calm, grounded prose once generated. */}
           {recap?.summary && (
-            <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
-              {recap.summary}
+            <div style={{ display: 'grid', gap: 6 }}>
+              {/* Nothing fails silently: when the AI recap couldn't run, the
+                  factual fallback says so plainly rather than posing as prose. */}
+              {recap.degraded && (
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                  {recap.degradedReason
+                    ? `The full recap couldn't be generated — ${recap.degradedReason} Showing the day's facts; ${recap.degradedNeedsAction ? 'generate again once that is sorted.' : 'Generate recap retries.'}`
+                    : "The full recap couldn't be generated. Showing the day's facts; Generate recap retries."}
+                </div>
+              )}
+              <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
+                {recap.summary}
+              </div>
             </div>
           )}
 
@@ -1618,14 +1919,27 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
             <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{recapError}</div>
           )}
 
-          {onRefresh && (
+          {/* The agent's answer-or-skip questions — only when it genuinely has
+              a material one. Answering refines the day; skipping dismisses it. */}
+          {clarifications.length > 0 && (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                A couple of quick checks to get today right — answer or skip.
+              </div>
+              {clarifications.map((clarification) => (
+                <ClarificationCard key={clarification.id} clarification={clarification} onResolve={resolveClarification} />
+              ))}
+            </div>
+          )}
+
+          {(
             // The divider only draws when prose sits above it — as the panel's
             // first element it would read as a stray line under the padding.
             <div style={{ borderTop: (recap?.summary || recapError) ? '1px solid var(--color-border-ghost)' : 'none', paddingTop: (recap?.summary || recapError) ? 14 : 0, display: 'grid', gap: 8, justifyItems: 'start', width: '100%' }}>
               {analyzing ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 650, color: 'var(--color-text-primary)' }}>
                   <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
-                  Analyzing day…
+                  {analyzeProgress ? analyzeProgressMessage(analyzeProgress) : 'Analyzing day…'}
                 </div>
               ) : provisional ? (
                 // TODAY, unanalyzed: Analyze day shapes the provisional day into
@@ -1679,9 +1993,11 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
                   <button
                     type="button"
                     onClick={() => { void handleAnalyze() }}
-                    style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                    disabled={analyzing}
+                    style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: analyzing ? 'default' : 'pointer', opacity: analyzing ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 7 }}
                   >
-                    Re-analyze with AI
+                    {analyzing && <span aria-hidden style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />}
+                    {analyzing ? (analyzeProgress ? analyzeProgressMessage(analyzeProgress) : 'Analyzing…') : 'Re-analyze with AI'}
                   </button>
                   <button
                     type="button"
@@ -1743,7 +2059,7 @@ function BlockDetailInspector({
   // seconds. Off-task evidence is split out below as side trips (§6). The
   // nesting itself (which rows are children of which app) is pure logic,
   // extracted to blockDetailRowTree.ts so it's unit-testable without a DOM.
-  const { evidence, detours, detourSeconds } = buildDetailRowTree(block)
+  const { evidence, detours, detourSeconds, briefCount, briefSeconds } = buildDetailRowTree(block)
 
   // DEV-189: the calendar event this block's captured meeting-app evidence
   // supports, when one matched. The block's own time stays observed activity;
@@ -1755,10 +2071,26 @@ function BlockDetailInspector({
   // The block's type tag + how the time inside splits by category. Real facts,
   // compactly: "Focused work" · Development 2h 10m · AI tools 40m.
   const typeTag = blockTypeTag(block)
-  const categorySplit = Object.entries(block.categoryDistribution ?? {})
+  // The category appears once (DEV-272). A duration chip that merely restates
+  // the type tag ("Browsing" under a "Browsing" tag) is dropped; only a genuine
+  // split across two-plus categories earns its own chips.
+  const categoryEntries = Object.entries(block.categoryDistribution ?? {})
     .filter((entry): entry is [AppCategory, number] => typeof entry[1] === 'number' && entry[1] >= 60)
     .sort((a, b) => b[1] - a[1])
+  const categorySplitAll: Array<[string, number]> = categoryEntries
     .slice(0, 3)
+    .map(([category, seconds]) => [activityCategoryLabel(category), seconds])
+  // The chips must reconcile with the block (DEV-280): what the top three
+  // don't cover is shown, not silently dropped.
+  const categoryResidual = categoryEntries.slice(3).reduce((sum, [, seconds]) => sum + seconds, 0)
+  if (categoryResidual >= 60) categorySplitAll.push(['Everything else', categoryResidual])
+  const categorySplit = categorySplitAll.length <= 1
+    ? categorySplitAll.filter(([label]) => label !== typeTag)
+    : categorySplitAll
+  // The type tag is dropped when it only echoes the block's own title (a
+  // "Browsing" block titled "Browsing"), so the category is stated once, not
+  // three times (DEV-272).
+  const showTypeTag = typeTag.trim().toLowerCase() !== userVisibleBlockLabel(block).trim().toLowerCase()
 
   // Presentation (name/detail/icon/onOpen) for a row tree node, built from
   // whichever raw source object it carries. Kept separate from the pure
@@ -1775,8 +2107,8 @@ function BlockDetailInspector({
     if (row.kind === 'artifact' && row.artifact) {
       const artifact = row.artifact
       return {
-        name: safeTimelineText(artifact.displayTitle.trim()),
-        detail: artifact.subtitle || artifact.host || artifact.path || null,
+        name: cleanTitleForDisplay(artifact.displayTitle.trim()),
+        detail: artifact.subtitle ? formatDisplayAppName(artifact.subtitle) : (artifact.host || artifact.path || null),
         icon: (
           <EntityIcon
             artifactType={artifact.artifactType}
@@ -1923,7 +2255,13 @@ function BlockDetailInspector({
               {userVisibleBlockLabel(block)}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginTop: 3 }}>
-              {formatFullDate(payload.date)} ⋅ {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockActiveSeconds(block))}
+              {formatFullDate(payload.date)} ⋅ {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockDisplayedSpanSeconds(block))}
+              {/* When the block spans lulls, the active number the chips and
+                  summary reconcile against is stated, not left to arithmetic
+                  the person cannot do (DEV-280). */}
+              {blockDisplayedSpanSeconds(block) - blockActiveSeconds(block) >= 60 && (
+                <> · {formatDuration(blockActiveSeconds(block))} active</>
+              )}
             </div>
           </div>
           <button type="button" aria-label="Back to day summary" title="Back to day summary" onClick={onClose} style={{ ...iconButtonStyle(), flexShrink: 0, marginTop: -3, marginRight: -3 }} {...iconHover}>
@@ -1943,21 +2281,23 @@ function BlockDetailInspector({
           padding: '16px 22px 20px',
         }}>
           {/* What kind of block this was, and how the time inside splits. */}
-          {(typeTag || categorySplit.length > 0) && (
+          {((showTypeTag && typeTag) || categorySplit.length > 0) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 14 }}>
-              <span style={{
-                padding: '3px 9px',
-                borderRadius: 999,
-                fontSize: 11,
-                fontWeight: 700,
-                color: accent,
-                background: `${accent}1c`,
-                border: `1px solid ${accent}40`,
-              }}>
-                {typeTag}
-              </span>
-              {categorySplit.map(([category, seconds]) => (
-                <span key={category} style={{
+              {showTypeTag && typeTag && (
+                <span style={{
+                  padding: '3px 9px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: accent,
+                  background: `${accent}1c`,
+                  border: `1px solid ${accent}40`,
+                }}>
+                  {typeTag}
+                </span>
+              )}
+              {categorySplit.map(([label, seconds]) => (
+                <span key={label} style={{
                   padding: '3px 9px',
                   borderRadius: 999,
                   fontSize: 11,
@@ -1965,7 +2305,7 @@ function BlockDetailInspector({
                   color: 'var(--color-text-tertiary)',
                   border: '1px solid var(--color-border-ghost)',
                 }}>
-                  {activityCategoryLabel(category)} · {formatDuration(seconds)}
+                  {label} · {formatDuration(seconds)}
                 </span>
               ))}
             </div>
@@ -2042,6 +2382,13 @@ function BlockDetailInspector({
                 <div style={{ display: 'grid', gap: 10 }}>
                   {evidence.map((row) => renderEvidenceRow(row, false))}
                 </div>
+                {briefCount > 0 && (
+                  // Sub-minute apps and pages folded into one quiet line instead
+                  // of standing as their own 2-second rows (DEV-272).
+                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 8 }}>
+                    + {briefCount} brief {briefCount === 1 ? 'glimpse' : 'glimpses'} under a minute{briefSeconds >= 60 ? ` · ${formatDuration(briefSeconds)}` : ''}
+                  </div>
+                )}
               </section>
             )}
 
@@ -2072,6 +2419,104 @@ function BlockDetailInspector({
   )
 }
 
+// A week-grid event popover (DEV-236): clicking a block in week view opens its
+// details in place — anchored at the click, clamped to the viewport — instead
+// of navigating away to the day. "Open in day view" is offered as an action,
+// not forced. Matches the Google Calendar reference, small events included.
+function WeekEventPopover({
+  block,
+  date,
+  x,
+  y,
+  onOpenDay,
+  onClose,
+}: {
+  block: WorkContextBlock
+  date: string
+  x: number
+  y: number
+  onOpenDay: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const accent = activityColorForCategory(block.dominantCategory)
+  // Responsive: a comfortable card on a wide window, never wider than the
+  // window allows. Positioned beside the click, clamped inside the viewport.
+  const width = Math.min(340, window.innerWidth - 32)
+  const left = Math.max(16, Math.min(x + 12, window.innerWidth - width - 16))
+  const top = Math.max(16, Math.min(y - 12, window.innerHeight - 220))
+  const summary = blockNarrative(block) ?? blockShortSummary(block)
+
+  return (
+    <div
+      data-timeline-inspector="true"
+      style={{ position: 'fixed', inset: 0, zIndex: 92 }}
+      onClick={onClose}
+      onContextMenu={(event) => { event.preventDefault(); onClose() }}
+    >
+      <div
+        role="dialog"
+        aria-label={`${userVisibleBlockLabel(block)} details`}
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          position: 'fixed',
+          left,
+          top,
+          width,
+          borderRadius: 10,
+          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface)',
+          boxShadow: '0 18px 48px rgba(0,0,0,0.28)',
+          padding: '14px 16px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'start', gap: 8 }}>
+          {/* The category reads as a small square chip, not a stripe that
+              rounds into pill caps on the card's corners. */}
+          <span aria-hidden style={{ flexShrink: 0, width: 10, height: 10, borderRadius: 3, background: accent, marginTop: 4 }} />
+          <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.35 }}>
+            {userVisibleBlockLabel(block)}
+          </span>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 15, fontWeight: 700, cursor: 'pointer', padding: 0, lineHeight: 1, flexShrink: 0 }}
+          >
+            ×
+          </button>
+        </div>
+        {/* One quiet metadata line: when, how long, what kind. */}
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 5, paddingLeft: 18, fontVariantNumeric: 'tabular-nums' }}>
+          {formatFullDate(date)} · {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockDisplayedSpanSeconds(block))}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, paddingLeft: 18 }}>
+          {activityCategoryLabel(block.dominantCategory)}
+        </div>
+        {summary && (
+          <p style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--color-text-secondary)', margin: '10px 0 0', paddingLeft: 18, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }}>
+            {summary}
+          </p>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={() => { onOpenDay(); onClose() }}
+            style={{ border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 650, cursor: 'pointer', padding: '5px 8px', borderRadius: 7 }}
+          >
+            Open in day view
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // The week as a real calendar grid: seven day columns on a shared 24-hour
 // track, Google-Calendar shape, Daylens data. The stats + week review card
 // keeps living underneath, computed from the same blocks the grid draws so
@@ -2081,12 +2526,14 @@ function CalendarWeekView({
   onSelectDate,
   onOpenBlock,
   nowMs,
+  hourHeight,
   scrollerRef,
 }: {
   selectedDate: string
   onSelectDate: (date: string) => void
   onOpenBlock: (date: string, startTime: number) => void
   nowMs: number
+  hourHeight: number
   scrollerRef: React.RefObject<HTMLDivElement | null>
 }) {
   const weekStart = weekStartString(selectedDate)
@@ -2110,6 +2557,9 @@ function CalendarWeekView({
   })
   const [generatingWeekReview, setGeneratingWeekReview] = useState(false)
   const [weekReviewError, setWeekReviewError] = useState<string | null>(null)
+  // DEV-236: clicking a block in week view opens its details in place here,
+  // instead of navigating to the day.
+  const [eventPopover, setEventPopover] = useState<{ block: WorkContextBlock; date: string; x: number; y: number } | null>(null)
 
   const days = useMemo(() => weekResource.data ?? [], [weekResource.data])
   const byDate = useMemo(() => new Map(days.map((payload) => [payload.date, payload])), [days])
@@ -2214,17 +2664,17 @@ function CalendarWeekView({
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: `${TIME_GUTTER_WIDTH}px repeat(7, minmax(0, 1fr))` }}>
-          <HourGutter hourHeight={WEEK_HOUR_HEIGHT} bounds={weekBounds} />
+          <HourGutter hourHeight={hourHeight} bounds={weekBounds} />
           {dates.map((date) => (
             <div key={`col:${date}`} style={{ borderLeft: '1px solid var(--color-border-ghost)', minWidth: 0 }}>
               <CalendarDayTrack
                 date={date}
                 blocks={byDate.get(date)?.blocks ?? []}
                 bounds={weekBounds}
-                hourHeight={WEEK_HOUR_HEIGHT}
+                hourHeight={hourHeight}
                 compact
                 nowMs={date === today ? nowMs : null}
-                onBlockClick={(block) => onOpenBlock(date, block.startTime)}
+                onBlockClick={(block, event) => setEventPopover({ block, date, x: event.clientX, y: event.clientY })}
               />
             </div>
           ))}
@@ -2333,6 +2783,17 @@ function CalendarWeekView({
           </div>
         </div>
       </div>
+
+      {eventPopover && (
+        <WeekEventPopover
+          block={eventPopover.block}
+          date={eventPopover.date}
+          x={eventPopover.x}
+          y={eventPopover.y}
+          onOpenDay={() => onOpenBlock(eventPopover.date, eventPopover.block.startTime)}
+          onClose={() => setEventPopover(null)}
+        />
+      )}
     </div>
   )
 }
@@ -2516,11 +2977,31 @@ export default function Timeline() {
   // The far end of a shift-selected merge span. Null means a plain single
   // selection; set means "select the whole run between the anchor and here".
   const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
+  // A merge that failed before its preview dialog could open (e.g. the span
+  // still holds a live episode). Surfaced as a small toast at the click instead
+  // of failing silently — a merge that does nothing with no feedback is the
+  // exact bug DEV-233 fixes.
+  const [mergeError, setMergeError] = useState<string | null>(null)
   const isCompact = useCompactLayout()
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
   // Clock tick for the current-time line and the live block's growing bottom
   // edge — 30s keeps the active session visibly moving between data refreshes.
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // Day/week calendar density (DEV-235): each view keeps its own zoom,
+  // persisted so it sticks across sessions. Changed only by shortcut/gesture.
+  const [zoomByView, setZoomByView] = useState<Record<ZoomableView, number>>(loadTimelineZoom)
+  // The transient zoom readout: shows the new percentage for a moment while
+  // zooming, then fades — the only zoom UI on screen (DEV-235).
+  const [zoomFlash, setZoomFlash] = useState<number | null>(null)
+  const zoomFlashTimerRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(TIMELINE_ZOOM_KEYS.day, String(zoomByView.day))
+    localStorage.setItem(TIMELINE_ZOOM_KEYS.week, String(zoomByView.week))
+  }, [zoomByView])
+  useEffect(() => () => {
+    if (zoomFlashTimerRef.current != null) window.clearTimeout(zoomFlashTimerRef.current)
+  }, [])
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
   const lastViewOpenedKeyRef = useRef<string | null>(null)
@@ -2533,6 +3014,66 @@ export default function Timeline() {
   const view = navState.view
   const date = navState.date
   const isToday = date === todayString()
+
+  const dayHourHeight = Math.round(DAY_HOUR_HEIGHT * zoomByView.day)
+  const adjustZoom = useCallback((delta: number) => {
+    if (view === 'month') return
+    const target: ZoomableView = view === 'week' ? 'week' : 'day'
+    setZoomByView((current) => {
+      const next = Math.round(Math.min(TIMELINE_ZOOM_MAX, Math.max(TIMELINE_ZOOM_MIN, current[target] + delta)) * 100) / 100
+      if (next === current[target]) return current
+      setZoomFlash(next)
+      if (zoomFlashTimerRef.current != null) window.clearTimeout(zoomFlashTimerRef.current)
+      zoomFlashTimerRef.current = window.setTimeout(() => setZoomFlash(null), 900)
+      return { ...current, [target]: next }
+    })
+  }, [view])
+
+  // ⌘+ / ⌘− step the zoom; ⌘0 resets. Skipped while typing in a field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (event.key === '=' || event.key === '+') {
+        event.preventDefault()
+        adjustZoom(TIMELINE_ZOOM_STEP)
+      } else if (event.key === '-') {
+        event.preventDefault()
+        adjustZoom(-TIMELINE_ZOOM_STEP)
+      } else if (event.key === '0') {
+        event.preventDefault()
+        if (view === 'month') return
+        const targetView: ZoomableView = view === 'week' ? 'week' : 'day'
+        setZoomByView((current) => (current[targetView] === 1 ? current : { ...current, [targetView]: 1 }))
+        setZoomFlash(1)
+        if (zoomFlashTimerRef.current != null) window.clearTimeout(zoomFlashTimerRef.current)
+        zoomFlashTimerRef.current = window.setTimeout(() => setZoomFlash(null), 900)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [adjustZoom, view])
+
+  // Trackpad pinch (delivered as ctrl+wheel) and ⌘-scroll zoom the grid in
+  // place. Non-passive so the page doesn't also scroll/zoom underneath.
+  useEffect(() => {
+    const scroller = scrollRef.current
+    if (!scroller) return
+    let accumulated = 0
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      accumulated += -event.deltaY
+      // A pinch streams many small deltas; a step lands once enough gathers.
+      if (Math.abs(accumulated) >= 24) {
+        adjustZoom(accumulated > 0 ? TIMELINE_ZOOM_STEP : -TIMELINE_ZOOM_STEP)
+        accumulated = 0
+      }
+    }
+    scroller.addEventListener('wheel', onWheel, { passive: false })
+    return () => scroller.removeEventListener('wheel', onWheel)
+  }, [adjustZoom])
   // Dev preview (?panelVariants=1): render both height caps side by side to
   // compare the short vs. tall detail panel before settling on one.
   const panelVariantsPreview = searchParams.get('panelVariants') === '1'
@@ -2562,6 +3103,14 @@ export default function Timeline() {
   const payload = timelineResource.data?.date === date ? timelineResource.data : null
   const error = timelineResource.error
   const loading = view === 'day' && (!payload || timelineResource.loading)
+
+  // Analyze run-state lives here, above the summary/block-detail panel swap, so
+  // its progress and outcome survive selecting a block mid-run (DEV-270).
+  const dayAnalysis = useDayAnalysis(
+    date,
+    payload?.blocks.some((block) => block.provisional) ?? false,
+    timelineResource.refresh,
+  )
 
   const blockMap = useMemo(() => {
     const map = new Map<string, WorkContextBlock>()
@@ -2801,6 +3350,7 @@ export default function Timeline() {
   // correction actually applied. A cancelled preview leaves the grid as-is.
   const runMerge = async (blockIds: string[], selectAt: number | null) => {
     setContextMenu(null)
+    setMergeError(null)
     try {
       const applied = await correction.request({ kind: 'merge', date, blockIds })
       if (applied) {
@@ -2808,8 +3358,10 @@ export default function Timeline() {
         setMergeRangeEndId(null)
         setSelectedBlockId(null)
       }
-    } catch {
-      // Preview failed (e.g. the day just rebuilt) — the grid stays honest.
+    } catch (err) {
+      // The merge couldn't even be previewed — say why at the click instead of
+      // leaving the user staring at an unchanged grid (DEV-233).
+      setMergeError(sanitizeIpcError(err, "Couldn't merge these blocks. Try again in a moment.").message)
     }
   }
 
@@ -2967,22 +3519,38 @@ export default function Timeline() {
         background: 'var(--color-bg)',
         borderBottom: '1px solid var(--color-border-ghost)',
         padding: '20px 32px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
       }}>
-        <PeriodNavigator
-          label={headerLabel}
-          value={view}
-          options={[
-            { value: 'day', label: 'Day' },
-            { value: 'week', label: 'Week' },
-            { value: 'month', label: 'Month' },
-          ]}
-          onChange={setView}
-          onPrevious={() => stepDate(-1)}
-          onNext={() => stepDate(1)}
-          nextDisabled={forwardDisabled}
-          onToday={onCurrentPeriod ? undefined : () => setDate(todayString())}
-        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <PeriodNavigator
+            label={headerLabel}
+            value={view}
+            options={[
+              { value: 'day', label: 'Day' },
+              { value: 'week', label: 'Week' },
+              { value: 'month', label: 'Month' },
+            ]}
+            onChange={setView}
+            onPrevious={() => stepDate(-1)}
+            onNext={() => stepDate(1)}
+            nextDisabled={forwardDisabled}
+            onToday={onCurrentPeriod ? undefined : () => setDate(todayString())}
+          />
+        </div>
       </div>
+
+      {/* Transient zoom readout (DEV-235): the only zoom UI — appears for a
+          moment while ⌘+/⌘−/pinch changes density, then fades. */}
+      {zoomFlash != null && view !== 'month' && (
+        <div
+          aria-live="polite"
+          style={{ position: 'fixed', top: 84, left: '50%', transform: 'translateX(-50%)', zIndex: 60, pointerEvents: 'none', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: '5px 14px', fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--color-text-secondary)' }}
+        >
+          {Math.round(zoomFlash * 100)}%
+        </div>
+      )}
 
       {/* The timeline scrolls without showing a scrollbar — the grid is the
           chrome; the hidden thumb lives in globals.css under .timeline-scroller. */}
@@ -2992,6 +3560,7 @@ export default function Timeline() {
             <CalendarWeekView
               selectedDate={date}
               nowMs={nowMs}
+              hourHeight={Math.round(WEEK_HOUR_HEIGHT * zoomByView.week)}
               scrollerRef={scrollRef}
               onSelectDate={(nextDate) => {
                 updateNavState({ view: 'day', date: nextDate })
@@ -3109,7 +3678,7 @@ export default function Timeline() {
                         userSelect: 'none',
                       }}
                     >
-                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} bounds={dayBounds} />
+                      <HourGutter hourHeight={dayHourHeight} bounds={dayBounds} />
                       <CalendarDayTrack
                         date={payload.date}
                         blocks={sortedBlocks}
@@ -3117,7 +3686,7 @@ export default function Timeline() {
                         gapSegments={gapSegments}
                         scheduledMeetings={payload.scheduledMeetings}
                         onScheduledMeetingClick={openScheduledMeetingMenu}
-                        hourHeight={DAY_HOUR_HEIGHT}
+                        hourHeight={dayHourHeight}
                         selectedBlockId={selectedBlockId}
                         selectedSpanIds={selectedSpanIds}
                         nowMs={isToday ? nowMs : null}
@@ -3189,17 +3758,33 @@ export default function Timeline() {
                         block shows its detail; no selection shows the day
                         summary. Nothing floats over the timeline. */}
                     {selectedBlock ? (
-                      <BlockDetailInspector
-                        block={selectedBlock}
-                        payload={payload}
-                        onCorrection={correction.request}
-                        onClose={() => {
-                          setSelectedBlockId(null)
-                          setMergeRangeEndId(null)
-                        }}
-                      />
+                      // One grid item: a fragment here would hand the grid two
+                      // right-column children and wrap the detail panel to a
+                      // full-width second row (DEV-283).
+                      <div data-timeline-inspector="true" style={{ position: 'sticky', top: 24, alignSelf: 'start' }}>
+                        {/* Analyze feedback follows you into a block's detail view
+                            so the run never looks like it silently stopped (DEV-270). */}
+                        {(dayAnalysis.analyzing || dayAnalysis.status) && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--color-text-secondary)', padding: '8px 12px', borderRadius: 10, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', marginBottom: 10 }}>
+                            {dayAnalysis.analyzing && <span aria-hidden style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />}
+                            {dayAnalysis.analyzing
+                              ? (dayAnalysis.progress ? analyzeProgressMessage(dayAnalysis.progress) : 'Analyzing day…')
+                              : dayAnalysis.status}
+                          </div>
+                        )}
+                        <BlockDetailInspector
+                          block={selectedBlock}
+                          payload={payload}
+                          sticky={false}
+                          onCorrection={correction.request}
+                          onClose={() => {
+                            setSelectedBlockId(null)
+                            setMergeRangeEndId(null)
+                          }}
+                        />
+                      </div>
                     ) : (
-                      <DaySummaryInspector payload={payload} onRefresh={timelineResource.refresh} />
+                      <DaySummaryInspector payload={payload} analysis={dayAnalysis} />
                     )}
                     {/* Dev preview only (?panelVariants=1): the two candidate
                         height caps side by side, to compare the short (320)
@@ -3234,6 +3819,23 @@ export default function Timeline() {
                 {/* The correction preview dialog + undo toast — outside the
                     blocks gate so the toast survives excluding the last block. */}
                 {correction.overlay}
+                {mergeError && (
+                  <div
+                    data-timeline-inspector="true"
+                    role="alert"
+                    style={{ position: 'fixed', left: '50%', bottom: 28, transform: 'translateX(-50%)', zIndex: 86, display: 'flex', alignItems: 'center', gap: 12, maxWidth: 'min(560px, calc(100vw - 48px))', borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', boxShadow: '0 12px 36px rgba(0,0,0,0.28)', padding: '10px 14px' }}
+                  >
+                    <span style={{ fontSize: 12.5, color: 'var(--color-text-primary)', fontWeight: 600, lineHeight: 1.4 }}>{mergeError}</span>
+                    <button
+                      type="button"
+                      aria-label="Dismiss"
+                      onClick={() => setMergeError(null)}
+                      style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 14, fontWeight: 700, cursor: 'pointer', padding: 0, lineHeight: 1, flexShrink: 0 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>

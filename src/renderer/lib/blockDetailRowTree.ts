@@ -38,10 +38,46 @@ export interface DetailRowTree {
   // Off-task ("detour") rows, flat, sorted by seconds desc.
   detours: DetailRowNode[]
   detourSeconds: number
+  // Sub-minute rows folded out of the lists above, summarized as one quiet line
+  // instead of standing as their own 2-second rows.
+  briefCount: number
+  briefSeconds: number
 }
 
 const isOffTaskCategory = (category: AppCategory): boolean =>
   category === 'entertainment' || category === 'social'
+
+// A row shorter than this is noise, not activity — it never stands as its own
+// row; it folds into one quiet "brief glimpses" line.
+const MIN_EVIDENCE_ROW_SECONDS = 60
+
+// Daylens watching itself is never evidence about the user — including the dev
+// build's raw Electron runner. Guarded here too so a historical row captured
+// before the tracker's self-exclusion covered dev never reaches the panel.
+const SELF_APP_BUNDLE_IDS = new Set([
+  'com.daylens.desktop', 'com.daylens.app', 'com.daylens.app.dev',
+  'daylens', 'daylens.desktop', 'com.github.electron',
+])
+function isSelfCaptureApp(app: WorkContextAppSummary): boolean {
+  if (SELF_APP_BUNDLE_IDS.has((app.bundleId ?? '').trim().toLowerCase())) return true
+  const name = (app.appName ?? '').trim().toLowerCase()
+  return name === 'daylens' || name === 'electron'
+}
+
+// Keep the rows worth showing; fold anything sub-minute into a running tally.
+// If EVERYTHING is sub-minute (a genuinely tiny block), keep the rows rather
+// than empty the panel.
+function partitionBrief<T extends { seconds: number }>(rows: T[], brief: { count: number; seconds: number }): T[] {
+  const significant = rows.filter((row) => row.seconds >= MIN_EVIDENCE_ROW_SECONDS)
+  if (significant.length === 0) return rows
+  for (const row of rows) {
+    if (row.seconds < MIN_EVIDENCE_ROW_SECONDS) {
+      brief.count += 1
+      brief.seconds += Math.max(0, row.seconds)
+    }
+  }
+  return significant
+}
 
 export function buildDetailRowTree(block: WorkContextBlock): DetailRowTree {
   // Rows carry two possible owner-linkage pairings, because ArtifactRef has
@@ -64,20 +100,39 @@ export function buildDetailRowTree(block: WorkContextBlock): DetailRowTree {
     return owner ? `app:${owner.bundleId}` : undefined
   }
 
-  const appRows: DetailRowNode[] = block.topApps.slice(0, 8).map((app) => ({
-    key: `app:${app.bundleId}`,
-    kind: 'app',
-    seconds: app.totalSeconds,
-    offTask: isOffTaskCategory(app.category),
-    children: [],
-    app,
-  }))
+  const brief = { count: 0, seconds: 0 }
 
-  const artifactRows: DetailRowNode[] = block.topArtifacts.slice(0, 8).map((artifact) => {
+  const appRows: DetailRowNode[] = partitionBrief(
+    block.topApps
+      .filter((app) => !isSelfCaptureApp(app))
+      .slice(0, 8)
+      .map((app) => ({
+        key: `app:${app.bundleId}`,
+        kind: 'app' as const,
+        seconds: app.totalSeconds,
+        offTask: isOffTaskCategory(app.category),
+        children: [],
+        app,
+      })),
+    brief,
+  )
+
+  // The same window/page title can arrive several times (a terminal retitling
+  // itself, a page reopened); it is one thing, shown once (DEV-272). Dedupe on
+  // the title's letters and digits so "⠿ Traycer" and "Traycer" collapse.
+  const seenArtifactTitles = new Set<string>()
+  const dedupedArtifacts = block.topArtifacts.filter((artifact) => {
+    const key = (artifact.displayTitle ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+    if (!key || seenArtifactTitles.has(key)) return false
+    seenArtifactTitles.add(key)
+    return true
+  })
+
+  const artifactRows: DetailRowNode[] = partitionBrief(dedupedArtifacts.slice(0, 8).map((artifact) => {
     const pageRef = artifact as PageRef
     return {
       key: `art:${artifact.id}`,
-      kind: 'artifact',
+      kind: 'artifact' as const,
       seconds: artifact.totalSeconds,
       offTask: kindForDomain(artifact.host) === 'leisure',
       children: [],
@@ -89,22 +144,22 @@ export function buildDetailRowTree(block: WorkContextBlock): DetailRowTree {
         pageRef.canonicalBrowserId,
       ),
     }
-  })
+  }), brief)
 
   // Sites already represented by an artifact row are not repeated.
   const artifactHosts = new Set(block.topArtifacts.map((a) => a.host?.toLowerCase()).filter(Boolean) as string[])
-  const siteRows: DetailRowNode[] = block.websites
+  const siteRows: DetailRowNode[] = partitionBrief(block.websites
     .filter((site) => !artifactHosts.has(site.domain.toLowerCase()))
     .slice(0, 8)
     .map((site) => ({
       key: `site:${site.domain}`,
-      kind: 'site',
+      kind: 'site' as const,
       seconds: site.totalSeconds,
       offTask: kindForDomain(site.domain) === 'leisure',
       children: [],
       site,
       ownerKey: ownerKeyFor(site.browserBundleId, site.canonicalBrowserId),
-    }))
+    })), brief)
 
   // Nest each on-task site/page/file under the app it happened in; rows whose
   // app isn't listed stay top-level. Off-task rows keep flowing to detours.
@@ -145,5 +200,5 @@ export function buildDetailRowTree(block: WorkContextBlock): DetailRowTree {
   ].sort((a, b) => b.seconds - a.seconds)
   const detourSeconds = detours.reduce((sum, row) => sum + row.seconds, 0)
 
-  return { evidence, detours, detourSeconds }
+  return { evidence, detours, detourSeconds, briefCount: brief.count, briefSeconds: brief.seconds }
 }

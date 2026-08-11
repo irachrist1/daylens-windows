@@ -115,6 +115,50 @@ const dynamicImport = new Function('specifier', 'return import(specifier)') as (
 
 let loadPromise: Promise<SemanticEmbedderResult> | null = null
 let testFactory: (() => SemanticEmbedderResult | Promise<SemanticEmbedderResult>) | null = null
+let workerFactory: (() => Promise<SemanticEmbedderResult>) | null = null
+
+/**
+ * Install an out-of-process transport for embedding (the Electron main process
+ * routes inference to the embed-worker subprocess so the UI thread never runs
+ * ONNX). Contexts that never install one — the worker itself, the MCP server,
+ * tests — keep the in-process pipeline.
+ */
+export function setSemanticEmbedderWorkerTransport(
+  factory: (() => Promise<SemanticEmbedderResult>) | null,
+): void {
+  workerFactory = factory
+  loadPromise = null
+}
+
+// ONNX attention buffers grow with batch_size × padded_len², and the tokenizer
+// pads every text in a call to the longest one. A batch of short window titles
+// plus one long URL therefore allocates gigabytes (observed: >1 GB RSS and a
+// multi-hour allocation stall on the Electron main thread) where the same
+// texts grouped by length need a few MB. Sub-batching by length keeps every
+// call's cost bounded; padding is attention-masked so the vectors are
+// identical to a single-call embed.
+const SUB_BATCH_COST_LIMIT = 1_000_000 // ≈ count × paddedTokens², tokens ≤ chars
+
+export function planEmbedSubBatches(lengths: readonly number[]): number[][] {
+  const order = lengths.map((_, index) => index).sort((a, b) => lengths[a] - lengths[b])
+  const subBatches: number[][] = []
+  let current: number[] = []
+  let currentMax = 0
+  for (const index of order) {
+    // Tokens are bounded by the model's 512 max and never exceed char count.
+    const estTokens = Math.max(1, Math.min(lengths[index], 512))
+    const nextMax = Math.max(currentMax, estTokens)
+    if (current.length > 0 && (current.length + 1) * nextMax * nextMax > SUB_BATCH_COST_LIMIT) {
+      subBatches.push(current)
+      current = []
+      currentMax = 0
+    }
+    current.push(index)
+    currentMax = Math.max(currentMax, estTokens)
+  }
+  if (current.length > 0) subBatches.push(current)
+  return subBatches
+}
 
 /** Test seam: substitute a fixture embedder (or a failure) for the real
  *  model pipeline. Pass null to restore the real loader. */
@@ -134,6 +178,8 @@ async function loadReal(): Promise<SemanticEmbedderResult> {
       detail: `Pinned model artifact not found under ${asset.directory} — run \`npm run models:semantic\` (or reinstall Daylens) to restore it.`,
     }
   }
+
+  if (workerFactory) return workerFactory()
 
   let transformers: Record<string, unknown>
   try {
@@ -173,14 +219,16 @@ async function loadReal(): Promise<SemanticEmbedderResult> {
       dims: SEMANTIC_EMBEDDING_DIMS,
       async embed(texts) {
         if (texts.length === 0) return []
-        // MiniLM uses mean pooling; normalize so cosine distance is exact.
-        const tensor = await extractor(texts, { pooling: 'mean', normalize: true })
-        const vectors: Float32Array[] = []
-        for (let index = 0; index < texts.length; index += 1) {
-          const offset = index * SEMANTIC_EMBEDDING_DIMS
-          vectors.push(new Float32Array(tensor.data.slice(offset, offset + SEMANTIC_EMBEDDING_DIMS)))
+        const vectors = new Array<Float32Array>(texts.length)
+        for (const subBatch of planEmbedSubBatches(texts.map((text) => text.length))) {
+          // MiniLM uses mean pooling; normalize so cosine distance is exact.
+          const tensor = await extractor(subBatch.map((index) => texts[index]), { pooling: 'mean', normalize: true })
+          for (const [position, index] of subBatch.entries()) {
+            const offset = position * SEMANTIC_EMBEDDING_DIMS
+            vectors[index] = new Float32Array(tensor.data.slice(offset, offset + SEMANTIC_EMBEDDING_DIMS))
+          }
+          tensor.dispose?.()
         }
-        tensor.dispose?.()
         return vectors
       },
     }
@@ -200,10 +248,12 @@ export function loadSemanticEmbedder(): Promise<SemanticEmbedderResult> {
   if (loadPromise) return loadPromise
   const attempt = (testFactory ? Promise.resolve().then(testFactory) : loadReal()).then(
     (result) => {
-      // Cache success and hard failures; a missing artifact may be restored
-      // while the app runs, so that case re-checks on the next call (the
-      // check is a handful of fs.existsSync calls, not a model load).
-      if (!result.ok && result.reason === 'model-missing' && loadPromise === attempt) {
+      // Cache success; failures re-check on the next call. A missing artifact
+      // may be restored while the app runs (the re-check is a handful of
+      // fs.existsSync calls), and a worker-transport failure is transient —
+      // the subprocess respawns. Only a runtime that cannot load
+      // transformers.js at all stays failed for the process lifetime.
+      if (!result.ok && result.reason !== 'runtime-missing' && loadPromise === attempt) {
         loadPromise = null
       }
       return result

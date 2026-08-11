@@ -58,9 +58,24 @@ export function normalizeAppNameKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
 
+// A reverse-DNS bundle id sometimes reaches display when no catalog entry or
+// OS name exists ("com.exafunction.windsurf"). A person should read the app's
+// name, not its identifier: use the last meaningful segment.
+const REVERSE_DNS_RE = /^(?:com|org|net|io|co|dev|app|ai|id)\.[a-z0-9.-]+$/i
+const GENERIC_BUNDLE_TAIL = new Set(['app', 'desktop', 'mac', 'macos', 'client', 'electron'])
+
+function bundleIdDisplayStem(value: string): string {
+  const segments = value.split('.').filter(Boolean)
+  for (let index = segments.length - 1; index >= 1; index--) {
+    if (!GENERIC_BUNDLE_TAIL.has(segments[index].toLowerCase())) return segments[index]
+  }
+  return segments[segments.length - 1] ?? value
+}
+
 export function formatDisplayAppName(rawName: string): string {
   const baseName = (rawName.split(/[\\/]/).pop() ?? rawName).trim()
-  const stripped = baseName.replace(/\.(exe|app|lnk)$/i, '')
+  const debundled = REVERSE_DNS_RE.test(baseName) ? bundleIdDisplayStem(baseName) : baseName
+  const stripped = debundled.replace(/\.(exe|app|lnk)$/i, '')
   const spaced = stripped
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')

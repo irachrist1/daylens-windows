@@ -11,3 +11,12 @@
 
 4. **Keep the Linear board truthful.**
    Implementation work is claimed from the Todo column of the Daylens Version 2 project in Linear and follows the delivery loop in that project's description. Before starting, confirm the issue is in Todo — Backlog means an open blocker or an unaccepted specification, and Backlog issues are never worked. Whenever you notice an issue reached Done, promote every issue it was blocking that now has zero open blockers and an accepted specification from Backlog to Todo. If you cannot reach Linear, say so and stop rather than proceeding untracked.
+
+5. **Don't invent limits.**
+   Any number that changes what the user experiences — a max block length, a time threshold, a batch cap — is a product decision. Ask me; never hardcode a guess.
+
+6. **Never fail silently.**
+   If the user clicks something and it fails, the UI says so. No empty catch blocks on user actions.
+
+7. **AGENTS.md, CLAUDE.md, and all documentation are mine.**
+   You may fix factual errors in ordinary docs and must list every doc edit in the PR description. Never edit AGENTS.md or CLAUDE.md directly — propose changes in chat.

@@ -13,6 +13,8 @@
     "com.operasoftware.Opera": "opera", "opera.exe": "opera",
     "com.vivaldi.Vivaldi": "vivaldi", "vivaldi.exe": "vivaldi",
     "cursor": "cursor", "cursor.exe": "cursor",
+    "com.exafunction.windsurf": "windsurf", "windsurf": "windsurf",
+    "windsurf.exe": "windsurf",
     "com.microsoft.VSCode": "vscode", "code.exe": "vscode",
     "com.apple.dt.Xcode": "xcode", "xcode.exe": "xcode",
     "com.apple.Terminal": "terminal",
@@ -128,6 +130,7 @@
     "vivaldi": { "displayName": "Vivaldi", "defaultCategory": "browsing", "capabilities": ["browser"] },
 
     "cursor": { "displayName": "Cursor", "defaultCategory": "development" },
+    "windsurf": { "displayName": "Windsurf", "defaultCategory": "development" },
     "vscode": { "displayName": "Visual Studio Code", "defaultCategory": "development" },
     "xcode": { "displayName": "Xcode", "defaultCategory": "development" },
     "terminal": { "displayName": "Terminal", "defaultCategory": "development" },

@@ -36,3 +36,58 @@ export function calendarCardHeights(spans: LayoutBlockSpan[], minHeight: number)
     return floored
   })
 }
+
+export interface LaneItem {
+  start: number
+  end: number
+}
+
+export interface LanePlacement {
+  // 0-based column index within the item's overlap cluster.
+  lane: number
+  // Number of columns the cluster spans — the divisor for the item's width.
+  lanes: number
+}
+
+// Google-Calendar column layout: items that overlap in time are placed
+// side by side in the fewest columns that keep them from covering each other,
+// so an event over a block reads as two adjacent cards, both clickable. A
+// maximal run of transitively-overlapping items forms one cluster; every item
+// in it shares the same column count so their widths line up. Returns one
+// placement per input item, in input order.
+export function assignLanes(items: LaneItem[]): LanePlacement[] {
+  const placement: LanePlacement[] = items.map(() => ({ lane: 0, lanes: 1 }))
+  const order = items
+    .map((item, index) => ({ index, start: item.start, end: item.end }))
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+
+  let cluster: number[] = []
+  let clusterEnd = -Infinity
+  let columnEnds: number[] = []
+
+  const closeCluster = () => {
+    const lanes = Math.max(1, columnEnds.length)
+    for (const original of cluster) placement[original].lanes = lanes
+    cluster = []
+    columnEnds = []
+    clusterEnd = -Infinity
+  }
+
+  for (const item of order) {
+    // A start at or after every active end means this item overlaps nothing in
+    // the current cluster — the cluster is complete.
+    if (cluster.length > 0 && item.start >= clusterEnd) closeCluster()
+    let lane = columnEnds.findIndex((end) => end <= item.start)
+    if (lane === -1) {
+      lane = columnEnds.length
+      columnEnds.push(item.end)
+    } else {
+      columnEnds[lane] = item.end
+    }
+    placement[item.index].lane = lane
+    cluster.push(item.index)
+    clusterEnd = Math.max(clusterEnd, item.end)
+  }
+  if (cluster.length > 0) closeCluster()
+  return placement
+}

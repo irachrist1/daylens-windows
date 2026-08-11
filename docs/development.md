@@ -6,6 +6,7 @@ Changes begin with understanding and end with explicit acceptance.
 
 Read the smallest relevant set:
 
+0. [What actually blocks V2](V2-SHIP-PRIORITIES.md) — the user-facing failures that must ship first, and the rule that every change is graded against the acceptance dossier, not a convenient ticket.
 1. [Product direction](product/product.md) for the product promise and boundaries.
 2. [V2 direction](product/v2.md) for accepted scope, sequencing, and technical boundaries.
 3. The relevant file under `docs/specs` for expected behavior.
@@ -102,6 +103,8 @@ npm run contract:check
 ```
 
 The verification commands are offline and deterministic. Run the boundary-specific web, billing, and packaged-runtime checks described in [Testing and verification](hygiene/testing.md) when those surfaces change. Some quality evaluations call paid providers and require explicit approval. See [Benchmarks](hygiene/benchmarks.md).
+
+For hands-on inspection, the headless CLI (`./daylens`) drives timeline, apps, wrapped, chat, and analyze from the terminal through the same code paths as the renderer, against an isolated snapshot of the real database. For day-quality work, `npm run eval:days` scores real days against journal ground truth (local-only; `--judge` adds an LLM shape judge, `--strict` gates on thresholds). Both are described in [Testing and verification](hygiene/testing.md).
 
 For changes that can alter an ordinary reconstructed day, also run the private local `npm run verify:real-day` benchmark against an accepted snapshot. Use `npm run verify:real-day:desktop -- --date YYYY-MM-DD --user-data ABSOLUTE_ISOLATED_USER_DATA --output ABSOLUTE_PRIVATE_OUTPUT` when renderer, IPC, correction, deletion, search, Apps, or AI presentation changes. These commands refuse CI and never belong in a shared fixture or pull request artifact.
 

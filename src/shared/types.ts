@@ -410,6 +410,30 @@ export interface DayTimelinePayload {
   dayEntities?: DayWrapEntity[]
 }
 
+/** What a manual Analyze / Re-analyze run actually did, so the UI reports the
+ *  real outcome instead of a fixed success message (DEV-231). */
+export interface RebuildTimelineDayResult {
+  payload: DayTimelinePayload
+  changed: boolean
+  merged: boolean
+  mergedCount: number
+  relabeled: number
+  attempted: number
+  failed: number
+  /** Why the failed blocks could not be named (first distinct reason), in words
+   *  the person can act on — so the UI never reports a bare count (DEV-278). */
+  failureReason?: string | null
+}
+
+/** A progress tick streamed while a day is analyzed (DEV-270). `stage` names
+ *  the phase the pipeline is actually in; `done`/`total` are populated during
+ *  the per-block naming phase so the UI can show real progress, not a spinner. */
+export interface TimelineAnalyzeProgress {
+  stage: 'preparing' | 'merging' | 'naming' | 'finishing'
+  done: number
+  total: number
+}
+
 /** One scheduled calendar event as the Timeline day view shows it (DEV-189).
  *  `attendance` is honest: 'matched' means captured meeting-app evidence OR
  *  the person's explicit confirmation supports it (a block id is present only
@@ -427,6 +451,48 @@ export interface TimelineScheduledMeeting {
   attendance: 'matched' | 'calendar_only'
   marked: 'attended' | 'skipped' | 'moved' | 'unrelated' | null
   matchedBlockId: string | null
+}
+
+// One thing the day-analysis agent could not settle from evidence and that
+// would materially change the account — surfaced to the person as an
+// answer-or-skip question (the interpretation agent's clarification contract).
+// Answering writes a durable correction (a block label, an attendance mark);
+// skipping is remembered so the same question is not re-asked.
+export interface TimelineClarificationOption {
+  id: string
+  label: string
+}
+
+export interface TimelineClarification {
+  /** Stable across reads (date + kind + block/event identity) so a skip or
+   *  answer de-duplicates the same question. */
+  id: string
+  kind: 'unnamed-block' | 'unconfirmed-meeting'
+  date: string
+  /** The whole span the question is about, for display. */
+  timeRange: string
+  question: string
+  /** Candidate answers drawn from the block's own evidence; the UI always adds
+   *  a free-text option and a Skip. */
+  options: TimelineClarificationOption[]
+  /** Present for 'unnamed-block'. */
+  blockId?: string
+  /** Present for 'unconfirmed-meeting' — the attendance-mark identity. */
+  eventKey?: string
+  meetingTitle?: string
+}
+
+export interface TimelineClarificationAnswer {
+  id: string
+  kind: 'unnamed-block' | 'unconfirmed-meeting'
+  /** 'skip' remembers the dismissal; 'answer' applies the durable correction. */
+  action: 'answer' | 'skip'
+  blockId?: string
+  /** For an answered 'unnamed-block': the chosen or typed activity label. */
+  label?: string
+  eventKey?: string
+  /** For an answered 'unconfirmed-meeting'. */
+  attendance?: 'attended' | 'skipped' | 'moved' | 'unrelated'
 }
 
 export type HistoryDayPayload = DayTimelinePayload
@@ -596,7 +662,19 @@ export interface FocusReflectionSavePayload {
 
 export interface AIDaySummaryResult {
   summary: string
-  questionSuggestions: string[]
+  /** True when this is the deterministic factual fallback shown because the AI
+   *  recap could not be generated (unavailable / timed out / unparseable) — so
+   *  the UI can say so plainly instead of passing a template off as the recap
+   *  (DEV-270/275: nothing fails silently). Absent on a real AI recap and on the
+   *  empty-day line. */
+  degraded?: boolean
+  /** Why the AI recap could not be generated, in words the person can act on
+   *  (provider error, timeout, unreadable reply). Only set when degraded. */
+  degradedReason?: string
+  /** The failure is a wall only the person can clear — billing, credit, auth,
+   *  a model that no longer exists. Retrying cannot succeed until they act, so
+   *  the panel must not offer one as if it might. */
+  degradedNeedsAction?: boolean
 }
 
 export type AIAnswerKind =
@@ -1464,6 +1542,13 @@ export interface WorkflowPattern {
   lastSeenAt: number
 }
 
+// Product decision (DEV-239): a domain needs at least this much credited
+// foreground time in the selected range to earn its own row in the browser
+// breakdown. Anything under it is a drive-by (a redirect hop, a 1-2 second
+// glance) and folds into one "Everything else" line, keeping its seconds in
+// the reconciled total without cluttering the list. Default: 10 seconds.
+export const MIN_DOMAIN_ROW_SECONDS = 10
+
 export interface AppDetailPayload {
   canonicalAppId: string
   displayName: string
@@ -1494,6 +1579,17 @@ export interface AppDetailPayload {
       visitCount: number
       pages: PageRef[]
     }>
+    /**
+     * Domains whose credited time fell under the minimum-row threshold,
+     * folded into one line so drive-by 1-2 second visits never earn their
+     * own rows. Included in attributedSeconds; the reconciliation is now
+     * Σ domain.totalSeconds + everythingElse.totalSeconds = attributedSeconds.
+     */
+    everythingElse?: {
+      totalSeconds: number
+      domainCount: number
+      visitCount: number
+    }
   }
   blockAppearances: Array<{
     blockId: string
@@ -1553,6 +1649,7 @@ export type AIJobType =
   | 'search_intent'
   | 'memory_write'
   | 'weekly_brief'
+  | 'interpretation_agent'
 
 export interface AIWrappedNarrative {
   /** The hook: a one-line read on the shape of the day. Always present, and
@@ -1706,6 +1803,13 @@ export interface GitRepoActivity {
   messages: string[]
   firstCommitClock: string | null
   lastCommitClock: string | null
+  /** How the commits spread across the day, by local part-of-day. Absent on
+   *  rows stored before the field existed. */
+  commitHourBuckets?: { overnight: number; morning: number; afternoon: number; evening: number }
+  /** Of commitCount, how many landed under an agent-runner author identity
+   *  (Claude, Cursor Agent, …) — the user's output via agents, never a
+   *  teammate's (unknown human authors are excluded entirely). */
+  agentCommitCount?: number
 }
 
 export interface GitPRActivity {
@@ -1784,62 +1888,6 @@ export interface MeetingNotesSignal {
   /** The source the notes came from ("Granola", "Notion"). */
   app: string
   notes: MeetingNoteSignal[]
-}
-
-// ─── Connectors (connectors.md, DEV-186) ────────────────────────────────────
-// The connected-sources foundation. Every provider registers a manifest; the
-// contract is proven by a fake provider in the test suite (the ticket's
-// deliverable) and real adapters arrive with DEV-188+, flipping `available`.
-// The renderer sees ONLY this listing shape — credentials, cursors, and raw
-// provider errors never cross the IPC boundary (spec: "The interface does not
-// display raw tokens, internal cursors, or provider errors that reveal
-// secrets").
-
-export type ConnectorId =
-  | 'google_calendar'
-  | 'outlook_calendar'
-  | 'github'
-  | 'linear'
-  | 'granola'
-
-export type ConnectorAuthState = 'disconnected' | 'connected' | 'needs_attention'
-
-/** One connector as Settings → Connections shows it. */
-export interface ConnectorListing {
-  id: ConnectorId
-  displayName: string
-  providerKind: 'calendar' | 'code' | 'issues' | 'meetings'
-  /** direct = Daylens-owned adapter; brokered = via an intermediary;
-   *  local = reads a file/store on this machine, no account at all. */
-  integration: 'direct' | 'brokered' | 'local'
-  authKind: 'oauth' | 'token' | 'local_file'
-  /** Plain-language "what data this brings" copy shown before connecting. */
-  whatItBrings: string
-  /** Exact read-only scopes, each with plain-language meaning. */
-  scopes: Array<{ scope: string; grants: string }>
-  /** Bounded initial-sync lookback, for honest progress copy. */
-  lookbackDays: number
-  /** True when a working adapter ships today; false = listed for the wave. */
-  available: boolean
-  authState: ConnectorAuthState
-  /** Human account/source label ("work.ics", "you@example.com"). Never a path, token, or cursor. */
-  accountLabel: string | null
-  connectedAt: number | null
-  lastSyncAt: number | null
-  /** Sanitized error summary — never a provider body that could carry secrets. */
-  lastSyncError: string | null
-  nextRetryAt: number | null
-  itemsIngested: number
-}
-
-/** What a connect/sync action reports back to Settings. `error` is always a
- *  sanitized summary — never a provider body that could carry secrets. */
-export interface ConnectorSyncSummary {
-  status: 'ok' | 'blocked_consent' | 'blocked_disabled' | 'failed' | 'not_connected'
-  ingested: number
-  quarantined: number
-  tombstoned: number
-  error?: string
 }
 
 // ─── Full-history export (privacy-retention-and-sync.md §Export, DEV-196) ────
@@ -1923,6 +1971,13 @@ export type HistoryExportRunResult =
       incompleteSections: string[]
     }
 
+/** DEV-248: result of the per-slide wrap export. `canceled` means the person
+ *  dismissed the folder picker; otherwise every requested slide was written
+ *  (a partial write cleans up after itself and rejects instead). */
+export type WrapSlidesExportResult =
+  | { canceled: true }
+  | { canceled: false; dir: string; files: string[] }
+
 /** The day's external signals, RESOLVED for the wrap writer: sanitized,
  *  humanized, pre-formatted, and stripped of anything the model must never
  *  echo (raw paths, branches, clock times it can't ground). Each block is
@@ -1931,8 +1986,10 @@ export type HistoryExportRunResult =
 export interface DayEnrichment {
   /** What the day PRODUCED, from git + gh. */
   shipped: {
-    /** Commits per repo, humanized folder name, biggest first. */
-    commitsByProject: Array<{ project: string; commits: number }>
+    /** Commits per repo, humanized folder name, biggest first. `spread` is a
+     *  pre-formatted part-of-day telling ("14 overnight, 21 through the
+     *  morning") — null when the stored row predates commit-hour buckets. */
+    commitsByProject: Array<{ project: string; commits: number; spread?: string | null; viaAgents?: number | null }>
     /** Sanitized, humanized commit subjects / PR titles worth naming — never a
      *  raw path or branch (already stripped). Deduped, capped. */
     highlights: string[]
@@ -2283,6 +2340,16 @@ export interface AppSettings {
   aiActiveBlockPreview?: boolean
   aiPromptCachingEnabled?: boolean
   aiSpendSoftLimitUsd?: number
+  /** DEV-228 kill switch: false stops every machine-initiated AI call
+   *  (background and system triggers of background job types) immediately.
+   *  User-initiated calls always run. Default true. */
+  backgroundAiEnabled?: boolean
+  /** DEV-228: each feature's daily spend budget in USD. Applies to every
+   *  feature unless overridden per feature below. Default $0.50. */
+  aiFeatureDailyBudgetUsd?: number
+  /** Per-feature budget overrides, keyed by the user-facing feature name
+   *  from shared/aiFeatures.ts (the same names the Usage screen shows). */
+  aiFeatureBudgetOverridesUsd?: Record<string, number>
   aiRedactFilePaths?: boolean
   aiRedactEmails?: boolean
   allowThirdPartyWebsiteIconFallback?: boolean // false = keep website icons local/browser-cache only
@@ -2329,11 +2396,6 @@ export interface AppSettings {
   // MCP servers ("mcp:notion") and focus apps ("focus:Session"). Discovery
   // is free; nothing is called until enabled AND the enrichment is wired up.
   enrichmentSources?: Record<string, boolean>
-  // Connected sources master switch (DEV-186). Default ON, but it only opens
-  // the gate together with current capture consent — turning it OFF stops
-  // every connector sync and ingest immediately, same shape as the capture
-  // consent gate. Per-connector connect/disconnect lives on the connection.
-  connectedSourcesEnabled?: boolean
   // Screen-context experiment (DEV-197). Consent is separate from capture,
   // sync, browser, and connector consent, and is offered ONLY from the
   // experiment setup — enabling normal tracking never sets it. Absent means
@@ -2345,6 +2407,14 @@ export interface AppSettings {
   // experiment status so the person can see exactly when they agreed.
   // Cleared on revoke.
   screenContextConsentAt?: number
+  // Tier-2 agent capability (docs/north-star/context-agent.md): may the chat
+  // agent read Granola meeting notes from the local cache? On by default —
+  // turning it off makes read_meeting_notes refuse honestly.
+  granolaAccessEnabled?: boolean
+  // Consent-gated agent capability: may the chat agent run allowlisted
+  // read-only terminal commands (run_command)? OFF by default; first use in a
+  // session additionally raises the in-chat permission card.
+  terminalAccessEnabled?: boolean
 }
 
 // ─── Screen-context experiment surface (DEV-198) ─────────────────────────────
@@ -2521,6 +2591,19 @@ export interface BillingUsageJobSummary {
   costUsd: number | null
 }
 
+/** DEV-228: what the Usage screen's Background AI card shows — the kill
+ *  switch state plus each feature's daily budget and spend so far today. */
+export interface SpendGuardrailsReport {
+  backgroundAiEnabled: boolean
+  defaultDailyBudgetUsd: number
+  features: Array<{
+    feature: string
+    budgetUsd: number
+    spentTodayUsd: number
+    exhausted: boolean
+  }>
+}
+
 export interface BillingUsageHourlyPoint {
   hour: number
   label: string
@@ -2637,13 +2720,38 @@ interface LinuxDesktopDiagnostics {
   secretServiceReachable: boolean | null
 }
 
+/** DEV-261: present while the recorder has stalled enough this session that
+ *  the day probably has holes — drives the persistent in-app banner. Null or
+ *  absent once stalls have stopped long enough to trust recording again. */
+export interface RecorderStallBannerState {
+  stallCount: number
+  longestStallSeconds: number
+}
+
+/** DEV-229: the permission watcher's live verdict on whether capture can
+ *  actually read window titles — the OS grant flag AND a real-read proxy
+ *  (titled share of recently persisted samples). 'blind' = flag revoked or
+ *  grant silently dead; 'degraded' = under half of samples titled;
+ *  'waiting' = too few samples to judge. */
+export interface CaptureVerificationState {
+  status: 'healthy' | 'degraded' | 'blind' | 'waiting'
+  axTrusted: boolean
+  recentSamples: number
+  recentSamplesWithTitle: number
+  /** DEV-261: repeated main-thread stalls ride the same banner channel. */
+  recorderStall?: RecorderStallBannerState | null
+  checkedAt: number
+}
+
 export interface TrackingDiagnosticsPayload {
   platform: NodeJS.Platform
   trackingStatus: TrackingStatusDiagnostics
   captureHealth: {
     permissions: TrackingPermissionDetails
     windowTitles: {
-      status: 'healthy' | 'waiting' | 'missing'
+      // 'degraded' = titles are arriving but on under half of samples —
+      // capture works, badly (DEV-229's "most samples carry titles" bar).
+      status: 'healthy' | 'degraded' | 'waiting' | 'missing'
       recentSamples: number
       recentSamplesWithTitle: number
       lastCapturedAt: number | null
@@ -2840,6 +2948,13 @@ export const IPC = {
     GET_HISTORY_DAY: 'db:get-history-day',
     GET_TIMELINE_DAY: 'db:get-timeline-day',
     REBUILD_TIMELINE_DAY: 'db:rebuild-timeline-day',
+    // Progress ticks streamed while REBUILD_TIMELINE_DAY runs (DEV-270), so the
+    // Analyze button shows what the system is actually doing, not a blank spinner.
+    ANALYZE_PROGRESS: 'db:analyze-progress',
+    // The material answer-or-skip questions the day-analysis agent has for a day,
+    // and the channel to answer or dismiss them (DEV-247/270 clarification).
+    GET_DAY_CLARIFICATIONS: 'db:get-day-clarifications',
+    RESOLVE_DAY_CLARIFICATION: 'db:resolve-day-clarification',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SUMMARIES_FOR_DATE: 'db:get-app-summaries-for-date',
     GET_ALL_APPS_FOR_LABELING: 'db:get-all-apps-for-labeling',
@@ -2887,7 +3002,6 @@ export const IPC = {
     APPLY_CORRECTION: 'db:apply-correction',
     UNDO_CORRECTION: 'db:undo-correction',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
-    GET_RECAP_RANGE: 'db:get-recap-range',
     GET_TIMELINE_RANGE_BLOCKS: 'db:get-timeline-range-blocks',
   },
   DEBUG: {
@@ -2960,6 +3074,7 @@ export const IPC = {
     EXPORT_USAGE_CSV: 'billing:export-usage-csv',
     REFRESH: 'billing:refresh',
     GET_PAYMENTS: 'billing:get-payments',
+    GET_SPEND_GUARDRAILS: 'billing:get-spend-guardrails',
   },
   PROJECTIONS: {
     INVALIDATED: 'projections:invalidated',
@@ -2979,6 +3094,10 @@ export const IPC = {
     GET_PERMISSION_STATE: 'tracking:get-permission-state',
     GET_PERMISSION_DETAILS: 'tracking:get-permission-details',
     REQUEST_SCREEN_PERMISSION: 'tracking:request-screen-permission',
+    // DEV-229: main-process permission watcher — a pull for the current
+    // verdict plus a push channel fired on every status change.
+    GET_CAPTURE_VERIFICATION: 'tracking:get-capture-verification',
+    CAPTURE_VERIFICATION_CHANGED: 'tracking:capture-verification-changed',
     // Delete already-captured history for an excluded app/site.
     DELETE_APP_HISTORY: 'tracking:delete-app-history',
     DELETE_SITE_HISTORY: 'tracking:delete-site-history',
@@ -3027,6 +3146,7 @@ export const IPC = {
     LIST: 'entities:list',
     DETAIL: 'entities:detail',
     SUGGESTED_MERGES: 'entities:suggested-merges',
+    MERGE_ALL_DUPLICATES: 'entities:merge-all-duplicates',
     PREVIEW_CORRECTION: 'entities:preview-correction',
     APPLY_CORRECTION: 'entities:apply-correction',
     UNDO_CORRECTION: 'entities:undo-correction',
@@ -3055,17 +3175,6 @@ export const IPC = {
     LIST_DISCLOSURES: 'file-access:list-disclosures',
     PICK_PATH: 'file-access:pick-path',
   },
-  CONNECTORS: {
-    LIST: 'connectors:list',
-    // Lifecycle IPC (DEV-188, with the first connectable provider). CONNECT
-    // runs the provider's authorization flow and first sync; DISCONNECT
-    // carries the person's explicit keep-or-delete choice for imported data.
-    CONNECT: 'connectors:connect',
-    SYNC: 'connectors:sync',
-    DISCONNECT: 'connectors:disconnect',
-    /** Main → renderer: connect-phase progress ({ connectorId, phase }). */
-    PROGRESS: 'connectors:progress',
-  },
   EXPORT: {
     // Full-history export (DEV-196). PLAN previews what an export would
     // contain; RUN streams the database into a folder the person chose and
@@ -3075,6 +3184,9 @@ export const IPC = {
     RUN: 'export:run',
     VERIFY: 'export:verify',
     PROGRESS: 'export:progress',
+    // DEV-248: the wrap deck exports one PNG per slide into a folder the
+    // person picks once. One dialog, many files, never a glued mega-image.
+    WRAP_SLIDES: 'export:wrap-slides',
   },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',

@@ -133,6 +133,20 @@ function insertCanonicalFocusDay(db: Database.Database): void {
   insert.run(endTime, endTime * 1_000_000, 'app_deactivated', 'com.todesktop.cursor', 'Cursor', 'router.ts - daylens - Cursor')
 }
 
+function insertFocusEvent(
+  db: Database.Database,
+  tsMs: number,
+  eventType: string,
+  app: { bundleId: string | null; appName: string | null; title?: string | null },
+): void {
+  db.prepare(`
+    INSERT INTO focus_events (
+      ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+      window_title, url, page_title, source, confidence, platform, schema_ver
+    ) VALUES (?, ?, ?, ?, ?, 4242, ?, NULL, NULL, 'nsworkspace_event', 'observed', 'darwin', 2)
+  `).run(tsMs, tsMs * 1_000_000, eventType, app.bundleId, app.appName, app.title ?? null)
+}
+
 function labelsFor(db: Database.Database): string[] {
   return getTimelineDayPayload(db, TEST_DATE).blocks.map((block) => block.label.current)
 }
@@ -323,29 +337,45 @@ test('a sub-30-minute block with no related neighbour keeps its own block', () =
   db.close()
 })
 
-test('highly coherent blocks split only when they exceed the coherent maximum duration', () => {
+test('a long continuous stretch is one block — no duration ceiling', () => {
   const db = createDb()
-  // A 4-hour single-title stretch stays ONE calendar block under the 5-hour
-  // coherent ceiling ("1, 2, 3, even 5 hours — never a string of slices").
+  // A 4-hour single-title stretch is one calendar block. Decided behavior
+  // (DEV-232): a block ends only on a real absence, sleep, idle, a meeting, or a
+  // kind change — never because it grew "too long".
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 240 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
-  assert.equal(blocks.length, 1, `a 4h coherent stretch stays one block; got ${blocks.length}`)
+  assert.equal(blocks.length, 1, `a 4h continuous stretch stays one block; got ${blocks.length}`)
   db.close()
 })
 
-test('a coherent stretch beyond the 5-hour ceiling still splits', () => {
+test('a stretch past the old 5-hour ceiling still stays one block', () => {
   const db = createDb()
+  // Two contiguous 170-minute halves of the same work — 5h40m with no real gap.
+  // Under the old ceiling this split; with no ceiling it is one continuous block.
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 170 })
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 170, durationMinutes: 170 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.ok(blocks.length >= 2, `expected maximum duration split; got ${blocks.length}`)
-  assert.ok(
-    blocks.every((block) => block.endTime - block.startTime <= 300 * 60_000),
-    `expected every block at or below 300 minutes; got ${blocks.map((block) => Math.round((block.endTime - block.startTime) / 60_000)).join(', ')}`,
-  )
+  assert.equal(blocks.length, 1, `a continuous 5h40m stretch is one block; got ${blocks.length}: ${blocks.map((b) => Math.round((b.endTime - b.startTime) / 60_000) + 'm').join(', ')}`)
+  db.close()
+})
+
+test('a continuous varied dev morning past 3h is one block (DEV-232)', () => {
+  const db = createDb()
+  // The reported bug: a real morning of building — same coding session, varied
+  // window titles across the same editor, no real gap — was chopped at the old
+  // 3-hour base ceiling into fragments named after whichever slice dominated.
+  // Varied titles mean it never qualified for the "highly coherent" 5h lift, so
+  // the base ceiling always won. With no ceiling it stays one block.
+  const files = ['workBlocks.ts', 'analyzeDay.ts', 'Timeline.tsx', 'projections.ts', 'migrations.ts', 'queries.ts', 'ipc.ts', 'types.ts']
+  files.forEach((file, index) => {
+    insertSession(db, { title: `${file} - daylens - Cursor`, bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: index * 30, durationMinutes: 30 })
+  })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(blocks.length, 1, `a continuous 4h coding morning is one block; got ${blocks.length}: ${blocks.map((b) => `${b.label.current} ${Math.round((b.endTime - b.startTime) / 60_000)}m`).join(' | ')}`)
   db.close()
 })
 
@@ -408,8 +438,9 @@ test('gaps classify by their activity-event cause', () => {
     gaps.some((gap) => gap.kind === 'locked' && gap.startTime === localMs(11, 0)),
     `lock-covered gap should read Locked: ${JSON.stringify(gaps)}`,
   )
-  assert.equal(gaps.find((gap) => gap.kind === 'asleep')?.label, 'Asleep')
-  assert.equal(gaps.find((gap) => gap.kind === 'locked')?.label, 'Locked')
+  // Names the machine's state, never the user's whereabouts (see GAP_KIND_LABELS).
+  assert.equal(gaps.find((gap) => gap.kind === 'asleep')?.label, 'Computer asleep')
+  assert.equal(gaps.find((gap) => gap.kind === 'locked')?.label, 'Screen locked')
   db.close()
 })
 
@@ -449,6 +480,16 @@ test('file and project window titles drive labels instead of app names', () => {
 
   assert.match(label, /insightsQueryRouter\.ts|daylens/i)
   assert.notEqual(label, 'Cursor')
+  db.close()
+})
+
+test('a long single-app stretch is named by its evidence, not by the app', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Competitor pricing pages', category: 'research', startMinute: 0, durationMinutes: 90 })
+
+  const [label] = labelsFor(db)
+
+  assert.notEqual(label, 'Google Chrome')
   db.close()
 })
 
@@ -561,7 +602,7 @@ test('a stale, never-processed past day is reconstructed on revisit', () => {
 
   // Revisiting an older, unprocessed day rebuilds it more accurately.
   getTimelineDayPayload(db, TEST_DATE)
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v10'), 'stale unprocessed day should be rebuilt')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v13'), 'stale unprocessed day should be rebuilt')
   db.close()
 })
 
@@ -619,7 +660,7 @@ test('a processed stale day refreshes its category facts in place, without touch
   // too, and stamped so it runs once per heuristic bump.
   const row = db.prepare(`SELECT dominant_category, heuristic_version FROM timeline_blocks WHERE id = ?`).get(blockId) as { dominant_category: string; heuristic_version: string }
   assert.equal(row.dominant_category, 'development')
-  assert.equal(row.heuristic_version, 'timeline-v10')
+  assert.equal(row.heuristic_version, 'timeline-v13')
   db.close()
 })
 
@@ -700,7 +741,7 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   assert.equal(rebuilt.review.state, 'corrected')
   assert.equal(rebuilt.review.source, 'stored_evidence')
   assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v10'), 'stale day should rebuild while preserving correction')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v13'), 'stale day should rebuild while preserving correction')
   db.close()
 })
 
@@ -895,6 +936,49 @@ test('a user merge erases a boundary that survives a rebuild', () => {
   db.close()
 })
 
+test('a settled day whose sessions carry synthetic ids still merges (DEV-233)', () => {
+  const db = createDb()
+  // A past day is served from the derived-session namespace, whose ids are
+  // synthetic negatives. There is no persisted session pair to key a boundary
+  // correction on — which used to fail every merge on a settled day with a false
+  // "This episode is still live" message. The merge must anchor on its span.
+  insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 25, durationMinutes: 25 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 2)
+
+  // Re-key every session into the synthetic (negative) namespace, exactly as a
+  // settled day's projection hands them to the merge.
+  const synthetic = before.map((block) => ({
+    ...block,
+    sessions: block.sessions.map((session, index) => ({ ...session, id: -(index + 1) })),
+  }))
+  assert.ok(synthetic.every((b) => b.sessions.every((s) => s.id < 0)), 'fixture must have no positive session ids')
+
+  mergeTimelineEpisodes(db, TEST_DATE, synthetic)
+
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 1, 'the merge must apply on a settled day')
+
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 1, 'the span-anchored merge must survive a rebuild')
+  db.close()
+})
+
+test('a merge still refuses a block with no evidence at all (live episode)', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 25, durationMinutes: 25 })
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  const emptied = [{ ...before[0], sessions: [] }, before[1]]
+  assert.throws(
+    () => mergeTimelineEpisodes(db, TEST_DATE, emptied),
+    /still live/,
+    'a block with no sessions has nothing to anchor and must say so',
+  )
+  db.close()
+})
+
 test('merging a non-adjacent span absorbs the blocks in between and survives a rebuild', () => {
   const db = createDb()
   // Three distinct browsing topics → three blocks by default. Selecting the
@@ -983,5 +1067,170 @@ test('chat blocks with only app-name evidence read as the category, never the ap
   // floor "Communication" is a better, badge-consistent answer than a blank.
   assert.equal(label, 'Communication')
   assert.notEqual(label?.toLowerCase(), 'whatsapp')
+  db.close()
+})
+
+// ─── Whole-day coverage (the cutover-day collapse) ───────────────────────────
+// The canonical capture era began mid-evening on a real day: legacy
+// app_sessions held 08:42–21:16 and focus_events held 21:16–00:00, and the
+// mixed evidence read dropped every legacy session — an 11.7-hour working day
+// never rendered. Invariant: a day whose sessions tile N hours must produce
+// valid blocks covering that evidence, whatever mix of eras backs it.
+test('a capture-cutover day keeps its whole session coverage in valid blocks', () => {
+  const db = createDb()
+  // Legacy-only morning and afternoon: 09:00–15:00 tiled in near-contiguous
+  // hourly dev sessions (58m each; the 2m lulls stay inside one sitting).
+  for (let hour = 0; hour < 6; hour += 1) {
+    insertSession(db, {
+      title: `work-${hour}.ts - daylens - Ghostty`,
+      bundleId: 'com.mitchellh.ghostty',
+      appName: 'Ghostty',
+      category: 'development',
+      startMinute: hour * 60,
+      durationMinutes: 58,
+    })
+  }
+  // Canonical era from 15:00: contiguous focus events until 18:00, plus a
+  // dual-write legacy duplicate of the first canonical hour.
+  insertFocusEvent(db, localMs(15, 0), 'app_activated', { bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', title: 'npm run dev - daylens - Ghostty' })
+  insertFocusEvent(db, localMs(16, 0), 'app_activated', { bundleId: 'com.todesktop.cursor', appName: 'Cursor', title: 'workBlocks.ts - daylens - Cursor' })
+  insertFocusEvent(db, localMs(16, 0), 'app_deactivated', { bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty' })
+  insertFocusEvent(db, localMs(18, 0), 'app_deactivated', { bundleId: 'com.todesktop.cursor', appName: 'Cursor' })
+  insertSession(db, {
+    title: 'npm run dev - daylens - Ghostty',
+    bundleId: 'com.mitchellh.ghostty',
+    appName: 'Ghostty',
+    category: 'development',
+    startMinute: 6 * 60,
+    durationMinutes: 60,
+  })
+
+  const payload = getTimelineDayPayload(db, TEST_DATE)
+  const sessionSeconds = payload.sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
+  assert.ok(
+    Math.abs(sessionSeconds - 9 * 3600) <= 15 * 60,
+    `sessions must tile ~9h without double counting the dual-write hour; got ${Math.round(sessionSeconds / 60)}m`,
+  )
+  const blocks = payload.blocks
+  assert.ok(blocks.length > 0)
+  const firstStart = Math.min(...blocks.map((block) => block.startTime))
+  const lastEnd = Math.max(...blocks.map((block) => block.endTime))
+  assert.ok(
+    firstStart <= localMs(9, 5),
+    `valid blocks must reach back to the legacy morning; first block starts at +${Math.round((firstStart - localMs(9, 0)) / 60_000)}m`,
+  )
+  assert.ok(
+    lastEnd >= localMs(17, 55),
+    `valid blocks must reach the canonical evening; last block ends ${Math.round((localMs(18, 0) - lastEnd) / 60_000)}m early`,
+  )
+  assert.ok(
+    payload.totalSeconds >= sessionSeconds * 0.9,
+    `valid blocks must track session coverage; blocks hold ${Math.round(payload.totalSeconds / 60)}m of ${Math.round(sessionSeconds / 60)}m tracked`,
+  )
+  db.close()
+})
+
+// ─── Titleless native sessions are first-class evidence (DEFECT: Ghostty) ────
+// A terminal-heavy day whose Ghostty sessions all have empty window titles
+// must still list Ghostty in block evidence with its real seconds. The
+// canonical fold used to let the previous app's trailing deactivation (same
+// timestamp, later id) kill the just-opened Ghostty session; browsers were
+// resurrected by tab events, terminals were not.
+test('a block from titleless Ghostty sessions lists Ghostty in topApps with its real seconds', () => {
+  const db = createDb()
+  insertFocusEvent(db, localMs(9, 0), 'app_activated', { bundleId: 'com.todesktop.cursor', appName: 'Cursor', title: 'workBlocks.ts - daylens - Cursor' })
+  // Activation of titleless Ghostty precedes Cursor's trailing deactivation.
+  insertFocusEvent(db, localMs(9, 5), 'app_activated', { bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', title: null })
+  insertFocusEvent(db, localMs(9, 5), 'app_deactivated', { bundleId: 'com.todesktop.cursor', appName: 'Cursor' })
+  insertFocusEvent(db, localMs(9, 50), 'app_activated', { bundleId: 'com.todesktop.cursor', appName: 'Cursor', title: 'workBlocks.ts - daylens - Cursor' })
+  insertFocusEvent(db, localMs(9, 50), 'app_deactivated', { bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty' })
+  insertFocusEvent(db, localMs(10, 0), 'app_deactivated', { bundleId: 'com.todesktop.cursor', appName: 'Cursor' })
+
+  const payload = getTimelineDayPayload(db, TEST_DATE)
+  const ghosttySessionSeconds = payload.sessions
+    .filter((session) => session.appName === 'Ghostty')
+    .reduce((sum, session) => sum + session.durationSeconds, 0)
+  assert.equal(ghosttySessionSeconds, 45 * 60, 'the titleless Ghostty stretch keeps its real duration')
+
+  const ghosttyTop = payload.blocks
+    .flatMap((block) => block.topApps)
+    .find((app) => app.appName === 'Ghostty')
+  assert.ok(ghosttyTop, 'Ghostty must appear in block evidence')
+  assert.ok(
+    ghosttyTop!.totalSeconds >= 44 * 60,
+    `Ghostty evidence must carry its real seconds; got ${ghosttyTop!.totalSeconds}s`,
+  )
+  assert.ok(
+    payload.totalSeconds >= 55 * 60,
+    `day totals must include the titleless stretch; got ${Math.round(payload.totalSeconds / 60)}m`,
+  )
+  db.close()
+})
+
+// ─── The evidence mint floor (dead-zone phantom blocks) ──────────────────────
+// A real day minted a 72-minute "Building the Daylens app" block from a single
+// spurious activation inside an idle stretch that had opened before the day's
+// sessions began (idle_start 00:34, block 01:47–02:59, lock at 02:59). No
+// floor-sized block may be minted whose span holds under 5 minutes of observed
+// evidence once such a still-open real absence is subtracted.
+test('no block is minted over a dead zone the machine-state ledger marks as absence', () => {
+  const db = createDb()
+  // Idle opens BEFORE the first session and never ends until 11:25 — the
+  // mint floor must see it through the look-back seed.
+  insertActivityEvent(db, 'idle_start', localMs(8, 0))
+  // The phantom: a session whose envelope equals its claimed activity, like a
+  // canonical session extrapolated from one spurious activation event.
+  insertSession(db, {
+    title: 'Daylens',
+    bundleId: 'com.github.Electron',
+    appName: 'Electron',
+    category: 'development',
+    startMinute: 0,
+    durationMinutes: 90,
+  })
+  insertActivityEvent(db, 'idle_end', localMs(11, 25))
+  // Real work after the person came back.
+  insertSession(db, {
+    title: 'workBlocks.ts - daylens - Cursor',
+    bundleId: 'com.todesktop.cursor',
+    appName: 'Cursor',
+    category: 'development',
+    startMinute: 150,
+    durationMinutes: 60,
+  })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.ok(
+    blocks.some((block) => block.startTime >= localMs(11, 30) - 60_000),
+    'the real post-idle work block must exist',
+  )
+  assert.equal(
+    blocks.filter((block) => block.startTime < localMs(10, 31)).length,
+    0,
+    `no block may be minted over the 09:00–10:30 dead zone; got ${blocks.map((b) => `${new Date(b.startTime).toTimeString().slice(0, 5)}-${new Date(b.endTime).toTimeString().slice(0, 5)}`).join(' | ')}`,
+  )
+  db.close()
+})
+
+test('a media-held idle stretch is presence, not a dead zone — the block stays', () => {
+  const db = createDb()
+  insertSession(db, {
+    title: 'Deep Focus Mix - YouTube - Google Chrome',
+    bundleId: 'com.google.Chrome',
+    appName: 'Google Chrome',
+    category: 'entertainment',
+    startMinute: 0,
+    durationMinutes: 90,
+  })
+  // Idle fired three minutes in and held until the end of the video, but
+  // capture marked it held for media playback: presence without input, never
+  // an absence. Were the hold treated as hard idle, observed evidence would
+  // be 3 minutes — under the mint floor — and the block would wrongly drop.
+  insertActivityEvent(db, 'idle_start', localMs(9, 3), { heldForMediaPlayback: true })
+  insertActivityEvent(db, 'idle_end', localMs(10, 30))
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(blocks.length, 1, 'the watching block must survive the mint floor')
+  assert.ok(blocks[0].endTime - blocks[0].startTime >= 85 * 60_000)
   db.close()
 })
