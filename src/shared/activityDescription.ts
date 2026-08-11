@@ -557,15 +557,36 @@ export function assertEvidenceOwned(
 // Generated from the same constants the checks read, so the prompt cannot drift
 // from what is enforced. A term added to a vocabulary list above appears in the
 // prompt on the next build without anyone remembering to update prose.
-export const ACTIVITY_DESCRIPTION_DIRECTIVES: readonly string[] = [
+//
+// Split in two because the halves are not equally portable. The interpretation
+// half is safe on every surface. The voice half carries vocabulary bans and the
+// judgment rule, and a surface with its own richer, fact-gated rules about
+// praise (the Wrapped decks) takes the interpretation half only. Composing the
+// wrong half into a prompt produces a prompt that argues with itself, which is
+// exactly the defect D4 records elsewhere in this codebase.
+
+/** What the evidence supports. Safe on every surface that describes activity. */
+export const INTERPRETATION_DIRECTIVES: readonly string[] = [
   'ONE DESCRIPTION POLICY. Every description of the person\'s activity, however short, follows these rules: a Timeline label, a recap line, a chunk row, and a chat answer all describe the same understood activity the same way.',
   'ACTIVITY FIRST, TELEMETRY SECOND. Say what the person was doing, then what it was observed through. "Reworking the timeline, in Cursor" is right; "Cursor, 3h" is a screen-time tracker.',
   `NEVER NARRATE THE PLUMBING. These words describe Daylens's machinery, not the person's day, and none belong in a description even when a tool result or these instructions use them: ${DESCRIPTION_PLUMBING_VOCAB.join(', ')}. Say the human version instead.`,
   'NAME ONLY WHAT THE EVIDENCE SUPPORTS. A subject, project, client, person, or outcome is named only when it appears in the evidence you were given. When the evidence shows the activity but not who or what it was for, describe the activity and stop; never fill the gap with a plausible name.',
   'FACTS ARE NOT YOURS TO CREATE. Durations, identities, URLs, files, and events are recorded evidence. Interpret and summarize them; never originate one. If a duration is not in the evidence, do not state a duration.',
-  'NO JUDGMENT. Never grade productivity, focus, distraction, or personal worth, and never imply a day was well or badly spent. This holds hardest when the evidence is thin.',
   'SAY THE LIMIT ONCE, AND NEVER FIRST. When the evidence cannot settle something that matters, state it in one plain sentence after the description. Never open on what could not be seen, and never repeat the limit.',
-  `BANNED VOCABULARY: ${BANNED_VOCAB.join(', ')}.`,
   'NO WEAK ACTIVITY PHRASES. "Some work", "various tasks", "general browsing", and "computer activity" describe nothing. Name the actual thing, or say plainly that the evidence does not name it.',
   'NEVER COPY A TITLE. A window title, page title, or filename is evidence, not a description. Read it, then say what the person was doing.',
+]
+
+/** Vocabulary and judgment. The judgment line is scoped the way AC-VIC-003.2
+ *  scopes it: what is banned is grading drawn from thin evidence, not a plain
+ *  observation the facts carry. A surface that has earned the right to say
+ *  something good about a real, named thing keeps it. */
+export const DESCRIPTION_VOICE_DIRECTIVES: readonly string[] = [
+  `BANNED VOCABULARY: ${BANNED_VOCAB.join(', ')}.`,
+  'NO GRADING. Never rate productivity, focus, distraction, or personal worth, and never imply from thin evidence that a day was well or badly spent. Naming a real thing the evidence carries, including a long stretch on one piece of work, is not grading and stays welcome.',
+]
+
+export const ACTIVITY_DESCRIPTION_DIRECTIVES: readonly string[] = [
+  ...INTERPRETATION_DIRECTIVES,
+  ...DESCRIPTION_VOICE_DIRECTIVES,
 ]

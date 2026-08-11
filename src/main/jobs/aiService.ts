@@ -38,6 +38,8 @@ import { labelCandidateViolation, labelProvenance, labelVoiceContextForBlock, ra
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
 import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
+import { INTERPRETATION_DIRECTIVES } from '@shared/activityDescription'
+import { normalizeSummaryVoice, voiceDirective } from '@shared/summaryVoice'
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummaryParse'
 import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariants'
@@ -248,9 +250,9 @@ const USER_VISIBLE_ACTIVITY_PROSE_RULE =
   'Never use raw app names as the activity. Describe activity, work threads, artifacts, pages, or context instead of listing tool names as nouns. '
   + 'When listing apps in response to "what were my top apps" or similar, the PROSE SUBJECT of each row must be the work, not the app. '
   + 'Use the dominantBlockLabel field on each app for the activity. The app name appears as tail-attribution after the activity, never as the row\'s bolded headline. The duration goes last. '
-  + 'CORRECT row shape: "Coding in the Building & Testing block (Daylens chat-pipeline work) — Kiro, 1h 19m." '
-  + 'WRONG row shapes: "**Kiro** — coding in the Building & Testing block (1h 19m)" (app is still the headline); "Kiro — 1h 19m" (no activity at all); "Kiro: 1h 19m of coding" (app is the subject). '
-  + 'Do not bold the app name as the row prefix. Do not put the app name before the em-dash. The em-dash separates activity (left) from attribution + duration (right).'
+  + 'CORRECT row shape: "Coding in the Building & Testing block (Daylens chat-pipeline work): Kiro, 1h 19m." '
+  + 'WRONG row shapes: "**Kiro**, coding in the Building & Testing block (1h 19m)" (app is still the headline); "Kiro, 1h 19m" (no activity at all); "Kiro: 1h 19m of coding" (app is the subject). '
+  + 'Do not bold the app name as the row prefix. Do not put the app name before the colon. The colon separates activity (left) from attribution + duration (right). Never use an em dash anywhere in the row.'
 
 // REQ-VIC-004. A block carrying `labelIsTheirOwnWords` was named by the person,
 // not by Daylens. Their wording wins over anything the evidence would suggest,
@@ -2027,15 +2029,24 @@ export async function generateDaySummary(
 
   const [memoryFromMs, memoryToMs] = localDateBoundsFromString(dateStr)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variant.id}`
+  // The recap IS the morning brief (aiFeatures.ts maps day_summary to "Morning
+  // brief"), so the person's chosen tone belongs here as much as in Wrapped.
+  // It rides the cache key too: without that, changing the tone leaves the
+  // cached recap in the old voice for the life of the process and the toggle
+  // reads as dead.
+  const settings = getSettings()
+  const voice = normalizeSummaryVoice(settings.summaryVoice)
+  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${variant.id}:${voice}`
   const cached = options.bypassCache ? undefined : daySummaryCache.get(cacheKey)
   if (cached) return cached
 
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     memoryPrompt,
-    userProfileDirective(getSettings()),
+    userProfileDirective(settings),
     USER_AUTHORED_LABEL_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(voice),
     ...variant.directives,
   ].filter(Boolean).join('\n')
 
@@ -2642,6 +2653,8 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
     USER_AUTHORED_LABEL_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(getSettings().summaryVoice),
     'Use only the deterministic local evidence provided.',
     'Focus on the actual work threads, named artifacts, and where the week concentrated.',
     'Avoid dashboard filler or generic productivity language.',
@@ -2746,6 +2759,8 @@ async function generateAppNarrative(
     'You are Daylens, writing the short narrative card for an app detail view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
+    ...INTERPRETATION_DIRECTIVES,
+    voiceDirective(getSettings().summaryVoice),
     'Explain what this tool was helping with and which artifacts, pages, or sites appeared there. Lead with the work (the domains and pages listed first); mention leisure only briefly if at all.',
     'Use only the deterministic evidence below.',
     'Do not write vanity metrics or generic app summaries.',

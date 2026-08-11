@@ -9,6 +9,7 @@
 import type { WrappedAskRequest, WrappedAskResult } from '@shared/types'
 import { voiceDirective } from '@shared/summaryVoice'
 import { userProfileDirective } from '@shared/userProfile'
+import { INTERPRETATION_DIRECTIVES } from '@shared/activityDescription'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import { getSettings } from './settings'
 import { getDb } from './database'
@@ -114,6 +115,7 @@ export async function askWrappedQuestion(req: WrappedAskRequest): Promise<Wrappe
     'HOW TO READ TIMES. Every time in the facts is a local 12-hour clock string. "12am" is midnight, "12pm" is noon, "12:27pm" is early afternoon just after noon, never night. Copy times exactly as written; never shift an event to a different part of the day, never do clock arithmetic. If the user says a time is wrong, do not invent a corrected time; say what the tracked data shows, verbatim, and that they know their day best.',
     'If the facts cannot answer the question, say so plainly and say what Daylens does know. Never guess.',
     ...EVIDENCE_HONESTY_DIRECTIVES,
+    ...INTERPRETATION_DIRECTIVES,
     'No advice or homework unless they explicitly ask for it. No grades, no focus percentages, no guilt.',
     'Never use an em dash. No emoji. No markdown. Plain text only.',
     userProfileDirective(settings),
