@@ -19,6 +19,8 @@
 // the activityFacts aggregates keep their existing callers and behavior.
 import type Database from 'better-sqlite3'
 import {
+  OBSERVED_ONLY,
+  readerIneligible,
   searchAll,
   searchEntityMoments,
   type SearchOptions,
@@ -359,6 +361,7 @@ function runLexicalRetrieval(
 function runStructuredRetrieval(
   db: Database.Database,
   scope: RetrievalScope,
+  opts: SearchOptions,
   limit: number,
 ): ExactSearchResult[] {
   const [fromMs, toMs] = structuredBounds(scope)
@@ -369,10 +372,34 @@ function runStructuredRetrieval(
     return terms.some((term) => lowered.includes(term))
   }
 
+  // The aggregates are recorded totals over directly observed capture, and they
+  // carry no entity tags: an app total knows its bundle id, a domain total knows
+  // its domain and the browser it was seen in. A filter neither can express
+  // makes that reader ineligible, by the same rule the SQL readers follow —
+  // returning its rows unfiltered would let a search narrowed to Figma answer
+  // with every app's total.
+  const appTotalsEligible = !readerIneligible(opts, {
+    applications: true, sourceTypes: OBSERVED_ONLY,
+  })
+  const domainTotalsEligible = !readerIneligible(opts, {
+    applications: true, websites: true, sourceTypes: OBSERVED_ONLY,
+  })
+  const requestedApplications = opts.applications ?? []
+  const requestedWebsites = (opts.websites ?? []).map((domain) => domain.toLowerCase())
+  // Mirrors appSessionFilterSql / websiteVisitFilterSql: a bundle id matches
+  // exactly, an application name case-insensitively.
+  const matchesApplication = (bundleId: string | null, appName?: string | null): boolean => {
+    if (requestedApplications.length === 0) return true
+    return requestedApplications.some((requested) =>
+      requested === bundleId
+      || (appName != null && requested.toLowerCase() === appName.toLowerCase()))
+  }
+
   const rows: ExactSearchResult[] = []
 
-  for (const app of getCorrectedAppSummariesForRange(db, fromMs, toMs)) {
+  for (const app of appTotalsEligible ? getCorrectedAppSummariesForRange(db, fromMs, toMs) : []) {
     if (!matchesTerms(app.appName)) continue
+    if (!matchesApplication(app.bundleId, app.appName)) continue
     rows.push({
       type: 'session',
       id: -Math.abs(hashString(`app:${app.bundleId}`)),
@@ -387,8 +414,10 @@ function runStructuredRetrieval(
     })
   }
 
-  for (const site of getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)) {
+  for (const site of domainTotalsEligible ? getCorrectedWebsiteSummariesForRange(db, fromMs, toMs) : []) {
     if (!matchesTerms(site.domain) && !matchesTerms(site.topTitle ?? '')) continue
+    if (requestedWebsites.length > 0 && !requestedWebsites.includes(site.domain.toLowerCase())) continue
+    if (!matchesApplication(site.browserBundleId)) continue
     rows.push({
       type: 'browser',
       id: -Math.abs(hashString(`site:${site.domain}`)),
@@ -665,7 +694,7 @@ export async function planRetrieval(
 
   if (wantsStructured) {
     try {
-      batches.push({ path: 'structured', rows: runStructuredRetrieval(db, scope, limit) })
+      batches.push({ path: 'structured', rows: runStructuredRetrieval(db, scope, opts, limit) })
       plan.paths.push('structured')
     } catch (error) {
       console.error('[retrievalPlanner] structured retrieval failed', error)

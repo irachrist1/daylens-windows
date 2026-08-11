@@ -265,3 +265,82 @@ test('AC-SM-002.2: an unfiltered planner query keeps the full local history', as
   assert.ok(types.size > 1, 'more than one source type answers an unscoped query')
   db.close()
 })
+
+// The structured path reads recorded totals rather than rows, which makes it the
+// easiest place for a filter to be silently dropped: a totals reader answers
+// every question about the range whether or not the filter was expressible.
+
+/** "notion" names both an app total and a domain total, so a dropped filter shows. */
+function totalsFixture(): Database.Database {
+  const db = fixture()
+  insertSession(db, 'Notion planning workspace', 15, 'notion.id', 'Notion')
+  // A domain total exists only where the browser was foreground: the corrected
+  // aggregates credit a visit against the browser session that owned it.
+  insertSession(db, 'Quarterly planning doc — Safari', 13, 'com.apple.Safari', 'Safari')
+  return db
+}
+
+const TOTALS_QUERY = 'how much time did I spend on notion'
+
+function structuredRows(response: Awaited<ReturnType<typeof planRetrieval>>) {
+  return response.results
+    .filter((result) => result.foundBy.includes('structured'))
+    .map((result) => result.representations[0])
+}
+
+test('the structured path stays inside a website filter', async () => {
+  const db = totalsFixture()
+  const unfiltered = structuredRows(await planRetrieval(db, TOTALS_QUERY, {
+    now: NOW, limit: 30, startDate: DATE, endDate: DATE,
+  }))
+  assert.ok(
+    unfiltered.some((row) => row.type === 'session'),
+    'the app total is there to be leaked',
+  )
+
+  const filtered = structuredRows(await planRetrieval(db, TOTALS_QUERY, {
+    now: NOW, limit: 30, startDate: DATE, endDate: DATE, websites: ['notion.so'],
+  }))
+  assert.ok(filtered.length > 0, 'the totals reader that can express the filter still answers')
+  for (const row of filtered) {
+    assert.equal(row.type, 'browser', 'an app total has no domain, so it must not answer')
+    assert.equal(row.domain, 'notion.so')
+  }
+  db.close()
+})
+
+test('the structured path stays inside an application filter', async () => {
+  const db = totalsFixture()
+  const filtered = structuredRows(await planRetrieval(db, TOTALS_QUERY, {
+    now: NOW, limit: 30, startDate: DATE, endDate: DATE, applications: ['notion.id'],
+  }))
+
+  assert.ok(filtered.length > 0)
+  for (const row of filtered) {
+    assert.equal(row.type, 'session', 'notion.so was seen in Safari, not in the filtered app')
+    assert.equal(row.appName, 'Notion')
+  }
+  db.close()
+})
+
+test('the structured path returns nothing when a filter it cannot express is set', async () => {
+  const db = totalsFixture()
+  const acme = upsertEntity(db, {
+    type: 'client', identityKey: 'client:acme', name: 'Acme Corp', origin: 'supplied',
+  })
+  assert.deepEqual(
+    structuredRows(await planRetrieval(db, TOTALS_QUERY, {
+      now: NOW, limit: 30, startDate: DATE, endDate: DATE, clients: [acme.id],
+    })),
+    [],
+    'recorded totals carry no entity tags',
+  )
+  assert.deepEqual(
+    structuredRows(await planRetrieval(db, TOTALS_QUERY, {
+      now: NOW, limit: 30, startDate: DATE, endDate: DATE, sources: ['supplied'],
+    })),
+    [],
+    'recorded totals are observed capture, never a supplied fact',
+  )
+  db.close()
+})
