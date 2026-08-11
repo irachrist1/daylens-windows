@@ -105,6 +105,32 @@ function bookkeepingAvailable(db: Database.Database): boolean {
   ).get() != null
 }
 
+/**
+ * Does the vector store hold anything this embedder can actually match against?
+ *
+ * The same model/version pair `searchSemanticMoments` filters on: a vector
+ * written by an older embedder is invisible to the k-NN join, so a store full of
+ * stale rows is, for retrieval purposes, an empty one.
+ *
+ * This is an availability question, not a result question. Backfill is
+ * incremental and runs in the background, so "the model is installed and the
+ * extension loaded, but nothing has been embedded yet" is an ordinary state on a
+ * fresh install and after every embedder-version bump. Reporting that as a
+ * successful search returning no matches asserts something untrue — that meaning
+ * was compared and nothing was close — when meaning was never compared at all.
+ * The planner (AC-SM-001.6) is built to say a path could not contribute, so the
+ * honest answer is unavailable-with-a-reason.
+ */
+function embeddingsAvailable(db: Database.Database, model: string, version: number): boolean {
+  try {
+    return db.prepare(
+      `SELECT 1 FROM memory_record_vectors WHERE model = ? AND model_version = ? LIMIT 1`,
+    ).get(model, version) != null
+  } catch {
+    return false
+  }
+}
+
 // ─── Incremental embedding ───────────────────────────────────────────────────
 
 interface PendingRow {
@@ -443,6 +469,13 @@ export async function searchByMeaningWithStatus(
     const store = ensureVectorStore(db)
     if (!store.ok) {
       return { results: [], available: false, reason: 'Local vector search is not available on this device.' }
+    }
+    if (!embeddingsAvailable(db, loaded.embedder.model, loaded.embedder.version)) {
+      return {
+        results: [],
+        available: false,
+        reason: 'Nothing has been indexed for meaning-based search on this device yet.',
+      }
     }
     const [queryVector] = await loaded.embedder.embed([trimmed])
     if (!queryVector) {
