@@ -44,6 +44,22 @@ import {
   type ContextPacket,
 } from '../services/contextPacket'
 import { resolvePacketCitations, type PacketCitation } from './contextCitations'
+import {
+  deterministicFactsForQuestion,
+  enforceDeterministicFacts,
+  renderDeterministicFactsForAgent,
+  type DeterministicFact,
+  type DeterministicRepair,
+} from './deterministicFacts'
+import {
+  applyUnsupportedFactDisclosure,
+  assessEvidenceCoverage,
+  buildExchangeEvidence,
+  evidenceBacksValue,
+  extractFactualClaims,
+  type FactualClaim,
+  type SupportedClaim,
+} from './evidenceCoverage'
 import { getCurrentTrace } from '../ai/trace'
 import { buildAgentSystemPrompt } from './systemPrompt'
 import { renderTimeChunkAnswer, wantsTimeChunkTable, type TimeChunkResult } from './timeChunkAnswer'
@@ -179,6 +195,23 @@ export interface ChatAgentResult {
   /** Verified packet citations in the answer, in display order — every entry
    *  resolves to an item in the recorded packet. */
   citations: PacketCitation[]
+  /** Evidence coverage for this answer's factual claims (REQ-AIA-002). Every
+   *  field is derived from THIS exchange only — the turn's packet, its tool
+   *  results, and its computed facts — so inspecting it can never surface
+   *  provider instructions, credentials, or another conversation. */
+  evidence: {
+    /** Facts computed from the corrected activity boundary for this question. */
+    deterministicFacts: DeterministicFact[]
+    /** Figures the model stated that disagreed with a computed fact and were
+     *  replaced before the answer reached the person (AC-AIA-002.4). */
+    deterministicRepairs: DeterministicRepair[]
+    /** Claims bound to the evidence item that backs them (AC-AIA-002.1). */
+    supportedClaims: SupportedClaim[]
+    /** Claims nothing in the exchange backs (AC-AIA-002.2). */
+    unsupportedClaims: FactualClaim[]
+    /** Unsupported figures the answer was made to admit in words. */
+    disclosedUncertainties: string[]
+  }
   /** Files whose contents were disclosed to the model this turn (DEV-184) —
    *  persisted with the message so the sources row can cite opened files. */
   fileDisclosures: Array<{
@@ -264,6 +297,20 @@ export async function runChatAgentTurn(
   const packetEvidence = contextPacket.items.length > 0
     ? contextPacket.items.map((item) => item.statement).join('\n')
     : ''
+
+  // Eligible totals and counts are computed BEFORE the model writes, from the
+  // one corrected activity boundary the Timeline and Apps views read
+  // (AC-AIA-002.4). They are handed to the model as authoritative so it
+  // normally just states them, and they are enforced against the finished
+  // answer so a model that states something else cannot reach the person.
+  // Scope resolution reuses the packet's own resolved time range: chat must
+  // not grow a second idea of which days a question means.
+  const deterministicFacts = deterministicFactsForQuestion(
+    deps.db,
+    question,
+    contextPacket.request.timeRange,
+    { nowMs: now.getTime() },
+  )
 
   const mcp = await connectMcpTools(deps.mcpServers ?? [])
   try {
@@ -370,6 +417,13 @@ export async function runChatAgentTurn(
     }
 
     const renderedPacket = renderContextPacketForAgent(contextPacket)
+    const renderedFacts = renderDeterministicFactsForAgent(deterministicFacts)
+    // The computed facts ride with the packet in the turn-specific (uncached)
+    // system section, never in the cacheable stable prefix: they are as
+    // question-specific as the packet itself.
+    const dynamicSystem = [renderedPacket, renderedFacts]
+      .filter((section): section is string => Boolean(section && section.trim()))
+      .join('\n\n')
     // The trace recorder (eval harness / DAYLENS_AI_TRACE_DIR) needs the packet
     // as evidence: facts the model quotes from it are grounded, not fabricated.
     if (renderedPacket) {
@@ -394,7 +448,7 @@ export async function runChatAgentTurn(
         extraSystem: deps.extraSystem,
         summaryVoice: deps.summaryVoice ?? null,
       }),
-      renderedPacket,
+      dynamicSystem,
       {
         provider: deps.config.provider,
         cachePolicy,
@@ -615,6 +669,37 @@ export async function runChatAgentTurn(
       }
     }
 
+    // The exchange's evidence index: this turn's packet, this turn's tool
+    // results, this turn's computed facts, and nothing else. That is what keeps
+    // inspection free of provider instructions, credentials, and unrelated
+    // conversation (AC-AIA-002.3), and it also tells the enforcer which stated
+    // figures were quoted from evidence rather than produced by the model.
+    const exchangeEvidence = buildExchangeEvidence({
+      packet: contextPacket,
+      toolTrace,
+      deterministic: deterministicFacts,
+    })
+
+    // AC-AIA-002.4: the computed value wins. A figure the model stated that
+    // disagrees with a fact computed from the corrected activity boundary is
+    // replaced here, before the answer is finished. This runs AFTER the
+    // grounding retry so the retry cannot reintroduce a wrong total, and
+    // BEFORE coverage so a repaired figure is assessed as the figure that
+    // ships rather than the one that did not.
+    const enforcement = enforceDeterministicFacts(text, deterministicFacts, {
+      isBacked: (value, dimension) => evidenceBacksValue(exchangeEvidence, value, dimension),
+    })
+    text = enforcement.text
+    for (const repair of enforcement.repairs) {
+      console.warn(`[agent:deterministic] replaced ${repair.kind} "${repair.claimed}" with the computed ${repair.corrected}`)
+    }
+
+    // AC-AIA-002.1 / .2: bind each factual claim to the evidence item that
+    // backs it, and make the answer admit any figure nothing backs.
+    const coverage = assessEvidenceCoverage(extractFactualClaims(text), exchangeEvidence)
+    const disclosure = applyUnsupportedFactDisclosure(text, coverage.unsupported)
+    text = disclosure.text
+
     // Resolve the answer's [Cn] markers against the recorded packet: verified
     // citations become superscripts + a citation list; a marker the packet
     // cannot back is dropped, so every persisted citation is real.
@@ -633,6 +718,13 @@ export async function runChatAgentTurn(
       groundingRetried,
       contextPacketId: contextPacket && contextPacketRecorded ? contextPacket.id : null,
       citations,
+      evidence: {
+        deterministicFacts,
+        deterministicRepairs: enforcement.repairs,
+        supportedClaims: coverage.supported,
+        unsupportedClaims: coverage.unsupported,
+        disclosedUncertainties: disclosure.disclosed,
+      },
       fileDisclosures: fileDisclosures.map((row) => ({
         path: row.file_path,
         name: row.display_name,
