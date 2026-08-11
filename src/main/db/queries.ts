@@ -1078,6 +1078,9 @@ export function searchSessions(
     JOIN memory_records ON memory_records.rowid = memory_records_fts.rowid
     LEFT JOIN entities ON entities.id = memory_records.primary_entity_id
     WHERE memory_records_fts MATCH ?
+      -- Page records are the browser reader's to return; surfacing them here
+      -- too would report one domain twice for the same query.
+      AND memory_records.record_kind != 'page'
       AND memory_records.deleted_at IS NULL
       AND memory_records.start_ms >= ?
       AND memory_records.start_ms < ?
@@ -1418,6 +1421,73 @@ export function searchBrowser(
   if (readerIneligible(opts, { applications: true, websites: true, sourceTypes: OBSERVED_ONLY })) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
   const filters = websiteVisitFilterSql(opts)
+  const memoryAvailable = memorySearchAvailable(db)
+
+  // Canonical arm: the day's corrected browsing, projected per domain. An
+  // ignored span or an excluded site never became a record, so a correction
+  // propagates here by re-projection rather than by a hand-copied filter.
+  const memoryFilters = memoryRecordFilterSql(opts)
+  const memoryDomainFilter = hasValues(opts.websites)
+    ? `AND LOWER(memory_records.domain) IN (${marks(opts.websites.length)})`
+    : ''
+  const memoryDomainParams = hasValues(opts.websites)
+    ? opts.websites.map((domain) => domain.toLowerCase())
+    : []
+
+  const memoryResults: BrowserSearchResult[] = !memoryAvailable ? [] : (db.prepare(`
+    SELECT
+      memory_records.rowid AS id,
+      memory_records.domain,
+      memory_records.title AS page_title,
+      memory_records.url,
+      memory_records.start_ms,
+      memory_records.end_ms,
+      memory_records.date,
+      snippet(memory_records_fts, -1, ?, ?, '...', 18) AS excerpt
+    FROM memory_records_fts
+    JOIN memory_records ON memory_records.rowid = memory_records_fts.rowid
+    WHERE memory_records_fts MATCH ?
+      AND memory_records.record_kind = 'page'
+      AND memory_records.deleted_at IS NULL
+      AND memory_records.start_ms >= ?
+      AND memory_records.start_ms < ?
+      ${MEMORY_RECORD_CORRECTION_FILTERS}
+      ${memoryFilters.sql}
+      ${memoryDomainFilter}
+    ORDER BY memory_records.start_ms DESC
+    LIMIT ?
+  `).all(
+    SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs,
+    ...memoryFilters.params, ...memoryDomainParams, limit,
+  ) as Array<{
+    id: number
+    domain: string | null
+    page_title: string | null
+    url: string | null
+    start_ms: number
+    end_ms: number
+    date: string
+    excerpt: string | null
+  }>).map((row) => ({
+    type: 'browser',
+    id: row.id,
+    domain: row.domain ?? '',
+    pageTitle: row.page_title,
+    url: row.url,
+    startTime: row.start_ms,
+    endTime: row.end_ms,
+    date: row.date,
+    excerpt: row.excerpt ?? row.page_title ?? row.domain ?? '',
+  }))
+
+  // Legacy arm, restricted to days with no projection, so an indexed day
+  // answers exactly once and a not-yet-backfilled day still answers.
+  const unindexedDayFilter = memoryAvailable
+    ? `AND NOT EXISTS (
+        SELECT 1 FROM memory_index_days
+        WHERE memory_index_days.date = strftime('%Y-%m-%d', website_visits.visit_time / 1000, 'unixepoch', 'localtime')
+      )`
+    : ''
 
   const rows = db.prepare(`
     SELECT
@@ -1448,6 +1518,7 @@ export function searchBrowser(
           AND website_visits.visit_time >= exclusion.span_start_ms
           AND website_visits.visit_time < exclusion.span_end_ms
       )
+      ${unindexedDayFilter}
       ${filters.sql}
     ORDER BY website_visits.visit_time DESC
     LIMIT ?
@@ -1464,7 +1535,7 @@ export function searchBrowser(
     excerpt: string | null
   }[]
 
-  return rows.map((row) => ({
+  const legacyResults: BrowserSearchResult[] = rows.map((row) => ({
     type: 'browser',
     id: row.id,
     domain: row.domain,
@@ -1475,6 +1546,10 @@ export function searchBrowser(
     date: localDateString(new Date(row.visit_time)),
     excerpt: row.excerpt ?? row.page_title ?? row.url ?? row.domain,
   }))
+
+  return [...memoryResults, ...legacyResults]
+    .sort((left, right) => right.startTime - left.startTime)
+    .slice(0, limit)
 }
 
 export function searchArtifacts(
@@ -1487,6 +1562,14 @@ export function searchArtifacts(
   if (readerIneligible(opts, { sourceTypes: OBSERVED_ONLY })) return []
   const { fromMs, toMs, limit } = searchBounds(opts)
 
+  // NOT routed through memory_records, deliberately. The canonical `artifact`
+  // record kind projects `artifacts`/`artifact_mentions` — documents observed
+  // in window titles — while this reader searches `ai_artifacts`, the files the
+  // assistant produced in a thread. They are different things, and pointing
+  // this reader at the canonical arm would make every AI artifact unfindable on
+  // any indexed day. What was genuinely broken here is the correction filter:
+  // this reader had none at all, so an artifact created inside a span the
+  // person marked ignored was still returned.
   const rows = db.prepare(`
     SELECT
       ai_artifacts.id,
@@ -1499,6 +1582,13 @@ export function searchArtifacts(
     WHERE ai_artifacts_fts MATCH ?
       AND ai_artifacts.created_at >= ?
       AND ai_artifacts.created_at < ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM timeline_block_reviews review
+        WHERE review.review_state = 'ignored'
+          AND ai_artifacts.created_at >= json_extract(review.original_block_json, '$.startTime')
+          AND ai_artifacts.created_at < json_extract(review.original_block_json, '$.endTime')
+      )
     ORDER BY ai_artifacts.created_at DESC
     LIMIT ?
   `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {

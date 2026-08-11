@@ -215,19 +215,50 @@ export function resolveContextDates(question: string, now: Date): string[] {
 // ─── Assembly ────────────────────────────────────────────────────────────────
 
 const STOPWORDS = new Set([
-  'the', 'and', 'for', 'was', 'were', 'what', 'when', 'where', 'which', 'who',
-  'how', 'did', 'does', 'that', 'this', 'with', 'about', 'from', 'have', 'has',
-  'you', 'your', 'today', 'yesterday', 'day', 'week', 'show', 'tell', 'much',
-  'many', 'time', 'spend', 'spent',
+  'the',
+  'and',
+  'for',
+  'was',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'who',
+  'how',
+  'did',
+  'does',
+  'that',
+  'this',
+  'with',
+  'about',
+  'from',
+  'have',
+  'has',
+  'you',
+  'your',
+  'today',
+  'yesterday',
+  'day',
+  'week',
+  'show',
+  'tell',
+  'much',
+  'many',
+  'time',
+  'spend',
+  'spent',
 ])
 
 function questionTokens(question: string): string[] {
-  return [...new Set(
-    question
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((token) => token.length >= 3 && !STOPWORDS.has(token)),
-  )]
+  return [
+    ...new Set(
+      question
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((token) => token.length >= 3 && !STOPWORDS.has(token)),
+    ),
+  ]
 }
 
 function fmtClock(ms: number): string {
@@ -295,13 +326,17 @@ const MAX_CONNECTED_FACTS_PER_DAY = 12
  *  citation resolves to the same record either path finds. */
 function connectedActivityDayItems(db: Database.Database, date: string): ContextPacketItem[] {
   try {
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT rowid AS id, statement, start_ms, end_ms, sensitivity
       FROM memory_records
       WHERE date = ? AND record_kind = 'connected_activity' AND deleted_at IS NULL
       ORDER BY start_ms ASC
       LIMIT ?
-    `).all(date, MAX_CONNECTED_FACTS_PER_DAY) as Array<{
+    `,
+      )
+      .all(date, MAX_CONNECTED_FACTS_PER_DAY) as Array<{
       id: number
       statement: string
       start_ms: number
@@ -333,8 +368,8 @@ function connectedActivityDayItems(db: Database.Database, date: string): Context
 function pageCoverageConflicts(db: Database.Database, date: string): EvidenceConflict[] {
   try {
     const [fromMs, toMs] = localDayBounds(date)
-    return getCorrectedPageFactsForRange(db, fromMs, toMs).coverage
-      .filter(hasMaterialPageCoverageShortfall)
+    return getCorrectedPageFactsForRange(db, fromMs, toMs)
+      .coverage.filter(hasMaterialPageCoverageShortfall)
       .map((entry) => ({
         kind: 'page_detail_below_app_time' as const,
         identity: `browser:${entry.canonicalBrowserId}:${date}`,
@@ -361,13 +396,15 @@ function dayGaps(db: Database.Database, date: string): EvidenceGap[] {
     const [fromMs, toMs] = localDayBounds(date)
     const events = listFocusEventTimesInRange(db, fromMs, toMs)
     if (events.length === 0) {
-      return [{
-        date,
-        startMs: fromMs,
-        endMs: toMs,
-        kind: 'no-capture',
-        detail: 'No capture signal for this day',
-      }]
+      return [
+        {
+          date,
+          startMs: fromMs,
+          endMs: toMs,
+          kind: 'no-capture',
+          detail: 'No capture signal for this day',
+        },
+      ]
     }
     const gaps: EvidenceGap[] = []
     for (let index = 1; index < events.length && gaps.length < MAX_GAPS_PER_DAY; index += 1) {
@@ -418,10 +455,7 @@ function wordBounded(haystack: string, needle: string): boolean {
 
 function correctedFactItems(db: Database.Database, question: string): ContextPacketItem[] {
   const items: ContextPacketItem[] = []
-  const push = (
-    fact: { id: string; text: string; origin: string },
-    reason: string,
-  ): void => {
+  const push = (fact: { id: string; text: string; origin: string }, reason: string): void => {
     if (items.length >= MAX_CORRECTED_FACTS) return
     items.push({
       identity: `fact:${fact.id}`,
@@ -441,15 +475,16 @@ function correctedFactItems(db: Database.Database, question: string): ContextPac
   }
   try {
     // General memory always rides along (memory.md §2.2); a client's scoped
-    // memory joins only when the question names that client.
-    const profile = getScopedMemoryProfile(db)
+    // memory joins only when the question names that client. Only CONFIRMED
+    // facts enter AI context — drafts are proposals in the Manage-memory view,
+    // not context (WO-18 / AC-SM-012.1).
+    const profile = getScopedMemoryProfile(db, true)
     for (const fact of profile.general) {
-      push(fact, fact.origin === 'user'
-        ? 'Fact the person supplied and confirmed'
-        : 'Fact drafted from real evidence, awaiting confirmation in the editable memory profile')
+      push(fact, 'Fact the person supplied and confirmed')
     }
     for (const group of profile.clients) {
-      if (group.clientName.trim().length < 3 || !wordBounded(question, group.clientName.trim())) continue
+      if (group.clientName.trim().length < 3 || !wordBounded(question, group.clientName.trim()))
+        continue
       for (const fact of group.facts) {
         push(fact, `Scoped memory for ${group.clientName}, named by the question`)
       }
@@ -460,7 +495,10 @@ function correctedFactItems(db: Database.Database, question: string): ContextPac
   return items
 }
 
-function entityItems(db: Database.Database, question: string): { items: ContextPacketItem[]; entityIds: string[] } {
+function entityItems(
+  db: Database.Database,
+  question: string,
+): { items: ContextPacketItem[]; entityIds: string[] } {
   const byId = new Map<string, ContextPacketItem>()
   try {
     const queries = [question, ...questionTokens(question)]
@@ -500,9 +538,10 @@ function entityItems(db: Database.Database, question: string): { items: ContextP
  *  row — conservative: an omission, never a leak. */
 function backedByHighSensitivityRecord(db: Database.Database, id: number): boolean {
   try {
-    return db.prepare(
-      `SELECT 1 FROM memory_records WHERE rowid = ? AND sensitivity = 'high'`,
-    ).get(id) != null
+    return (
+      db.prepare(`SELECT 1 FROM memory_records WHERE rowid = ? AND sensitivity = 'high'`).get(id) !=
+      null
+    )
   } catch {
     return false
   }
@@ -523,13 +562,14 @@ function exactSearchItems(
         omittedHighSensitivity += 1
         continue
       }
-      const statement = result.type === 'session'
-        ? `${result.appName}${result.windowTitle ? ` — ${result.windowTitle}` : ''}`
-        : result.type === 'browser'
-          ? `${result.pageTitle ?? result.domain}${result.url ? ` (${result.url})` : ''}`
-          : result.type === 'artifact'
-            ? result.title
-            : result.label
+      const statement =
+        result.type === 'session'
+          ? `${result.appName}${result.windowTitle ? ` — ${result.windowTitle}` : ''}`
+          : result.type === 'browser'
+            ? `${result.pageTitle ?? result.domain}${result.url ? ` (${result.url})` : ''}`
+            : result.type === 'artifact'
+              ? result.title
+              : result.label
       items.push({
         identity: `${result.type}:${result.id}`,
         kind: 'search_exact',
@@ -666,12 +706,20 @@ function granolaTranscriptItems(
 
     const tokens = questionTokens(question)
     const marks = dates.map(() => '?').join(', ')
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT source_record_id, effective_at, envelope_json FROM connector_records
       WHERE connector_id = 'granola' AND kind = 'meeting_record'
         AND date IN (${marks}) AND tombstoned_at IS NULL
       ORDER BY effective_at ASC
-    `).all(...dates) as Array<{ source_record_id: string; effective_at: number | null; envelope_json: string }>
+    `,
+      )
+      .all(...dates) as Array<{
+      source_record_id: string
+      effective_at: number | null
+      envelope_json: string
+    }>
 
     let raw: string | null = null
     for (const row of rows) {
@@ -706,7 +754,8 @@ function granolaTranscriptItems(
         sourceType: 'connected',
         statement: `Granola transcript of "${title}": ${excerpt}`,
         version: derivedTextFingerprint(transcript, row.effective_at),
-        reason: 'Transcript excerpt — this question explicitly asked for what was said; disclosed under high-sensitivity rules and recorded here',
+        reason:
+          'Transcript excerpt — this question explicitly asked for what was said; disclosed under high-sensitivity rules and recorded here',
         sensitivity: 'high',
         date: null,
         startMs: row.effective_at,
@@ -729,10 +778,12 @@ const KIND_ORDER: Record<ContextItemKind, number> = {
 }
 
 function sortItems(items: ContextPacketItem[]): ContextPacketItem[] {
-  return [...items].sort((a, b) =>
-    (KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
-    || ((a.startMs ?? 0) - (b.startMs ?? 0))
-    || a.identity.localeCompare(b.identity))
+  return [...items].sort(
+    (a, b) =>
+      KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
+      (a.startMs ?? 0) - (b.startMs ?? 0) ||
+      a.identity.localeCompare(b.identity),
+  )
 }
 
 function contentFingerprint(content: {
@@ -762,11 +813,13 @@ export async function buildContextPacket(
 ): Promise<ContextPacket> {
   const now = input.now ?? new Date()
   const question = input.question.trim()
-  const explicitScope = input.dates != null || ISO_DATE_RE.test(question) || /\byesterday\b/i.test(question)
+  const explicitScope =
+    input.dates != null || ISO_DATE_RE.test(question) || /\byesterday\b/i.test(question)
   ISO_DATE_RE.lastIndex = 0
-  const dates = input.dates && input.dates.length > 0
-    ? [...new Set(input.dates)].sort()
-    : resolveContextDates(question, now)
+  const dates =
+    input.dates && input.dates.length > 0
+      ? [...new Set(input.dates)].sort()
+      : resolveContextDates(question, now)
 
   // Keep the queried days' projections current so retrieval reads the same
   // corrected facts Timeline shows (cheap fingerprint check when unchanged).
@@ -831,7 +884,11 @@ export async function buildContextPacket(
   )
   const omissions: ContextPacketOmission[] = []
   if (files.omittedHighSensitivity > 0) {
-    omissions.push({ kind: 'file_excerpt', count: files.omittedHighSensitivity, reason: 'high-sensitivity' })
+    omissions.push({
+      kind: 'file_excerpt',
+      count: files.omittedHighSensitivity,
+      reason: 'high-sensitivity',
+    })
   }
   const droppedSearch = exact.omittedHighSensitivity + (assembled.length - afterSensitivity.length)
   if (droppedSearch > 0) {
@@ -846,7 +903,8 @@ export async function buildContextPacket(
     filterTrackingExcludedEvidence(afterSensitivity, controls),
   ) as ContextPacketItem[]
   const items = guarded.filter((item): item is ContextPacketItem =>
-    Boolean(item && typeof item.identity === 'string' && typeof item.statement === 'string'))
+    Boolean(item && typeof item.identity === 'string' && typeof item.statement === 'string'),
+  )
   if (items.length < afterSensitivity.length) {
     omissions.push({
       kind: 'day_fact',
@@ -893,7 +951,8 @@ export async function buildContextPacket(
 
 const KIND_HEADINGS: Record<ContextItemKind, string> = {
   day_fact: 'Corrected timeline facts',
-  corrected_fact: 'What Daylens knows about this user (context only — never invent activity beyond the real evidence)',
+  corrected_fact:
+    'What Daylens knows about this user (context only — never invent activity beyond the real evidence)',
   entity: 'Entities the question names',
   search_exact: 'Moments matched by exact local search',
   search_semantic: 'Moments similar by meaning (local embeddings — leads, not exact matches)',
@@ -910,10 +969,9 @@ export function renderContextPacketForPrompt(packet: ContextPacket): string {
   for (const kind of Object.keys(KIND_ORDER) as ContextItemKind[]) {
     const items = packet.items.filter((item) => item.kind === kind)
     if (items.length === 0) continue
-    sections.push([
-      `${KIND_HEADINGS[kind]}:`,
-      ...items.map((item) => `- ${item.statement}`),
-    ].join('\n'))
+    sections.push(
+      [`${KIND_HEADINGS[kind]}:`, ...items.map((item) => `- ${item.statement}`)].join('\n'),
+    )
   }
   return sections.join('\n\n')
 }
@@ -950,16 +1008,20 @@ export function renderContextPacketForAgent(packet: ContextPacket): string {
     }
   }
   if (packet.conflicts.length > 0) {
-    sections.push([
-      'Where the record disagrees with itself — NAME each disagreement in your answer instead of asserting agreement. The person\'s correction wins, but the person should hear that the sources differed:',
-      ...packet.conflicts.map((conflict) => `- ${conflict.detail} (${conflict.identity})`),
-    ].join('\n'))
+    sections.push(
+      [
+        "Where the record disagrees with itself — NAME each disagreement in your answer instead of asserting agreement. The person's correction wins, but the person should hear that the sources differed:",
+        ...packet.conflicts.map((conflict) => `- ${conflict.detail} (${conflict.identity})`),
+      ].join('\n'),
+    )
   }
   if (packet.gaps.length > 0) {
-    sections.push([
-      'Gaps in the record — state what is missing instead of letting silence read as inactivity:',
-      ...packet.gaps.map((gap) => `- ${gap.detail} (${gap.date})`),
-    ].join('\n'))
+    sections.push(
+      [
+        'Gaps in the record — state what is missing instead of letting silence read as inactivity:',
+        ...packet.gaps.map((gap) => `- ${gap.detail} (${gap.date})`),
+      ].join('\n'),
+    )
   }
   return sections.join('\n\n')
 }
@@ -997,9 +1059,11 @@ export interface StoredContextPacket {
 }
 
 export function contextPacketsAvailable(db: Database.Database): boolean {
-  return db.prepare(
-    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'context_packets'`,
-  ).get() != null
+  return (
+    db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'context_packets'`)
+      .get() != null
+  )
 }
 
 /**
@@ -1019,13 +1083,15 @@ export function recordContextPacket(
   },
 ): void {
   if (!contextPacketsAvailable(db)) return
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO context_packets (
       id, purpose, exchange_kind, thread_id, message_id, scope_key, question,
       destination, left_device, policy_version, item_count, content_fingerprint,
       packet_json, created_at
     ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `,
+  ).run(
     packet.id,
     packet.purpose,
     meta.exchangeKind,
@@ -1100,9 +1166,13 @@ export function getContextPacketForMessage(
   messageId: number,
 ): StoredContextPacket | null {
   if (!contextPacketsAvailable(db)) return null
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT * FROM context_packets WHERE message_id = ? ORDER BY created_at DESC LIMIT 1
-  `).get(messageId) as ContextPacketRow | undefined
+  `,
+    )
+    .get(messageId) as ContextPacketRow | undefined
   return row ? rowToStored(row) : null
 }
 
@@ -1121,10 +1191,14 @@ export function listContextPackets(
     clauses.push('scope_key = ?')
     params.push(options.scopeKey)
   }
-  const rows = db.prepare(`
+  const rows = db
+    .prepare(
+      `
     SELECT * FROM context_packets
     ${clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY created_at DESC LIMIT ?
-  `).all(...params, options.limit ?? 50) as ContextPacketRow[]
+  `,
+    )
+    .all(...params, options.limit ?? 50) as ContextPacketRow[]
   return rows.map(rowToStored)
 }

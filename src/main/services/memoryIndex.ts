@@ -11,6 +11,9 @@
 //       entity and any client/project the overlapping work session attributes
 //   meeting entities observed that day → one record each (entity-named)
 //   artifact mentions that day        → one record each (entity-named)
+//   corrected browsing that day       → one record per domain (entity-named
+//     where a page entity exists), so exact browser retrieval reads this
+//     boundary instead of raw website_visits
 //
 // Because the input is the corrected read model, a deleted block or excluded
 // app never enters the index, and reindexing a day after a correction removes
@@ -29,6 +32,7 @@ import type { AppSession } from '@shared/types'
 import { localDayBounds, localDateString } from '../lib/localDate'
 import {
   getCorrectedSessionsForRange,
+  getEvidenceExclusionsForRange,
   getIgnoredBlockSpansForRange,
   type CorrectionSpan,
 } from './activityFacts'
@@ -36,9 +40,9 @@ import { mergeGroupIds, resolveMergeChain, type EntityRow } from './entities/ent
 
 /** Bump to force a full reindex on upgrade (the version is part of every
  *  day fingerprint, so stale-format days re-project lazily). */
-export const MEMORY_INDEX_VERSION = 2
+export const MEMORY_INDEX_VERSION = 3
 
-export type MemoryRecordKind = 'session' | 'meeting' | 'artifact' | 'connected_activity'
+export type MemoryRecordKind = 'session' | 'meeting' | 'artifact' | 'page' | 'connected_activity'
 
 function tableExists(db: Database.Database, name: string): boolean {
   return db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) != null
@@ -82,6 +86,7 @@ export function memoryIndexDayFingerprint(db: Database.Database, date: string): 
       JOIN entities e ON e.id = r.entity_id AND e.entity_type = 'meeting'
       WHERE r.span_start_ms >= ? AND r.span_start_ms < ?`, fromMs, toMs)}`,
     `art:${countAndMax(db, `SELECT COUNT(*) AS c, MAX(start_time) AS m FROM artifact_mentions WHERE start_time >= ? AND start_time < ?`, fromMs, toMs)}`,
+    `wv:${countAndMax(db, `SELECT COUNT(*) AS c, MAX(visit_time) AS m FROM website_visits WHERE visit_time >= ? AND visit_time < ?`, fromMs, toMs)}`,
     `cnr:${tableExists(db, 'connector_records')
       ? countAndMax(db, `SELECT COUNT(*) AS c, MAX(updated_at) AS m FROM connector_records WHERE date = ? AND kind IN ('repository_activity', 'issue_activity', 'meeting_record')`, date)
       : '0:0'}`,
@@ -104,6 +109,9 @@ interface PendingRecord {
   appBundleId: string | null
   appName: string | null
   title: string | null
+  /** Set on page records so a browser result can be rebuilt from the record. */
+  domain?: string | null
+  url?: string | null
   primaryEntityId: string | null
   sourceRefs: string[]
   entityIds: Set<string>
@@ -353,6 +361,112 @@ function artifactRecords(
   return [...byArtifact.values()]
 }
 
+/**
+ * One record per domain browsed that day, with the same corrections subtracted
+ * that the timeline applies: a visit inside an ignored block span, or on a site
+ * excluded over that span, never becomes a record. Re-projecting after a
+ * correction therefore removes what the correction removed.
+ *
+ * Built from visits rather than from `getCorrectedDomainIntervals`. Those
+ * intervals clip page time against the browser's corrected foreground
+ * ownership, which is right for *time credit* and wrong here: a page visited
+ * while the browser was never the foreground app still happened, and a person
+ * searching for it should find it. Retrieval asks "did I see this", not "how
+ * long does this get credited".
+ *
+ * Grouped by domain: a day of research is forty visit rows and one thing a
+ * person remembers ("that Notion page"). Grouping keeps the record count
+ * proportional to sites visited rather than to raw history size.
+ */
+function pageRecords(
+  db: Database.Database,
+  date: string,
+  fromMs: number,
+  toMs: number,
+  ignoredSpans: readonly CorrectionSpan[],
+): PendingRecord[] {
+  if (!tableExists(db, 'website_visits')) return []
+
+  const siteExclusions = getEvidenceExclusionsForRange(db, fromMs, toMs)
+    .filter((exclusion) => exclusion.kind === 'site' && exclusion.domain)
+
+  const visits = db.prepare(`
+    SELECT id, domain, page_title, url, visit_time, duration_sec
+    FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ?
+    ORDER BY visit_time ASC
+  `).all(fromMs, toMs) as Array<{
+    id: number
+    domain: string
+    page_title: string | null
+    url: string | null
+    visit_time: number
+    duration_sec: number
+  }>
+
+  const byDomain = new Map<string, {
+    startMs: number
+    endMs: number
+    titleMs: Map<string, number>
+    topUrl: string | null
+    topUrlMs: number
+  }>()
+
+  for (const visit of visits) {
+    if (startsInsideSpans(visit.visit_time, ignoredSpans)) continue
+    const excluded = siteExclusions.some((exclusion) =>
+      exclusion.domain === visit.domain
+      && visit.visit_time >= exclusion.startMs
+      && visit.visit_time < exclusion.endMs)
+    if (excluded) continue
+
+    const milliseconds = Math.max(0, visit.duration_sec) * 1000
+    const entry = byDomain.get(visit.domain) ?? {
+      startMs: visit.visit_time,
+      endMs: visit.visit_time + milliseconds,
+      titleMs: new Map<string, number>(),
+      topUrl: null,
+      topUrlMs: -1,
+    }
+    entry.startMs = Math.min(entry.startMs, visit.visit_time)
+    entry.endMs = Math.max(entry.endMs, visit.visit_time + milliseconds)
+    const title = visit.page_title?.trim()
+    if (title) entry.titleMs.set(title, (entry.titleMs.get(title) ?? 0) + milliseconds)
+    if (visit.url && milliseconds > entry.topUrlMs) {
+      entry.topUrl = visit.url
+      entry.topUrlMs = milliseconds
+    }
+    byDomain.set(visit.domain, entry)
+  }
+
+  const records: PendingRecord[] = []
+  for (const [domain, entry] of byDomain) {
+    const titles = [...entry.titleMs.entries()].sort((left, right) => right[1] - left[1])
+    const topTitle = titles[0]?.[0] ?? null
+    // Adoption keeps the page entity's id, so a domain the entity graph knows
+    // is found by entity resolution and needs no index-time text.
+    const entityId = activeEntityId(db, `page:${domain}`)
+    records.push({
+      id: newRecordId(),
+      kind: 'page',
+      memoryType: 'observed',
+      statement: topTitle ? `${domain} — ${topTitle}` : `Visited ${domain}`,
+      exactText: entityId ? '' : [domain, ...titles.slice(0, 5).map(([title]) => title)].join(' '),
+      startMs: entry.startMs,
+      endMs: entry.endMs,
+      appBundleId: null,
+      appName: null,
+      title: topTitle,
+      domain,
+      url: entry.topUrl,
+      primaryEntityId: entityId,
+      sourceRefs: [`corrected_domain:${date}:${domain}`],
+      entityIds: new Set(entityId ? [entityId] : []),
+    })
+  }
+  return records
+}
+
 // ─── Connected activity ──────────────────────────────────────────────────────
 // One record per non-tombstoned connector ledger row about this day's
 // connected work: coding activity (commits, pull requests, reviews, issues),
@@ -571,15 +685,16 @@ export function indexMemoryForDay(db: Database.Database, date: string): IndexDay
   applyAttributionTags(db, records, fromMs, toMs)
   records.push(...meetingRecords(db, fromMs, toMs, ignoredSpans))
   records.push(...artifactRecords(db, fromMs, toMs, ignoredSpans))
+  records.push(...pageRecords(db, date, fromMs, toMs, ignoredSpans))
   records.push(...connectedActivityRecords(db, date, ignoredSpans))
 
   const insertRecord = db.prepare(`
     INSERT INTO memory_records (
       id, record_kind, memory_type, statement, exact_text, semantic_text,
-      date, start_ms, end_ms, app_bundle_id, app_name, title,
+      date, start_ms, end_ms, app_bundle_id, app_name, title, domain, url,
       primary_entity_id, source_refs_json, confidence, provenance,
       sensitivity, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insertTag = db.prepare(`
     INSERT OR IGNORE INTO memory_record_entities (record_id, entity_id) VALUES (?, ?)
@@ -609,10 +724,14 @@ export function indexMemoryForDay(db: Database.Database, date: string): IndexDay
         record.appBundleId,
         record.appName,
         record.title,
+        record.domain ?? null,
+        record.url ?? null,
         record.primaryEntityId,
         JSON.stringify(record.sourceRefs),
         record.memoryType === 'connected' ? 'corroborated' : 'observed',
-        record.kind === 'session' ? 'corrected_session' : record.kind,
+        record.kind === 'session' ? 'corrected_session'
+          : record.kind === 'page' ? 'corrected_domain'
+            : record.kind,
         record.sensitivity ?? 'standard',
         now,
       )
