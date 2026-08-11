@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { ChevronDown, Search } from 'lucide-react'
@@ -37,6 +37,7 @@ import { formatUsdAmount } from '@shared/formatUsd'
 import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, type ChangelogEntry } from '@shared/changelog'
 import { ALL_ACTIVITY_CATEGORY_OPTIONS } from '@shared/activityCategories'
 import { claudeDesktopConfigDisplayPath } from '@shared/platformPaths'
+import { describeMcpConnection, type McpClientConfig } from '@shared/mcpConnection'
 import { currentCaptureConsentDecidedAt } from '@shared/captureConsent'
 import { useCompactLayout } from '../hooks/useCompactLayout'
 
@@ -2355,7 +2356,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [memoryAudit, setMemoryAudit] = useState<MemoryAuditEntry[] | null>(null)
   // DEV-180: local semantic-search status shown in the Memory section.
   const [semanticStatus, setSemanticStatus] = useState<DaylensSemanticSearchStatus | null>(null)
-  const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
+  const [mcpConfig, setMcpConfig] = useState<McpClientConfig | null>(null)
+  // Distinguishes "not asked yet" from "asked and got nothing", so the section
+  // can tell a person their install cannot run the server instead of showing an
+  // empty panel under an enabled toggle.
+  const [mcpFetch, setMcpFetch] = useState<'idle' | 'loading' | 'settled'>('idle')
+  const [mcpConfigError, setMcpConfigError] = useState<string | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [mcpAdvancedOpen, setMcpAdvancedOpen] = useState(false)
   const [enrichmentSources, setEnrichmentSources] = useState<EnrichmentSourcesState | null>(null)
@@ -2508,10 +2514,25 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     void ipc.settings.hasApiKey(selectedAiProvider).then((access) => setHasApiKey(access))
   }, [activeSection, cliTools, selectedAiProvider])
 
+  const loadMcpConfig = useCallback(async (): Promise<void> => {
+    setMcpFetch('loading')
+    setMcpConfigError(null)
+    try {
+      setMcpConfig(await ipc.mcp.getConfig())
+    } catch (error) {
+      // A failed lookup is not the same as "this install cannot run the server",
+      // and neither may be shown as a ready-to-copy configuration.
+      setMcpConfig(null)
+      setMcpConfigError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setMcpFetch('settled')
+    }
+  }, [])
+
   useEffect(() => {
     if (activeSection !== 'mcp' || !settings?.mcpServerEnabled) return
-    void ipc.mcp.getConfig().then((cfg) => setMcpConfig(cfg))
-  }, [activeSection, settings?.mcpServerEnabled])
+    void loadMcpConfig()
+  }, [activeSection, loadMcpConfig, settings?.mcpServerEnabled])
 
   useEffect(() => {
     if (activeSection !== 'enrichment') return
@@ -2546,8 +2567,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       // value must still win in the controlled UI.
       setSettings((current) => current ? { ...current, ...partial } : current)
       if ('mcpServerEnabled' in partial && partial.mcpServerEnabled) {
-        const cfg = await ipc.mcp.getConfig()
-        setMcpConfig(cfg)
+        // The same loader the section entry uses, so the just-toggled state and
+        // the reopened-section state cannot diverge.
+        await loadMcpConfig()
       }
       return true
     } catch (error) {
@@ -3024,6 +3046,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   }
 
   const linuxDesktop = trackingDiagnostics?.linuxDesktop ?? null
+  const mcpConnection = describeMcpConnection({
+    enabled: settings.mcpServerEnabled ?? false,
+    fetch: mcpFetch,
+    config: mcpConfig,
+    error: mcpConfigError,
+  })
   const selectSection = (id: SectionId) => { setNavOrigin(null); setActiveSection(id) }
   const crossLinkToAI = (from: SectionId) => { setNavOrigin(from); setActiveSection('ai') }
   let content: ReactNode = null
@@ -3915,10 +3943,46 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 />
               }
             />
-            {(settings.mcpServerEnabled ?? false) && mcpConfig && (
+            {mcpConnection.kind === 'off' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)', fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                Access is off, so Daylens is not running the MCP server.
+              </div>
+            )}
+            {mcpConnection.kind === 'checking' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)', fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
+                Checking whether this install can run the Daylens MCP server…
+              </div>
+            )}
+            {mcpConnection.kind === 'unavailable' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-primary)', lineHeight: 1.6 }}>
+                  Connection unavailable
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginTop: 4 }}>
+                  {mcpConnection.reason}
+                </div>
+              </div>
+            )}
+            {mcpConnection.kind === 'failed' && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-primary)', lineHeight: 1.6 }}>
+                  Daylens could not check the connection
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginTop: 4 }}>
+                  {mcpConnection.reason}
+                </div>
+                <button type="button" style={{ ...inlineButtonStyle, marginTop: 10 }} onClick={() => void loadMcpConfig()}>
+                  Try again
+                </button>
+              </div>
+            )}
+            {mcpConnection.kind === 'ready' && (
               <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                  Daylens is ready to connect. In your AI app, add Daylens as an MCP server using the configuration below.
+                  {mcpConnection.config.running
+                    ? 'Daylens is ready to connect. In your AI app, add Daylens as an MCP server using the configuration below.'
+                    : 'Access is on and the configuration below is ready. Daylens starts the server itself a few seconds after launch; '
+                      + 'your AI app can start it directly from this configuration at any time.'}
                 </div>
                 <button
                   type="button"
@@ -3951,9 +4015,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                     {JSON.stringify({
                       mcpServers: {
                         daylens: {
-                          command: mcpConfig.command,
-                          args: mcpConfig.args,
-                          env: mcpConfig.env,
+                          command: mcpConnection.config.command,
+                          args: mcpConnection.config.args,
+                          env: mcpConnection.config.env,
                         },
                       },
                     }, null, 2)}
@@ -3964,9 +4028,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                       const snippet = JSON.stringify({
                         mcpServers: {
                           daylens: {
-                            command: mcpConfig.command,
-                            args: mcpConfig.args,
-                            env: mcpConfig.env,
+                            command: mcpConnection.config.command,
+                            args: mcpConnection.config.args,
+                            env: mcpConnection.config.env,
                           },
                         },
                       }, null, 2)
@@ -3993,9 +4057,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   </button>
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 8, lineHeight: 1.55 }}>
-                  Reads <code style={{ fontSize: 11 }}>{mcpConfig.dbPath}</code> — your real local database.
+                  Reads <code style={{ fontSize: 11 }}>{mcpConnection.config.dbPath}</code> — your real local database.
                 </div>
-                {!mcpConfig.isPackaged && (
+                {!mcpConnection.config.isPackaged && (
                   <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>
                     Dev build — the paths above point at your source checkout. A packaged install runs the bundled
                     server from inside the app and ships with this server off by default.

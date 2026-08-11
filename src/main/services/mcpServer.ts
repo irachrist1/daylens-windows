@@ -21,6 +21,10 @@ export interface McpServerConfig {
   // the UI can show it and prove no developer path is exposed in production.
   isPackaged: boolean
   dbPath: string
+  // Whether the Daylens-managed subprocess is up right now, so the Settings
+  // section reports the live state instead of inferring it from the toggle it
+  // just wrote.
+  running: boolean
 }
 
 let _proc: ChildProcess | null = null
@@ -72,6 +76,7 @@ export function getMcpServerConfig(): McpServerConfig | null {
     },
     isPackaged: app.isPackaged,
     dbPath,
+    running: isMcpServerRunning(),
   }
 }
 
