@@ -3,6 +3,7 @@ import {
   LABEL_HYPE_VOCAB,
   LABEL_PLUMBING_VOCAB,
   activityDescriptionFindings,
+  type DescriptionProvenance,
   type DescriptionVoiceFinding,
 } from './activityDescription'
 import { looksLikeRawArtifactLabel } from './blockLabel'
@@ -444,6 +445,47 @@ export function labelVoiceContextForBlock(
     kind: kind ?? null,
     hasSubjectEvidence: windowTitles.length > 0 || pageTitles.length > 0 || files.length > 0,
   }
+}
+
+// ── Label provenance (REQ-VIC-004) ─────────────────────────────────────────
+// A person's own wording for their own work outranks anything Daylens infers,
+// and it is never policy-checked: the rules exist to stop Daylens from writing
+// badly, not to correct someone's name for their own day. What the rules DO
+// still govern is how that wording travels — a name the person supplied is not
+// evidence, so no surface may re-derive a fact from it.
+//
+// Two paths produce a user-authored label and both must count: a
+// `block_label_overrides` row sets `label.override`, and a corrected block
+// review sets `label.source = 'user'` (and writes the same text into both).
+// Read structurally, like `labelVoiceContextForBlock`, because the projection
+// and payload paths carry slightly different block shapes.
+
+export interface LabelProvenanceBlock {
+  label?: {
+    current?: string | null
+    source?: string | null
+    override?: string | null
+  } | null
+}
+
+/** The person's own wording for this block, verbatim, or null when the label
+ *  is Daylens's. Never trimmed of anything but surrounding whitespace: the
+ *  wording is theirs, including punctuation the policy would strip. */
+export function userAuthoredLabel(block: LabelProvenanceBlock): string | null {
+  const override = block.label?.override?.trim()
+  if (override) return override
+  if (block.label?.source === 'user') {
+    const current = block.label?.current?.trim()
+    if (current) return current
+  }
+  return null
+}
+
+/** Where this block's user-visible label came from. `user` wording must be
+ *  presented as the person's name for the stretch and never as an observation
+ *  (AC-VIC-004.3). */
+export function labelProvenance(block: LabelProvenanceBlock): DescriptionProvenance {
+  return userAuthoredLabel(block) === null ? 'evidence' : 'user'
 }
 
 export interface EvaluatedLabel {
