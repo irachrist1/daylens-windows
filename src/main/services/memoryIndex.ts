@@ -808,11 +808,20 @@ export function refreshMemoryIndexForDay(db: Database.Database, date: string): v
 
 /** Dates with any capture evidence, newest first. */
 export function listMemoryIndexCandidateDates(db: Database.Database, limit: number): string[] {
+  // Browser visits are their own evidence: page records are projected from
+  // website_visits, so a day of browsing with no foreground session behind it
+  // still has a canonical record to build. Left out of this union, such a day
+  // counted as fully backfilled and its pages stayed unfindable.
+  const visitDates = tableExists(db, 'website_visits')
+    ? `
+      UNION
+      SELECT DISTINCT strftime('%Y-%m-%d', visit_time / 1000, 'unixepoch', 'localtime') AS date FROM website_visits`
+    : ''
   const rows = db.prepare(`
     SELECT DISTINCT date FROM (
       SELECT DISTINCT strftime('%Y-%m-%d', start_time / 1000, 'unixepoch', 'localtime') AS date FROM app_sessions
       UNION
-      SELECT DISTINCT strftime('%Y-%m-%d', ts_ms / 1000, 'unixepoch', 'localtime') AS date FROM focus_events
+      SELECT DISTINCT strftime('%Y-%m-%d', ts_ms / 1000, 'unixepoch', 'localtime') AS date FROM focus_events${visitDates}
     )
     WHERE date IS NOT NULL
     ORDER BY date DESC

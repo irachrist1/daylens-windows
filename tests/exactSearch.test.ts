@@ -25,6 +25,7 @@ import {
 import {
   ensureDayMemoryIndexed,
   indexMemoryForDay,
+  listMemoryIndexCandidateDates,
   memoryIndexBackfillStep,
   memoryIndexDayFingerprint,
 } from '../src/main/services/memoryIndex.ts'
@@ -146,6 +147,25 @@ test('the backfill step walks stale days and reports done when current', () => {
   const second = memoryIndexBackfillStep(db, { daysPerStep: 10 })
   assert.equal(second.indexed, 0)
   assert.equal(second.done, true)
+})
+
+test('a day of browsing with no session behind it still enters the backfill', () => {
+  const db = createProductionTestDatabase()
+  const visitTime = localMs(11)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id
+    ) VALUES ('sqlite.org', 'SQLite FTS5 documentation', 'https://sqlite.org/fts5.html', ?, ?, 900, 'com.apple.Safari')
+  `).run(visitTime, visitTime * 1000)
+
+  assert.ok(listMemoryIndexCandidateDates(db, 30).includes(DATE), 'browser visits are capture evidence')
+
+  const step = memoryIndexBackfillStep(db, { daysPerStep: 10 })
+  assert.ok(step.indexed >= 1, 'the browser-only day was indexed')
+  assert.ok(
+    db.prepare(`SELECT 1 FROM memory_records WHERE date = ? AND record_kind = 'page'`).get(DATE),
+    'its pages have a canonical record',
+  )
 })
 
 test('an ignored block and an evidence exclusion disappear from search after re-projection; undo restores', () => {

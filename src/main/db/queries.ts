@@ -432,7 +432,7 @@ function hasValues(values: readonly string[] | undefined): values is readonly st
 }
 
 /** Which filter kinds a reader's tables can actually express. */
-interface ExpressibleFilters {
+export interface ExpressibleFilters {
   applications?: boolean
   websites?: boolean
   entities?: boolean
@@ -448,8 +448,12 @@ interface ExpressibleFilters {
  * unfiltered, narrowing a search to a website would still bring back sessions
  * and artifacts, so the filter would silently fail to constrain anything. An
  * omission is visible and recoverable; a leak is neither.
+ *
+ * Exported because readers outside this module answer the same search: the
+ * aggregate readers behind structured retrieval must decide eligibility by this
+ * rule too, not by a second copy of it.
  */
-function readerIneligible(opts: SearchOptions, can: ExpressibleFilters): boolean {
+export function readerIneligible(opts: SearchOptions, can: ExpressibleFilters): boolean {
   if (hasValues(opts.applications) && !can.applications) return true
   if (hasValues(opts.websites) && !can.websites) return true
   if (filterEntityIds(opts).length > 0 && !can.entities) return true
@@ -469,7 +473,7 @@ const NO_FILTER: FilterSql = { sql: '', params: [] }
 
 const MEMORY_SOURCE_TYPES: readonly SearchSourceType[] = ['observed', 'connected', 'supplied', 'inferred']
 /** Readers over raw capture tables can only ever return directly observed rows. */
-const OBSERVED_ONLY: readonly SearchSourceType[] = ['observed']
+export const OBSERVED_ONLY: readonly SearchSourceType[] = ['observed']
 
 function marks(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ')
