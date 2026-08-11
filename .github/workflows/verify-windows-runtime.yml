@@ -2,16 +2,15 @@ name: Verify Windows Runtime
 
 # Windows minutes bill at 2x, so this full packaging + smoke run stays off
 # PRs entirely. The Linux verify (1x billing) still runs on PRs and catches
-# most packaging breakage; Windows coverage comes from merges to main, the
-# nightly schedule below, and manual dispatch.
+# most packaging breakage; Windows coverage comes from merges to main and
+# manual dispatch.
+#
+# No nightly cron — see the note in verify-macos-runtime.yml. This one failed
+# every nightly run too (npm install EPERM on dmg-license), at 2x billing.
 on:
   push:
     branches:
       - main
-  schedule:
-    # Nightly safety net at a quiet hour (03:47 UTC), staggered 30 min
-    # apart from the macOS verify to avoid a self-inflicted burst.
-    - cron: '47 3 * * *'
   workflow_dispatch:
 
 # Queue-latest per ref: cancel superseded runs everywhere, including main.

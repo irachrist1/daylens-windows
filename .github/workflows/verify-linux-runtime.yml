@@ -2,16 +2,16 @@ name: Verify Linux Runtime
 
 # Full packaging + smoke is heavy, so this stays off PRs entirely — PRs run
 # just the essential checks in ci.yml and remote-parity.yml. Linux coverage
-# comes from merges to main, the nightly schedule below, and manual dispatch,
-# matching the macOS and Windows verifies.
+# comes from merges to main and manual dispatch, matching the macOS and
+# Windows verifies.
+#
+# No nightly cron — see the note in verify-macos-runtime.yml. Blacksmith costs
+# no GitHub minutes, but on irachrist1/daylens these nightly runs sat unpicked
+# in the queue for ~24h and were auto-cancelled, every day.
 on:
   push:
     branches:
       - main
-  schedule:
-    # Nightly safety net at a quiet hour (04:17 UTC), staggered 30 min
-    # after the Windows verify to avoid a self-inflicted burst.
-    - cron: '17 4 * * *'
   workflow_dispatch:
 
 # Queue-latest per ref: cancel superseded runs everywhere, including main.

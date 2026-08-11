@@ -3,15 +3,13 @@ import { MarketingFooter, MarketingInnerNav } from "../components/MarketingChrom
 import { MarketingCursor } from "../components/MarketingEffects";
 import {
   MAC_DOWNLOAD_HREF,
-  UNIFIED_DESKTOP_ISSUES_URL,
-  UNIFIED_DESKTOP_REPO_URL,
   WINDOWS_DOWNLOAD_HREF,
 } from "../lib/platformLinks";
 
 export const metadata = {
   title: "Linux Status — Daylens",
   description:
-    "Daylens is being built as one cross-platform product for macOS, Windows, and Linux. Linux release routing is still transitioning into the unified desktop repo.",
+    "Daylens is being built as one cross-platform product for macOS, Windows, and Linux. Public Linux installer routing is still catching up.",
 };
 
 export default function LinuxStatusPage() {
@@ -40,9 +38,8 @@ export default function LinuxStatusPage() {
             }}
           >
             Daylens is being built as one local-first, evidence-grounded product across macOS,
-            Windows, and Linux. Public Linux installer routing is still moving into the unified
-            desktop repo, so this site no longer pretends there is a direct Linux download here
-            today.
+            Windows, and Linux. Public Linux installer routing is still catching up, so this site
+            does not offer a direct Linux download today.
           </p>
         </div>
       </section>
@@ -64,9 +61,7 @@ export default function LinuxStatusPage() {
             </h2>
             <div className="lp-docs-bullets" style={{ marginBottom: "1.25rem" }}>
               <p className="lp-docs-body" style={{ margin: 0 }}>
-                The unified source of truth is the Electron desktop repo
-                <code style={{ marginLeft: 6, marginRight: 6 }}>daylens</code>, for macOS,
-                Windows, and Linux work.
+                Daylens is one cross-platform desktop product for macOS, Windows, and Linux.
               </p>
               <p className="lp-docs-body" style={{ margin: 0 }}>
                 Linux runtime and packaging work still need real-machine validation across X11 and
@@ -76,25 +71,6 @@ export default function LinuxStatusPage() {
                 macOS and Windows installs are still the direct download paths surfaced on this
                 site today.
               </p>
-            </div>
-
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: "1rem" }}>
-              <a
-                href={UNIFIED_DESKTOP_REPO_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="lp-btn-primary"
-              >
-                Open the unified desktop repo
-              </a>
-              <a
-                href={UNIFIED_DESKTOP_ISSUES_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="lp-btn-ghost-dark"
-              >
-                Review launch status
-              </a>
             </div>
 
             <p className="lp-docs-body" style={{ marginBottom: "0.75rem" }}>
