@@ -38,6 +38,18 @@ test('truncation collision is disambiguated', () => {
   assert.notEqual(a, b, 'truncation must not cause two tools to share a key')
 })
 
+test('a collision on a key already at the length cap still resolves', () => {
+  const used = new Set<string>()
+  // Both names exceed the 64-character cap and share every character up to it,
+  // so the second call has to shorten the base to fit its suffix.
+  const shared = 'a'.repeat(80)
+  const first = namespaceMcpToolName(`${shared}-one`, 'search', used)
+  const second = namespaceMcpToolName(`${shared}-two`, 'search', used)
+  assert.equal(first.length, 64)
+  assert.ok(second.length <= 64)
+  assert.notEqual(second, first, 'a key at the cap must not swallow its own suffix')
+})
+
 test('the same server and tool name is stable across calls with a fresh set', () => {
   const used1 = new Set<string>()
   const used2 = new Set<string>()

@@ -36,6 +36,7 @@ export interface McpToolPool {
 }
 
 const CONNECT_TIMEOUT_MS = 8_000
+const MAX_MCP_TOOL_KEY_LENGTH = 64
 
 // Anything a server genuinely needs beyond launch essentials is set
 // explicitly in its settings entry's `env`.
@@ -85,15 +86,19 @@ export function namespaceMcpToolName(
 ): string {
   const base = `mcp_${serverName}_${toolName}`
     .replace(/[^a-zA-Z0-9_]/g, '_')
-    .slice(0, 64)
+    .slice(0, MAX_MCP_TOOL_KEY_LENGTH)
   if (!used.has(base)) {
     used.add(base)
     return base
   }
   let suffix = 2
   let candidate: string
+  // The suffix has to survive the length cap: truncating `${base}_${suffix}`
+  // would hand back `base` itself whenever base is already at the cap, and the
+  // loop would never find a free key.
   do {
-    candidate = `${base}_${suffix}`.slice(0, 64)
+    const tail = `_${suffix}`
+    candidate = `${base.slice(0, MAX_MCP_TOOL_KEY_LENGTH - tail.length)}${tail}`
     suffix++
   } while (used.has(candidate))
   used.add(candidate)

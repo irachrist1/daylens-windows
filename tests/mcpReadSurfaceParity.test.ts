@@ -13,6 +13,7 @@ import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { getSettings } from './support/settings-stub.mjs'
 import { trackingControlsStateFromSettings } from '../src/shared/trackingControls.ts'
 import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
+import { localDayBounds } from '../src/main/lib/localDate.ts'
 import { callDaylensReadTool, UnavailableCapabilityError } from '../packages/mcp-server/src/dispatch.ts'
 
 const DATE = '2026-07-15'
@@ -45,6 +46,21 @@ function seedDay(db: Database.Database): void {
       browser_bundle_id, canonical_browser_id, source)
     VALUES ('news.ycombinator.com', 'Hacker News', 'https://news.ycombinator.com/', ?, ?, 3600, ?, 'dia', 'chrome_history')
   `).run(localMs(10, 0), localMs(10, 0) * 1000, BROWSER_BUNDLE)
+}
+
+function seedVisitAt(db: Database.Database, domain: string, title: string, atMs: number): void {
+  const endMs = atMs + 15 * 60 * 1000
+  db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES (?, 'Dia', ?, ?, ?, 'browsing', 0, ?, 'Dia', 'dia', ?, 'test', 1)
+  `).run(BROWSER_BUNDLE, atMs, endMs, 900, title, BROWSER_BUNDLE)
+  db.prepare(`
+    INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source)
+    VALUES (?, ?, ?, ?, ?, 900, ?, 'dia', 'chrome_history')
+  `).run(domain, title, `https://${domain}/`, atMs, atMs * 1000, BROWSER_BUNDLE)
 }
 
 async function bothPaths(
@@ -115,6 +131,28 @@ test('search reaches the same executor through both paths', async () => {
   assert.deepEqual(mcp, chat)
   db.close()
 })
+
+// A local day is 23 or 25 hours long across a daylight-saving transition, so a
+// range that ends 24 hours after local midnight either drops the last hour of
+// the requested date or reaches into the next one.
+for (const date of ['2026-03-08', '2026-11-01']) {
+  test(`page visits cover exactly the local day of ${date}`, async () => {
+    const db = createProductionTestDatabase()
+    const nextMidnight = localDayBounds(date)[1]
+    seedVisitAt(db, 'lasthour.example', 'Last local hour', nextMidnight - 30 * 60 * 1000)
+    seedVisitAt(db, 'nextday.example', 'Next local day', nextMidnight + 30 * 60 * 1000)
+
+    const controls = trackingControlsStateFromSettings(getSettings())
+    const result = await callDaylensReadTool(
+      'listPageVisits', { startDate: date, endDate: date }, db, controls,
+    ) as { found: boolean; pages?: Array<{ domain: string }> }
+
+    const domains = (result.pages ?? []).map((page) => page.domain)
+    assert.ok(domains.includes('lasthour.example'), 'the last local hour of the date is inside the range')
+    assert.ok(!domains.includes('nextday.example'), 'the next local date is outside the range')
+    db.close()
+  })
+}
 
 test('a capability this path cannot serve fails with its recorded reason', async () => {
   const db = createProductionTestDatabase()

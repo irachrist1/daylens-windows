@@ -15,6 +15,7 @@ import {
   getCorrectedPageFactsForRange,
 } from '../../../src/main/services/activityFacts'
 import { getMomentEvidence } from '../../../src/main/lib/momentEvidence'
+import { localDayBounds } from '../../../src/main/lib/localDate'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 // The page ledger is read per range, so an unbounded range would scan the whole
@@ -28,8 +29,14 @@ export function isComposedCapabilityId(id: string): id is ComposedCapabilityId {
   return id === 'searchSessions' || id === 'getMoment' || id === 'listPageVisits'
 }
 
-function dayStartMs(date: string): number {
-  return new Date(`${date}T00:00:00`).getTime()
+// A local day is 23 or 25 hours long across a daylight-saving transition, so
+// a date's bounds run to the next local midnight, never to a fixed 24 hours
+// after the first. localDayBounds is the same reader the in-app paths use.
+function localRangeMs(startDate: string, endDate: string): [number, number] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return [NaN, NaN]
+  }
+  return [localDayBounds(startDate)[0], localDayBounds(endDate)[1] - 1]
 }
 
 interface PageVisitParams {
@@ -43,12 +50,13 @@ interface PageVisitParams {
 function listPageVisits(db: Database.Database, params: PageVisitParams): unknown {
   const startDate = typeof params.startDate === 'string' ? params.startDate : ''
   const endDate = typeof params.endDate === 'string' ? params.endDate : ''
-  const fromMs = dayStartMs(startDate)
-  const toMs = dayStartMs(endDate) + DAY_MS - 1
+  const [fromMs, toMs] = localRangeMs(startDate, endDate)
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) {
     return { found: false, reason: 'Bad date range.' }
   }
-  if ((toMs - fromMs) / DAY_MS > MAX_VISIT_RANGE_DAYS) {
+  // Rounded because the span carries the transition hour when the range
+  // crosses one, and the cap counts calendar days.
+  if (Math.round((toMs + 1 - fromMs) / DAY_MS) > MAX_VISIT_RANGE_DAYS) {
     return { found: false, reason: `Range too wide — ask for at most ${MAX_VISIT_RANGE_DAYS} days at a time.` }
   }
 
