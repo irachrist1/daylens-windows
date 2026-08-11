@@ -11,11 +11,29 @@ trail that survives the session that produced it.
 
 | Layer | Question it answers | Where it lives |
 | --- | --- | --- |
-| Requirements | What must be true from outside the system | `docs/specs/` |
-| Blueprints | How the system is arranged inside | [`docs/blueprints/`](blueprints/README.md), [`docs/codebase/architecture.md`](codebase/architecture.md) |
-| Work orders | What is being delivered now | Linear, the Daylens Version 2 project |
+| Requirements | What must be true from outside the system | The Software Factory at [factory.8090.ai](https://factory.8090.ai) (21 feature nodes), and `docs/specs/` |
+| Blueprints | How the system is arranged inside | The Software Factory (39 blueprints), and `docs/codebase/architecture.md` |
+| Work orders | What is being delivered now | The Software Factory (6 phases), and Linear's Daylens Version 2 project |
 | Execution | What was actually planned, reviewed, and verified | `.sw-factory/<issue>/` |
 | Acceptance | What passes and what still fails | `docs/acceptance/` |
+
+The hosted Software Factory is the authority for requirements, blueprints, and
+work orders. It is reached through its MCP server, and a session without that
+server connected cannot see any of it — which is a failure mode worth naming,
+because it already happened: the execution trail in `.sw-factory/DEV-292/` was
+produced by a session that had no Software Factory connection, recorded its
+blueprint steps as skipped, and rebuilt part of the blueprint layer by hand.
+Reconciling that against the real blueprints is outstanding.
+
+Before executing a work order, confirm the connection:
+
+```bash
+claude mcp list | grep software-factory
+```
+
+If it does not report `✔ Connected`, stop and connect it rather than falling back
+to the skill's portable mode. Portable mode is for repositories with no hosted
+factory; using it here silently substitutes local guesses for authored records.
 
 A layer is only authoritative for its own question. A specification does not
 authorize implementation; a passing test does not mean an issue is accepted.

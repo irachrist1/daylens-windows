@@ -11,6 +11,14 @@ This execution ran the context, verification, review, and handoff phases against
 the code in the tree, and the implementation plan was written to match what
 landed.
 
+**This execution is incomplete and Phase 1 is not certified.** It ran without a
+connection to the Software Factory, so none of the project's 21 requirements or 39
+blueprints was read. Four Phase 1 and Phase 3 items originally carried skip
+reasons asserting that no blueprints existed; that was false, and they are
+reopened below. What the execution does establish stands on its own — the code,
+the tests, and the verified run against a real day — but requirements and
+blueprint alignment were never checked against the authority for those layers.
+
 ## Phase 1: Start / Context Gathering
 
 ### Required Steps
@@ -18,20 +26,24 @@ landed.
 - [x] Review work order description provided by MCP tool output
       Read in full from Linear (DEV-292). Problem statement, solution, 14 user
       stories, implementation decisions, testing decisions, out of scope.
-- [x] Identify linked requirements and blueprints
-      Requirement: `docs/specs/day-recap-and-analysis.md`. Voice contract:
-      `docs/specs/label-voice.md`. No blueprints exist.
+- [ ] Identify linked requirements and blueprints
+      PARTIAL. Local requirements read: `docs/specs/day-recap-and-analysis.md`
+      and `docs/specs/label-voice.md`. The Software Factory's own 21 requirements
+      and 39 blueprints — the authority for this layer — were never consulted.
 - [x] Review every connected requirements document
       Graded against the spec's `## Acceptance` section.
-- [SKIP] Review every connected blueprint document
-      Skip reason: no blueprint documents exist for this surface. The blueprint
-      layer is a known gap recorded in `docs/factory.md`.
-- [SKIP] Follow `@…` mentions **and links** to other blueprints in linked documents and read each referenced blueprint via MCP
-      Skip reason: no blueprints exist, so there are no blueprint references to
-      follow. Specification cross-references were followed
-      (`agent-runtime-and-context.md`, `ai-agent.md`).
-- [SKIP] Review every referenced blueprint discovered that way; add them to **Referenced Blueprints** in `context.md`
-      Skip reason: none discovered; see above.
+- [ ] Review every connected blueprint document
+      NOT DONE, and the original skip reason was false. It read "no blueprint
+      documents exist for this surface". The Software Factory holds 39 blueprints
+      for this project; none was read, because the session that ran this execution
+      had no Software Factory MCP connection and wrongly treated "no MCP
+      configured" as "no records exist".
+- [ ] Follow `@…` mentions **and links** to other blueprints in linked documents and read each referenced blueprint via MCP
+      NOT DONE, same cause. Specification cross-references were followed
+      (`agent-runtime-and-context.md`, `ai-agent.md`), but no blueprint reference
+      was resolved through MCP.
+- [ ] Review every referenced blueprint discovered that way; add them to **Referenced Blueprints** in `context.md`
+      NOT DONE, same cause.
 - [x] Extract acceptance criteria from requirements
       Five lines from the spec's `## Acceptance`, recorded and graded in
       `review-log.md`.
@@ -42,7 +54,9 @@ landed.
       Filled by hand rather than by `update-context-index.sh`, because the
       records live in Linear and `docs/specs`, not in a Software Factory service.
 
-- [x] **Certification: Phase 1 complete. Proceeding to Phase 2.**
+- [ ] **Certification: Phase 1 NOT complete.** Requirements and blueprints were
+      never read from the Software Factory. Phases 2 and 3 proceeded anyway, which
+      is why this trail cannot be treated as a clean execution.
 
 ## Phase 2: Planning And Implementation
 
@@ -82,10 +96,11 @@ landed.
       evals fail the old shapes and pass the new ones") was closed in Round 2
       after the owner delegated the variant choice; see the decision record
       below.
-- [SKIP] Architecture is aligned with linked blueprints, or documented drift is accepted
-      Skip reason: no blueprints to align against. Drift from the work order's own
+- [ ] Architecture is aligned with linked blueprints, or documented drift is accepted
+      NOT DONE. The original skip reason ("no blueprints to align against") was
+      false; 39 exist in the Software Factory. Drift from the work order's own
       instruction on the timeout wrapper is documented and accepted in
-      `implementation-plan.md`.
+      `implementation-plan.md`, but blueprint alignment was never checked.
 - [x] Exploratory pass on user-visible or external behavior
       `npm run lab:recap 2026-08-10` against a 13-block real day: 4/4 variants
       completed, 7.03-13.4s, voice-clean. Evidence in `review-log.md`. Not a
