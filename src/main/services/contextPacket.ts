@@ -453,6 +453,25 @@ function wordBounded(haystack: string, needle: string): boolean {
   return new RegExp(`(^|[^a-z0-9])${escaped}(?=$|[^a-z0-9])`, 'i').test(haystack)
 }
 
+/**
+ * Is the question about Daylens' own memory rather than about the person's day?
+ *
+ * This decides whether unconfirmed (drafted) profile facts may enter the packet
+ * — see `correctedFactItems`. Deliberately narrow: it must match a person
+ * asking to see what Daylens believes, and must not match an ordinary activity
+ * question that merely contains the word "work" or "know".
+ */
+const ASKS_WHAT_DAYLENS_KNOWS = [
+  /\bwhat\s+(do|does)\s+(you|daylens)\s+(know|remember)\b/i,
+  /\bwhat\s+(have|has)\s+(you|daylens)\s+(learned|learnt|inferred|remembered)\b/i,
+  /\b(know|knows|remember|remembers)\s+about\s+(me|my)\b/i,
+  /\b(your|daylens'?s?)\s+memory\b/i,
+]
+
+function asksWhatDaylensKnows(question: string): boolean {
+  return ASKS_WHAT_DAYLENS_KNOWS.some((pattern) => pattern.test(question))
+}
+
 function correctedFactItems(db: Database.Database, question: string): ContextPacketItem[] {
   const items: ContextPacketItem[] = []
   const push = (fact: { id: string; text: string; origin: string }, reason: string): void => {
@@ -475,12 +494,32 @@ function correctedFactItems(db: Database.Database, question: string): ContextPac
   }
   try {
     // General memory always rides along (memory.md §2.2); a client's scoped
-    // memory joins only when the question names that client. Only CONFIRMED
-    // facts enter AI context — drafts are proposals in the Manage-memory view,
-    // not context (WO-18 / AC-SM-012.1).
-    const profile = getScopedMemoryProfile(db, true)
+    // memory joins only when the question names that client.
+    //
+    // Which tier of the profile rides along depends on what is being asked.
+    //
+    // For an ordinary question about the person's activity, only CONFIRMED
+    // facts enter AI context (WO-18 / AC-SM-012.1). A drafted fact is an
+    // unconfirmed inference; carried in as background it reads as something
+    // Daylens knows, and the model repeats it as established. That leak stays
+    // closed.
+    //
+    // A question about Daylens' own memory is the one case where withholding
+    // them is the dishonest answer: the person is asking to see what Daylens
+    // believes about them — largely so they can confirm or reject it — and a
+    // confirmed-only reply hides exactly the drafts they asked about. There the
+    // drafts do ride along, as `inferred` items whose reason says they are
+    // awaiting confirmation, so nothing downstream can mistake one for a fact
+    // the person stands behind.
+    const confirmedOnly = !asksWhatDaylensKnows(question)
+    const profile = getScopedMemoryProfile(db, confirmedOnly)
     for (const fact of profile.general) {
-      push(fact, 'Fact the person supplied and confirmed')
+      push(
+        fact,
+        fact.origin === 'user'
+          ? 'Fact the person supplied and confirmed'
+          : 'Fact drafted from real evidence, awaiting confirmation in the editable memory profile',
+      )
     }
     for (const group of profile.clients) {
       if (group.clientName.trim().length < 3 || !wordBounded(question, group.clientName.trim()))
