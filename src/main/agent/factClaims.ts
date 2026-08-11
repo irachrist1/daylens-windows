@@ -95,7 +95,8 @@ export function renderDuration(seconds: number): string {
   return `${hours}h ${minutes}m`
 }
 
-/** Every bare integer in text, used as the evidence-side number corpus. */
+/** Every bare integer in text. Deliberately subject-blind: used only where a
+ *  missed reading would be worse than a loose one. */
 export function scanIntegers(text: string): number[] {
   const values: number[] = []
   for (const raw of text.match(/\b\d{1,10}\b/g) ?? []) {
@@ -103,6 +104,86 @@ export function scanIntegers(text: string): number[] {
     if (Number.isFinite(value)) values.push(value)
   }
   return values
+}
+
+// ─── Numbers evidence asserts, with what they are about ──────────────────────
+// A bare integer asserts nothing on its own: `{"retryCount": 6}` is not six
+// minutes and "6 attendees" is not six apps. Evidence-side scanning therefore
+// keeps every number with the subject its own source attached it to, so a
+// lookup can require that subject to match the claim being checked.
+
+/** A number an evidence source stated, with its subject normalized to
+ *  lowercase words: the key it was written under ("totalSeconds" reads as
+ *  "total seconds") or the noun that followed it ("6 apps" reads as "apps"). */
+export interface SubjectedNumber {
+  value: number
+  subject: string
+}
+
+const COUNT_QUALIFIERS = String.raw`(?:different|distinct|separate|unique|other|total)`
+// "<n> <noun>": the word after a number is what it counts or the unit it is in.
+const QUANTIFIED_RE = new RegExp(
+  String.raw`(?<![\d.])(\d{1,12})\s*(?:${COUNT_QUALIFIERS}\s+)?([A-Za-z][A-Za-z_-]{0,30})`,
+  'g',
+)
+// `"totalSeconds": 12600`, `focus_seconds = 300`: the key is the subject.
+const LABELLED_RE = /([A-Za-z][A-Za-z0-9_\-. ]{0,40}?)"?\s*[:=]\s*"?(\d{1,12})(?![\d.])/g
+
+function normalizeSubject(raw: string): string {
+  return raw
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_\-.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+/** Every number in `text` that its own source gave a subject to. */
+export function scanSubjectedNumbers(text: string): SubjectedNumber[] {
+  const found: SubjectedNumber[] = []
+  if (!text) return found
+  collectSubjected(QUANTIFIED_RE, text, 1, 2, found)
+  collectSubjected(LABELLED_RE, text, 2, 1, found)
+  return found
+}
+
+function collectSubjected(
+  pattern: RegExp,
+  text: string,
+  valueGroup: number,
+  subjectGroup: number,
+  into: SubjectedNumber[],
+): void {
+  pattern.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(text)) !== null) {
+    const value = Number(match[valueGroup])
+    const subject = normalizeSubject(match[subjectGroup])
+    if (!Number.isInteger(value) || subject.length === 0) continue
+    into.push({ value, subject })
+  }
+}
+
+// Longest unit first, and milliseconds before seconds, so "duration ms" is not
+// read as seconds and "milliseconds" is not read as "seconds".
+const SUBJECT_UNIT_SECONDS: Array<[RegExp, number]> = [
+  [/\b(?:milliseconds?|millis|msecs?|ms)\b/, 0.001],
+  [/\b(?:seconds?|secs?)\b/, 1],
+  [/\b(?:minutes?|mins?)\b/, 60],
+  [/\b(?:hours?|hrs?)\b/, 3600],
+]
+
+/**
+ * The duration a subject-bound number asserts, in seconds, or null when its
+ * subject names no time unit. Only a labelled number is a duration: reading
+ * every integer as both seconds and minutes let unrelated values back a stated
+ * figure.
+ */
+export function durationSecondsOf(entry: SubjectedNumber): number | null {
+  for (const [pattern, multiplier] of SUBJECT_UNIT_SECONDS) {
+    if (pattern.test(entry.subject)) return Math.round(entry.value * multiplier)
+  }
+  return null
 }
 
 /** HH:MM clock times in text, normalized to 24h "HH:MM" strings. */

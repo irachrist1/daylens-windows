@@ -179,9 +179,12 @@ function scopeLabel(dates: readonly string[]): string {
 }
 
 /**
- * Compute the requested facts from the corrected boundary. A request the
- * evidence cannot answer (no captured activity, an app with no sessions in
- * scope) yields no fact: silence is honest, an invented zero is not.
+ * Compute the requested facts from the corrected boundary. A scope that was
+ * read successfully but holds no activity still yields facts, with the value
+ * zero: nothing captured is a measured answer, so a model claiming hours on an
+ * empty day is corrected rather than left alone. Only a subject the scope has
+ * no reading for at all (an app it never captured) yields no fact, and a read
+ * that failed yields none either.
  */
 export function computeDeterministicFacts(
   db: Database.Database,
@@ -248,7 +251,6 @@ function factsFromScope(
   for (const request of requests) {
     switch (request.kind) {
       case 'total_tracked_time': {
-        if (scope.totalSeconds <= 0) break
         facts.push({
           id: `total_tracked_time:${scopeId}`,
           kind: request.kind,
@@ -257,12 +259,13 @@ function factsFromScope(
           rendered: renderDuration(scope.totalSeconds),
           subject: `tracked activity on ${label}`,
           identity: `facts:day:${scopeId}:total`,
-          statement: `Tracked activity for ${label} totals ${renderDuration(scope.totalSeconds)} (${scope.totalSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`,
+          statement: scope.totalSeconds > 0
+            ? `Tracked activity for ${label} totals ${renderDuration(scope.totalSeconds)} (${scope.totalSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`
+            : `No tracked activity was captured for ${label} (0 seconds), from the corrected activity facts the Timeline and Apps views read.`,
         })
         break
       }
       case 'focus_time': {
-        if (scope.focusSeconds <= 0) break
         facts.push({
           id: `focus_time:${scopeId}`,
           kind: request.kind,
@@ -271,14 +274,17 @@ function factsFromScope(
           rendered: renderDuration(scope.focusSeconds),
           subject: `focused time on ${label}`,
           identity: `facts:day:${scopeId}:focus`,
-          statement: `Focused time for ${label} totals ${renderDuration(scope.focusSeconds)} (${scope.focusSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`,
+          statement: scope.focusSeconds > 0
+            ? `Focused time for ${label} totals ${renderDuration(scope.focusSeconds)} (${scope.focusSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`
+            : `No focused time was captured for ${label} (0 seconds), from the corrected activity facts the Timeline and Apps views read.`,
         })
         break
       }
       case 'app_total_time': {
         const needle = request.appNeedle?.toLowerCase() ?? ''
         const summary = scope.appSummaries.find((entry) => entry.appName.toLowerCase() === needle)
-        if (!summary || summary.totalSeconds <= 0) break
+        // An app the scope never captured has no reading, which is not a zero.
+        if (!summary) break
         facts.push({
           id: `app_total_time:${scopeId}:${summary.appName.toLowerCase()}`,
           kind: request.kind,
@@ -287,13 +293,14 @@ function factsFromScope(
           rendered: renderDuration(summary.totalSeconds),
           subject: `${summary.appName} on ${label}`,
           identity: `facts:app:${scopeId}:${summary.canonicalAppId ?? summary.bundleId}`,
-          statement: `${summary.appName} totals ${renderDuration(summary.totalSeconds)} (${summary.totalSeconds} seconds) for ${label}, from the corrected activity facts the Apps view reads.`,
+          statement: summary.totalSeconds > 0
+            ? `${summary.appName} totals ${renderDuration(summary.totalSeconds)} (${summary.totalSeconds} seconds) for ${label}, from the corrected activity facts the Apps view reads.`
+            : `No ${summary.appName} time was captured for ${label} (0 seconds), from the corrected activity facts the Apps view reads.`,
         })
         break
       }
       case 'app_count': {
         const count = scope.appSummaries.filter((entry) => entry.totalSeconds > 0).length
-        if (count <= 0) break
         facts.push({
           id: `app_count:${scopeId}`,
           kind: request.kind,
@@ -302,12 +309,13 @@ function factsFromScope(
           rendered: String(count),
           subject: `apps used on ${label}`,
           identity: `facts:day:${scopeId}:app_count`,
-          statement: `${count} apps were used on ${label}, from the corrected activity facts the Apps view reads.`,
+          statement: count > 0
+            ? `${count} apps were used on ${label}, from the corrected activity facts the Apps view reads.`
+            : `No apps were used on ${label}, from the corrected activity facts the Apps view reads.`,
         })
         break
       }
       case 'site_count': {
-        if (scope.siteCount <= 0) break
         facts.push({
           id: `site_count:${scopeId}`,
           kind: request.kind,
@@ -316,7 +324,9 @@ function factsFromScope(
           rendered: String(scope.siteCount),
           subject: `sites visited on ${label}`,
           identity: `facts:day:${scopeId}:site_count`,
-          statement: `${scope.siteCount} sites were visited on ${label}, from the corrected website facts the Apps view reads.`,
+          statement: scope.siteCount > 0
+            ? `${scope.siteCount} sites were visited on ${label}, from the corrected website facts the Apps view reads.`
+            : `No sites were visited on ${label}, from the corrected website facts the Apps view reads.`,
         })
         break
       }
@@ -364,10 +374,15 @@ export function enforceDeterministicFacts(
   text: string,
   facts: readonly DeterministicFact[],
   options: {
-    /** Does this exchange's evidence back a figure of this value? Durations
-     *  arrive in seconds, counts as whole numbers. Without it every stated
-     *  figure counts as unbacked and the first one is repaired. */
-    isBacked?: (value: number, dimension: DeterministicDimension) => boolean
+    /** Does this exchange's evidence back a figure of this value, for the fact
+     *  being enforced? Durations arrive in seconds, counts as whole numbers.
+     *  Without it every stated figure counts as unbacked and the first one is
+     *  repaired. */
+    isBacked?: (
+      value: number,
+      dimension: DeterministicDimension,
+      kind: DeterministicFactKind,
+    ) => boolean
   } = {},
 ): DeterministicEnforcement {
   const repairs: DeterministicRepair[] = []
@@ -397,7 +412,7 @@ export function enforceDeterministicFacts(
     // model produced itself. Components quoted from evidence are left alone,
     // and when every stated figure is backed the answer never stated the
     // requested aggregate at all, so nothing is touched.
-    const target = stated.find((claim) => !isBacked(claim.value, fact.dimension))
+    const target = stated.find((claim) => !isBacked(claim.value, fact.dimension, fact.kind))
     if (!target) continue
 
     current = `${current.slice(0, target.start)}${fact.rendered}${current.slice(target.end)}`
@@ -420,6 +435,14 @@ interface StatedClaim {
 const COUNT_NOUNS: Partial<Record<DeterministicFactKind, string>> = {
   app_count: String.raw`(?:apps|app|applications|application|programs|program)`,
   site_count: String.raw`(?:sites|site|websites|website|domains|domain)`,
+}
+
+/** What a count fact counts, as a pattern to test a subject against. Shared
+ *  with the evidence index so "6 apps" in an answer and "appCount: 6" in a tool
+ *  result are recognised as claims about the same thing. */
+export function countSubjectPattern(kind: DeterministicFactKind): RegExp | null {
+  const noun = COUNT_NOUNS[kind]
+  return noun ? new RegExp(String.raw`\b${noun}\b`, 'i') : null
 }
 
 const COUNT_QUALIFIERS = String.raw`(?:different\s+|distinct\s+|separate\s+|unique\s+|other\s+)?`

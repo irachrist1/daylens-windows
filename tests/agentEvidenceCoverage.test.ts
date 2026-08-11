@@ -243,6 +243,72 @@ test('AC-AIA-002.4: a component figure quoted from evidence is not mistaken for 
   assert.equal(result.repairs[0].claimed, '6 hours')
 })
 
+test('AC-AIA-002.4: an unrelated integer in evidence does not shield a wrong figure', () => {
+  const facts = [{
+    id: 'total_tracked_time:scope',
+    kind: 'total_tracked_time' as const,
+    dimension: 'duration' as const,
+    value: 12_600,
+    rendered: '3h 30m',
+    subject: 'tracked activity',
+    identity: 'facts:day:scope:total',
+    statement: 'Tracked activity totals 3h 30m (12600 seconds).',
+  }]
+  // Six retries is not six minutes. Reading every bare integer as seconds and
+  // as minutes made this figure look quoted from evidence, so it survived.
+  const evidence = buildExchangeEvidence({
+    packet: null,
+    toolTrace: [{ tool: 'get_day_overview', output: '{"retryCount":6,"attendees":6}' }],
+    deterministic: facts,
+  })
+  const result = enforceDeterministicFacts('You were active for 6 minutes.', facts, {
+    isBacked: (value, dimension, kind) => evidenceBacksValue(evidence, value, dimension, kind),
+  })
+
+  assert.equal(result.text, 'You were active for 3h 30m.')
+  assert.equal(result.repairs.length, 1)
+  assert.equal(result.repairs[0].claimed, '6 minutes')
+})
+
+test('AC-AIA-002.4: an unrelated integer in evidence does not shield a wrong count', () => {
+  const facts = [{
+    id: 'app_count:scope',
+    kind: 'app_count' as const,
+    dimension: 'count' as const,
+    value: 12,
+    rendered: '12',
+    subject: 'apps used',
+    identity: 'facts:day:scope:app_count',
+    statement: '12 apps were used.',
+  }]
+  const evidence = buildExchangeEvidence({
+    packet: null,
+    toolTrace: [{ tool: 'get_day_overview', output: '{"retryCount":6}' }],
+    deterministic: facts,
+  })
+  const result = enforceDeterministicFacts('You used 6 apps.', facts, {
+    isBacked: (value, dimension, kind) => evidenceBacksValue(evidence, value, dimension, kind),
+  })
+
+  assert.equal(result.text, 'You used 12 apps.')
+  assert.equal(result.repairs.length, 1)
+})
+
+test('evidence backs a figure only when its own source said what the number was', () => {
+  const evidence = buildExchangeEvidence({
+    packet: null,
+    toolTrace: [{ tool: 'get_day_overview', output: '{"retryCount":6,"appCount":9,"totalSeconds":2700}' }],
+    deterministic: [],
+  })
+
+  assert.equal(evidenceBacksValue(evidence, 9, 'count', 'app_count'), true)
+  assert.equal(evidenceBacksValue(evidence, 2700, 'duration'), true)
+  // The same integer under an unrelated key backs nothing.
+  assert.equal(evidenceBacksValue(evidence, 6, 'count', 'app_count'), false)
+  assert.equal(evidenceBacksValue(evidence, 9, 'count', 'site_count'), false)
+  assert.equal(evidenceBacksValue(evidence, 360, 'duration'), false)
+})
+
 test('AC-AIA-002.4: a count claim never rewrites the digits of a date or a clock time', () => {
   const facts = [{
     id: 'app_count:scope',
@@ -330,6 +396,37 @@ test('AC-AIA-002.4: a per-app question is answered from the corrected app roster
   assert.match(result.text, /1h 0m/)
   assert.equal(result.evidence.deterministicFacts[0].kind, 'app_total_time')
   assert.equal(result.evidence.deterministicFacts[0].value, 3600)
+  db.close()
+})
+
+test('AC-AIA-002.4: a day with nothing captured is answered as zero, not left to the model', () => {
+  const db = createProductionTestDatabase()
+  const nowMs = ms(23, 0)
+
+  const totals = deterministicFactsForQuestion(
+    db,
+    `How much time did I spend working on ${DATE}?`,
+    { dates: [DATE] },
+    { nowMs },
+  )
+  assert.equal(totals.length, 1)
+  assert.equal(totals[0].kind, 'total_tracked_time')
+  assert.equal(totals[0].value, 0)
+  const repairedTotal = enforceDeterministicFacts('You were active for 6 hours.', totals)
+  assert.equal(repairedTotal.text, `You were active for ${totals[0].rendered}.`)
+  assert.equal(repairedTotal.repairs.length, 1)
+
+  const counts = deterministicFactsForQuestion(
+    db,
+    `How many apps did I use on ${DATE}?`,
+    { dates: [DATE] },
+    { nowMs },
+  )
+  assert.equal(counts[0]?.kind, 'app_count')
+  assert.equal(counts[0].value, 0)
+  const repairedCount = enforceDeterministicFacts('You used 5 apps.', counts)
+  assert.equal(repairedCount.text, 'You used 0 apps.')
+  assert.equal(repairedCount.repairs.length, 1)
   db.close()
 })
 

@@ -15,13 +15,17 @@
 // message in the thread are simply never offered to this module, so there is
 // no path by which inspection could surface them.
 import type { ContextPacket } from '../services/contextPacket'
-import type { DeterministicFact } from './deterministicFacts'
+import type { DeterministicFact, DeterministicFactKind } from './deterministicFacts'
+import type { SubjectedNumber } from './factClaims'
 import { extractNamedEntities } from '../ai/citations'
+import { countSubjectPattern } from './deterministicFacts'
 import {
+  durationSecondsOf,
   scanClockTimes,
   scanDurations,
   scanIntegers,
   scanIsoDates,
+  scanSubjectedNumbers,
 } from './factClaims'
 
 /** A stated duration within this much of an evidence figure is that figure. */
@@ -38,12 +42,20 @@ export interface ExchangeEvidenceEntry {
   statement: string
   /** Lowercased searchable text. Never leaves this module. */
   haystack: string
-  /** Every duration this entry asserts, in seconds. */
+  /** Durations this entry states outright: as prose ("3h 12m"), or as a number
+   *  under a label that names its unit ("totalSeconds": 11520). This is what a
+   *  repair may treat as a figure the model quoted rather than produced. */
   durationSeconds: number[]
-  /** Every bare number this entry asserts, for count claims. Precomputed so a
-   *  lookup never rescans a tool payload that can run to tens of thousands of
-   *  characters. */
-  numbers: number[]
+  /** Every reading of this entry's bare integers as a duration, on top of the
+   *  stated ones. Deciding whether to hedge a figure is the opposite trade from
+   *  deciding whether to repair one: a reading missed here staples a false
+   *  caveat onto a grounded answer, so this side stays generous. */
+  possibleDurationSeconds: number[]
+  /** Every count this entry asserts, each kept with the subject its own source
+   *  named it for, so an unrelated integer cannot stand in for a count of the
+   *  thing at issue. Precomputed so a lookup never rescans a tool payload that
+   *  can run to tens of thousands of characters. */
+  counts: SubjectedNumber[]
 }
 
 export interface ExchangeEvidence {
@@ -60,17 +72,31 @@ export interface BuildExchangeEvidenceInput {
   deterministic?: readonly DeterministicFact[]
 }
 
-function durationsIn(text: string): number[] {
+interface EvidenceFigures {
+  durationSeconds: number[]
+  possibleDurationSeconds: number[]
+  counts: SubjectedNumber[]
+}
+
+/** The figures one evidence entry asserts. A figure written as prose ("3h 12m")
+ *  and the same figure written as a labelled number ("totalSeconds": 11520) are
+ *  the same assertion, so both readings are indexed. A number its source gave no
+ *  unit is not a stated duration, only a possible one. */
+function figuresIn(text: string): EvidenceFigures {
   const seconds = new Set<number>()
-  // A figure written as prose ("3h 12m") and the raw numbers a tool emits
-  // ("totalSeconds": 11520) are the same assertion; index both readings so a
-  // correctly stated duration matches whichever form the evidence used.
   for (const match of scanDurations(text)) seconds.add(match.seconds)
-  for (const value of scanIntegers(text)) {
-    seconds.add(value)
-    seconds.add(value * 60)
+  const counts: SubjectedNumber[] = []
+  for (const entry of scanSubjectedNumbers(text)) {
+    const duration = durationSecondsOf(entry)
+    if (duration == null) counts.push(entry)
+    else seconds.add(duration)
   }
-  return [...seconds]
+  const possible = new Set(seconds)
+  for (const value of scanIntegers(text)) {
+    possible.add(value)
+    possible.add(value * 60)
+  }
+  return { durationSeconds: [...seconds], possibleDurationSeconds: [...possible], counts }
 }
 
 /**
@@ -86,8 +112,7 @@ export function buildExchangeEvidence(input: BuildExchangeEvidenceInput): Exchan
       kind: 'packet',
       statement: item.statement,
       haystack: item.statement.toLowerCase(),
-      durationSeconds: durationsIn(item.statement),
-      numbers: scanIntegers(item.statement),
+      ...figuresIn(item.statement),
     })
   }
 
@@ -100,19 +125,28 @@ export function buildExchangeEvidence(input: BuildExchangeEvidenceInput): Exchan
       kind: 'tool',
       statement: `${entry.tool} returned this result`,
       haystack: entry.output.toLowerCase(),
-      durationSeconds: durationsIn(entry.output),
-      numbers: scanIntegers(entry.output),
+      ...figuresIn(entry.output),
     })
   })
 
   for (const fact of input.deterministic ?? []) {
+    const figures = figuresIn(fact.statement)
+    // A computed fact asserts its own value in its own dimension, whatever the
+    // prose of its statement happens to read as.
     entries.push({
       identity: fact.identity,
       kind: 'computed',
       statement: fact.statement,
       haystack: fact.statement.toLowerCase(),
-      durationSeconds: [fact.value, ...durationsIn(fact.statement)],
-      numbers: [fact.value, ...scanIntegers(fact.statement)],
+      durationSeconds: fact.dimension === 'duration'
+        ? [fact.value, ...figures.durationSeconds]
+        : figures.durationSeconds,
+      possibleDurationSeconds: fact.dimension === 'duration'
+        ? [fact.value, ...figures.possibleDurationSeconds]
+        : figures.possibleDurationSeconds,
+      counts: fact.dimension === 'count'
+        ? [{ value: fact.value, subject: fact.subject.toLowerCase() }, ...figures.counts]
+        : figures.counts,
     })
   }
 
@@ -124,18 +158,27 @@ export function buildExchangeEvidence(input: BuildExchangeEvidenceInput): Exchan
  * given in seconds, counts as whole numbers. The deterministic enforcer uses
  * this to tell a figure the model quoted from evidence (leave it alone) from a
  * figure the model produced itself (the claim actually at issue).
+ *
+ * A count also needs the kind of count being checked, because a number only
+ * backs it when the source attached that number to the same thing: a retry
+ * count of 6 is not evidence that six apps were used. Without a kind no count
+ * is backed, so the stated figure is treated as the model's own.
  */
 export function evidenceBacksValue(
   evidence: ExchangeEvidence,
   value: number,
   dimension: 'duration' | 'count',
+  kind?: DeterministicFactKind,
 ): boolean {
   if (dimension === 'duration') {
     return evidence.entries.some((entry) => entry.durationSeconds
       .some((candidate) => Math.abs(candidate - value) <= DURATION_TOLERANCE_SECONDS))
   }
+  const subject = kind ? countSubjectPattern(kind) : null
+  if (!subject) return false
   // A count is only backed by the exact integer, never by a near miss.
-  return evidence.entries.some((entry) => entry.numbers.includes(value))
+  return evidence.entries.some((entry) => entry.counts
+    .some((candidate) => candidate.value === value && subject.test(candidate.subject)))
 }
 
 export type FactualClaimKind = 'duration' | 'clock_time' | 'date' | 'entity'
@@ -186,7 +229,7 @@ export interface EvidenceCoverage {
 function backs(entry: ExchangeEvidenceEntry, claim: FactualClaim): boolean {
   if (claim.kind === 'duration') {
     const seconds = claim.seconds ?? -1
-    return entry.durationSeconds.some((value) => Math.abs(value - seconds) <= DURATION_TOLERANCE_SECONDS)
+    return entry.possibleDurationSeconds.some((value) => Math.abs(value - seconds) <= DURATION_TOLERANCE_SECONDS)
   }
   return entry.haystack.includes(claim.text.toLowerCase())
 }
