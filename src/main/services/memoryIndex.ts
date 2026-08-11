@@ -30,17 +30,19 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { AppSession } from '@shared/types'
 import { localDayBounds, localDateString } from '../lib/localDate'
+import { normalizeUrlForStorage } from '../lib/appIdentity'
 import {
   getCorrectedSessionsForRange,
   getEvidenceExclusionsForRange,
   getIgnoredBlockSpansForRange,
   type CorrectionSpan,
 } from './activityFacts'
+import { artifactIdFor } from './workBlocks'
 import { mergeGroupIds, resolveMergeChain, type EntityRow } from './entities/entityRepository'
 
 /** Bump to force a full reindex on upgrade (the version is part of every
  *  day fingerprint, so stale-format days re-project lazily). */
-export const MEMORY_INDEX_VERSION = 3
+export const MEMORY_INDEX_VERSION = 4
 
 export type MemoryRecordKind = 'session' | 'meeting' | 'artifact' | 'page' | 'connected_activity'
 
@@ -362,7 +364,7 @@ function artifactRecords(
 }
 
 /**
- * One record per domain browsed that day, with the same corrections subtracted
+ * One record per page browsed that day, with the same corrections subtracted
  * that the timeline applies: a visit inside an ignored block span, or on a site
  * excluded over that span, never becomes a record. Re-projecting after a
  * correction therefore removes what the correction removed.
@@ -374,9 +376,23 @@ function artifactRecords(
  * searching for it should find it. Retrieval asks "did I see this", not "how
  * long does this get credited".
  *
- * Grouped by domain: a day of research is forty visit rows and one thing a
- * person remembers ("that Notion page"). Grouping keeps the record count
- * proportional to sites visited rather than to raw history size.
+ * The grouping key is the page, not the domain, and that is load-bearing rather
+ * than cosmetic. A record is one retrievable unit: its indexed text is what
+ * makes it match, and its statement/title/url are what a packet or a result
+ * card then shows. Grouping a whole domain into one record breaks that pairing —
+ * a day where github.com carried both `acme/portal#218` and `beacon/site#91`
+ * produced a single record whose text contained BOTH pull requests while its
+ * statement and url named only the busier one. Searching "beacon" matched on
+ * beacon's title and returned acme's page: one client's evidence served under
+ * another client's query. Keying on the page keeps text and identity describing
+ * the same thing, so a scoped query can only return what it actually matched.
+ *
+ * The key is the canonical page key `workBlocks.ts` derives for page artifacts
+ * (normalized URL, else the storage-normalized URL, else the domain), so a page
+ * record and its page artifact/entity denote the same page. Repeat visits to
+ * one page still collapse into one record — forty visits to that Notion page
+ * are one thing a person remembers — so the record count stays proportional to
+ * pages seen rather than to raw history size.
  */
 function pageRecords(
   db: Database.Database,
@@ -391,7 +407,7 @@ function pageRecords(
     .filter((exclusion) => exclusion.kind === 'site' && exclusion.domain)
 
   const visits = db.prepare(`
-    SELECT id, domain, page_title, url, visit_time, duration_sec
+    SELECT id, domain, page_title, url, normalized_url, visit_time, duration_sec
     FROM website_visits
     WHERE visit_time >= ? AND visit_time < ?
     ORDER BY visit_time ASC
@@ -400,11 +416,13 @@ function pageRecords(
     domain: string
     page_title: string | null
     url: string | null
+    normalized_url: string | null
     visit_time: number
     duration_sec: number
   }>
 
-  const byDomain = new Map<string, {
+  const byPage = new Map<string, {
+    domain: string
     startMs: number
     endMs: number
     titleMs: Map<string, number>
@@ -420,8 +438,15 @@ function pageRecords(
       && visit.visit_time < exclusion.endMs)
     if (excluded) continue
 
+    // Same derivation as the page-artifact canonical key (workBlocks.ts), so a
+    // page record and its artifact/entity agree on what "one page" means.
+    const pageKey = visit.normalized_url
+      ?? normalizeUrlForStorage(visit.url)
+      ?? `domain:${visit.domain}`
+
     const milliseconds = Math.max(0, visit.duration_sec) * 1000
-    const entry = byDomain.get(visit.domain) ?? {
+    const entry = byPage.get(pageKey) ?? {
+      domain: visit.domain,
       startMs: visit.visit_time,
       endMs: visit.visit_time + milliseconds,
       titleMs: new Map<string, number>(),
@@ -436,31 +461,36 @@ function pageRecords(
       entry.topUrl = visit.url
       entry.topUrlMs = milliseconds
     }
-    byDomain.set(visit.domain, entry)
+    byPage.set(pageKey, entry)
   }
 
   const records: PendingRecord[] = []
-  for (const [domain, entry] of byDomain) {
+  for (const [pageKey, entry] of byPage) {
     const titles = [...entry.titleMs.entries()].sort((left, right) => right[1] - left[1])
     const topTitle = titles[0]?.[0] ?? null
-    // Adoption keeps the page entity's id, so a domain the entity graph knows
-    // is found by entity resolution and needs no index-time text.
-    const entityId = activeEntityId(db, `page:${domain}`)
+    // Adoption keeps the page artifact's id as the entity id, so deriving the
+    // artifact id from the same canonical key tags the record with the entity
+    // the graph already knows — and entity resolution then finds it by name.
+    const entityId = activeEntityId(db, artifactIdFor(`page:${pageKey}`))
     records.push({
       id: newRecordId(),
       kind: 'page',
       memoryType: 'observed',
-      statement: topTitle ? `${domain} — ${topTitle}` : `Visited ${domain}`,
-      exactText: entityId ? '' : [domain, ...titles.slice(0, 5).map(([title]) => title)].join(' '),
+      // Always indexed, even when an entity tag exists: the tag makes the page
+      // findable by its entity's name, never by the words on the page itself.
+      // Only this page's own titles go in — pulling in a sibling page's words
+      // is what let one client's query return another client's page.
+      exactText: [entry.domain, ...titles.slice(0, 5).map(([title]) => title)].join(' '),
+      statement: topTitle ? `${entry.domain} — ${topTitle}` : `Visited ${entry.domain}`,
       startMs: entry.startMs,
       endMs: entry.endMs,
       appBundleId: null,
       appName: null,
       title: topTitle,
-      domain,
+      domain: entry.domain,
       url: entry.topUrl,
       primaryEntityId: entityId,
-      sourceRefs: [`corrected_domain:${date}:${domain}`],
+      sourceRefs: [`corrected_domain:${date}:${entry.domain}`],
       entityIds: new Set(entityId ? [entityId] : []),
     })
   }
