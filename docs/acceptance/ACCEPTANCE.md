@@ -18,11 +18,11 @@ commits on `factory/v2-ship`.
 | Timeline | 6 | 0 | 5 | 1 | 0 |
 | Apps | 5 | 0 | 3 | 2 | 0 |
 | AI chat | 5 | 0 | 1 | 4 | 0 |
-| Recaps and wraps | 3 | 0 | 2 | 0 | 1 |
+| Recaps and wraps | 3 | 0 | 3 | 0 | 0 |
 | Settings | 5 | 0 | 5 | 0 | 0 |
-| **Total** | **24** | **0** | **16** | **7** | **1** |
+| **Total** | **24** | **0** | **17** | **7** | **0** |
 
-No line is `passing`. Sixteen lines have merged implementations that nobody has
+No line is `passing`. Seventeen lines have merged implementations that nobody has
 confirmed against the running application. That distance is the honest state of
 V2, and closing it is a grading pass, not more code.
 
@@ -67,7 +67,7 @@ name until it closes" — and none of the closed Timeline issues covers it.
 | --- | --- | --- | --- | --- |
 | 1 | Recaps use the same numbers Timeline shows, never contradict themselves within one screen, never surface raw dates or internal labels as activities, and name the day's dominant activities | `landed` | DEV-247, DEV-280, DEV-279 (Done) | — |
 | 2 | Slides render cleanly, and export saves each slide as its own image | `landed` | DEV-248 (Backlog — board stale) | commits `5cd9aa08`, `11c985cc` |
-| 3 | Generate recap produces a recap, and it finishes on a heavy, fully-enriched day | `executing` | DEV-292 (Todo) | `.sw-factory/DEV-292/review-log.md` — 4/4 variants completed on a 13-block real day, 7.03-13.4s, voice-clean |
+| 3 | Generate recap produces a recap, and it finishes on a heavy, fully-enriched day | `landed` | DEV-292 (Todo → ready for In Review) | `.sw-factory/DEV-292/review-log.md` — 4/4 variants completed on a 13-block real day, 7.03-13.4s, voice-clean; all five spec acceptance lines met over two review rounds |
 
 Line 3 is the closest thing to a pass in this dossier. It is not graded `passing`
 because the evidence comes from the recap lab, which renders a panel mock to the

@@ -163,3 +163,106 @@ Approved for handoff to In Review. One acceptance line
 ("grounding evals") remains open and is blocked on the owner approving a recap
 variant; it is not a defect in what landed. Recorded in `checklist.md` as the
 single open item.
+
+---
+
+## Round 2
+
+Scope: closing work order story 8 after the owner delegated the variant choice.
+Four files — `tests/journal-eval/score.ts`, `tests/journal-eval/schema.ts`,
+`tests/journal-eval/run.ts`, `tests/journalEvalProgram.test.ts`. No production
+code changed; `SHIPPED_RECAP_VARIANT_ID` stays `colleague`.
+
+### Requirements Alignment
+
+**Blocking:**
+
+- None. The Round 1 advisory on the grounding eval is resolved: the recap is now a
+  scored subject in `tests/journal-eval`, closing the spec acceptance line "the
+  voice and grounding evals fail the old shapes and pass the new ones".
+
+**Advisory:**
+
+- The Round 1 advisory on "its total matches the timeline" is still open. The
+  recap now joins the visible corpus and is graded for naming, cleanliness, gap
+  honesty, and voice — none of which checks arithmetic. A recap that misstates the
+  day's total still passes every gate. Left open deliberately: asserting a total
+  inside prose needs the number enumerated before generation, which is how the
+  wrapped narrative does it (`wrapFactTable`) and is a larger change than this
+  work order's scope.
+
+### Architecture And Conventions
+
+**Blocking:**
+
+- None.
+
+**Advisory:**
+
+- `scoreToolSurfaces` treats the recap as prose on the same footing as a wrapped
+  line — substring check against `bannedAsWork` only, never
+  `isDisqualifiedWorkSubject`, which is built for labels and misfires on full
+  sentences that legitimately mention a tool. This was found by a test written
+  against the wrong assumption: the first version of the new test expected the
+  recap to be scanned like a label, and it failed. Worth noting because the
+  label/prose distinction is easy to get wrong when adding a fourth subject.
+- A day whose recap generation fails scores `recapVoice` 1/1 rather than 0, and is
+  excluded from the summary rate, which reports `n/m generated`. A provider outage
+  grades the provider, not Daylens — the same reasoning the shape judge already
+  uses for a failed judge call.
+
+### Tests And Build
+
+**Commands run:**
+
+```bash
+npm run typecheck                                          # pass
+npm run lint                                               # 0 errors, 128 pre-existing warnings
+npm test                                                   # 327 files, 2197 pass, 0 fail, 9 skip
+node scripts/run-tests.mjs journalEvalProgram recapContract recapVoice  # 24 pass
+```
+
+**Blocking:**
+
+- None.
+
+**Advisory:**
+
+- The full suite went from 2195 to 2197 passing, accounting for exactly the two
+  tests added. No existing test changed behaviour, which is the check that
+  mattered: adding the recap to the visible corpus could have shifted every
+  existing day's score, and does not, because the fast loop generates no recap and
+  `recap` defaults to null.
+
+### User-Facing Verification
+
+**Skipped:** yes — this round changes a local-only developer eval, not
+user-visible behaviour. The recap path itself was verified in Round 1 and is
+untouched here.
+
+### Security, Privacy, And Data Safety
+
+**Skipped:** no
+
+**Blocking:**
+
+- None.
+
+**Advisory:**
+
+- `--recap` generates against the eval's staged database copy and writes results
+  to `.journal-eval/`, which is gitignored at `.gitignore:26`. Recap prose about a
+  real day must not enter the repository, and does not.
+- The flag costs one provider call per day evaluated. It is opt-in and documented
+  in the runner's header, consistent with `docs/hygiene/benchmarks.md` requiring
+  explicit approval for paid evaluations.
+
+### Round 2 Verdict
+
+- Total blocking: 0
+- Total advisory: 4
+- Files reviewed: 4
+- **Verdict:** APPROVED
+
+All five spec acceptance lines now met. One advisory carries forward: no gate
+checks that the recap's total matches the timeline.

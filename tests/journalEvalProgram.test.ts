@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
-import { scoreGapHonesty, scorePrimaryWork, scoreToolSurfaces, type ObservedDay } from './journal-eval/score'
+import { scoreGapHonesty, scorePrimaryWork, scoreRecapVoice, scoreToolSurfaces, type ObservedDay } from './journal-eval/score'
 import type { EvalDay } from './journal-eval/schema'
 
 const daysDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'journal-eval', 'days')
@@ -61,6 +61,7 @@ function observed(partial: Partial<ObservedDay>): ObservedDay {
     blockNarratives: [],
     wrappedLead: null,
     wrappedLines: [],
+    recap: null,
     blockCount: 0,
     trackedSeconds: 0,
     ...partial,
@@ -90,6 +91,43 @@ test('tool-surface labels are violations; banned terms hit labels and wrap lines
   assert.equal(labelViolations.length, 2, JSON.stringify(result.violations))
   assert.ok(result.violations.some((v) => v.startsWith('wrapped line')))
   assert.equal(result.score, 1)
+})
+
+test('the recap is graded by every dimension once it is generated (DEV-292)', () => {
+  // The recap joins the visible corpus, so naming the day's work in the recap
+  // counts — the recap is one of the places a person reads the day.
+  const namedOnlyInRecap = scorePrimaryWork(baseDay, observed({
+    blockLabels: ['Focused work'],
+    recap: 'Most of the morning went to daylens.',
+  }))
+  assert.equal(namedOnlyInRecap.score, 1)
+
+  // And a recap that presents a tool surface as the work is a violation, the
+  // same as a block label that does.
+  const toolSurfaceInRecap = scoreToolSurfaces(
+    { ...baseDay, bannedAsWork: ['cursor agents'] },
+    observed({ blockLabels: ['Writing the launch post'], recap: 'The afternoon went to Cursor Agents.' }),
+  )
+  assert.ok(toolSurfaceInRecap.violations.length >= 1, JSON.stringify(toolSurfaceInRecap.violations))
+})
+
+test('recap voice: an ungenerated recap is not a failure, a voice slip is', () => {
+  // The fast loop generates no recap. That must score clean rather than 0,
+  // or every deterministic run would fail on a recap it never asked for.
+  assert.equal(scoreRecapVoice(observed({})).score, 1)
+  assert.equal(scoreRecapVoice(observed({})).violations.length, 0)
+
+  const productivityJudgement = scoreRecapVoice(observed({ recap: 'You wasted the afternoon.' }))
+  assert.equal(productivityJudgement.score, 0)
+  assert.ok(
+    productivityJudgement.violations.some((v) => v.startsWith('recap voice:')),
+    JSON.stringify(productivityJudgement.violations),
+  )
+
+  const clean = scoreRecapVoice(observed({
+    recap: 'You spent most of the afternoon on the recap lab, with a short stretch in your browser.',
+  }))
+  assert.equal(clean.score, 1, JSON.stringify(clean.violations))
 })
 
 test('gap honesty: same-day early-morning gaps and cross-midnight gaps both parse', () => {

@@ -2,6 +2,7 @@
 //
 //   npm run eval:days                     fast: deterministic dimensions only
 //   npm run eval:days -- --judge          + LLM shape judge (1 call/day)
+//   npm run eval:days -- --recap          + generate and score the day recap (1 call/day)
 //   npm run eval:days -- --strict         non-zero exit under thresholds
 //   npm run eval:days -- YYYY-MM-DD …     only these days
 //   npm run eval:days -- --fresh          restage work DB from pristine first
@@ -9,6 +10,13 @@
 // Scores what the user actually sees — timeline block labels + narratives and
 // the wrapped narrative (stored if present, deterministic fallback otherwise;
 // never spends a wrap-generation call) — against tests/journal-eval/days/*.yaml.
+//
+// The day recap is opt-in behind --recap (DEV-292). Unlike wrapped it persists
+// nowhere, so there is no stored artifact to read and scoring it costs a
+// generation call. When generated it joins the visible corpus, so it is graded
+// by every dimension: it must name the day's primary work, must not present a
+// tool surface as work, must not paper over a declared gap, and must pass the
+// voice contract.
 // Local-only: needs the real-DB snapshot (daylens db snapshot). Results land
 // in .journal-eval/results-<stamp>.json plus a table on stdout.
 
@@ -32,6 +40,10 @@ const THRESHOLDS = {
   toolSurfaceCleanRate: Number(process.env.EVAL_MIN_CLEAN ?? 0.95),
   gapHonestyRate: Number(process.env.EVAL_MIN_GAPS ?? 0.95),
   shapeJudgeMean: Number(process.env.EVAL_MIN_SHAPE ?? 6.0),
+  // The recap runs through the same voice contract as block labels, which the
+  // lab measured clean on every variant. Held at parity with tool-surface
+  // cleanliness rather than lower.
+  recapVoiceRate: Number(process.env.EVAL_MIN_RECAP_VOICE ?? 0.95),
 }
 
 function loadDays(filter: string[]): EvalDay[] {
@@ -47,7 +59,27 @@ function loadDays(filter: string[]): EvalDay[] {
   return days
 }
 
-async function observeDay(db: import('better-sqlite3').Database, date: string): Promise<{ observed: ObservedDay; rendering: string }> {
+/** Generate the day recap through the shipped variant, exactly as the Timeline
+ *  panel would. Returns null on any failure: a provider outage grades the
+ *  provider, not Daylens, and the deterministic dimensions still stand. */
+async function generateRecapForDay(date: string): Promise<string | null> {
+  try {
+    const { generateDaySummary } = await import('../../src/main/jobs/aiService')
+    const result = await generateDaySummary(date)
+    // A degraded result is the deterministic fallback line, not a recap. Scoring
+    // it would grade the fallback's prose and quietly pass the day.
+    if (!result || result.degraded) return null
+    return result.summary ?? null
+  } catch {
+    return null
+  }
+}
+
+async function observeDay(
+  db: import('better-sqlite3').Database,
+  date: string,
+  options: { recap?: boolean } = {},
+): Promise<{ observed: ObservedDay; rendering: string }> {
   const { getTimelineDayProjection } = await import('../../src/main/core/query/projections')
   // The renderer's label function — Timeline.tsx titles blocks with
   // userVisibleBlockLabel, and the eval must score exactly what the user sees.
@@ -90,6 +122,7 @@ async function observeDay(db: import('better-sqlite3').Database, date: string): 
     blockNarratives,
     wrappedLead,
     wrappedLines,
+    recap: options.recap ? await generateRecapForDay(date) : null,
     blockCount: projection.blocks.length,
     trackedSeconds: projection.totalSeconds,
   }
@@ -116,6 +149,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const strict = args.includes('--strict')
   const useJudge = args.includes('--judge')
+  const useRecap = args.includes('--recap')
   const fresh = args.includes('--fresh')
   const filter = args.filter((a) => /^\d{4}-\d{2}-\d{2}$/.test(a))
 
@@ -137,7 +171,7 @@ async function main(): Promise<void> {
 
   const results: DayScore[] = []
   for (const day of days) {
-    const { observed, rendering } = await observeDay(ctx.db, day.date)
+    const { observed, rendering } = await observeDay(ctx.db, day.date, { recap: useRecap })
     const score = scoreDay(day, observed)
     if (useJudge && judgeKey) {
       const { judgeDayShape } = await import('./judge')
@@ -155,12 +189,14 @@ async function main(): Promise<void> {
     const pw = score.primaryWork
     const ts = score.toolSurfaces
     const gh = score.gapHonesty
+    const rv = score.recapVoice
     const sj = score.shapeJudge
     console.log(
       `${c('cyan', day.date)} (${day.confidence})  work ${pw.score}/${pw.max}  clean ${ts.score}/${ts.max}  gaps ${gh.score}/${gh.max}` +
+      (useRecap ? `  recap ${observed.recap ? `${rv.score}/${rv.max}` : c('gray', 'none')}` : '') +
       (sj ? `  shape ${sj.score}/10` : ''),
     )
-    for (const v of [...pw.violations, ...ts.violations, ...gh.violations, ...(sj?.violations ?? [])]) {
+    for (const v of [...pw.violations, ...ts.violations, ...gh.violations, ...rv.violations, ...(sj?.violations ?? [])]) {
       console.log(c('yellow', `    ✗ ${v}`))
     }
     if (sj?.reasoning) console.log(c('gray', `    judge: ${sj.reasoning}`))
@@ -180,6 +216,15 @@ async function main(): Promise<void> {
             : null
         })()
       : null,
+    // Only days that actually produced a recap count. A day whose generation
+    // failed scores 1/1 by design, and including it would inflate the rate.
+    recapVoiceRate: useRecap
+      ? (() => {
+          const withRecap = results.filter((s) => s.observed.recap)
+          return withRecap.length > 0 ? rate(withRecap, (s) => s.recapVoice) : null
+        })()
+      : null,
+    recapsGenerated: useRecap ? results.filter((s) => s.observed.recap).length : null,
   }
 
   console.log('')
@@ -189,6 +234,14 @@ async function main(): Promise<void> {
   console.log(`gap honesty:          ${(summary.gapHonestyRate * 100).toFixed(0)}%  (threshold ${(THRESHOLDS.gapHonestyRate * 100).toFixed(0)}%)`)
   if (summary.shapeJudgeMean !== null) {
     console.log(`shape judge mean:     ${summary.shapeJudgeMean.toFixed(1)}/10  (threshold ${THRESHOLDS.shapeJudgeMean.toFixed(1)})`)
+  }
+  if (useRecap) {
+    const generated = `${summary.recapsGenerated}/${results.length} generated`
+    console.log(
+      summary.recapVoiceRate === null
+        ? `recap voice:          no recap generated on any day (${generated})`
+        : `recap voice:          ${(summary.recapVoiceRate * 100).toFixed(0)}%  (threshold ${(THRESHOLDS.recapVoiceRate * 100).toFixed(0)}%, ${generated})`,
+    )
   }
 
   const outDir = path.join(repoRoot, '.journal-eval')
@@ -204,6 +257,7 @@ async function main(): Promise<void> {
     if (summary.toolSurfaceCleanRate < THRESHOLDS.toolSurfaceCleanRate) failures.push('tool-surface clean rate under threshold')
     if (summary.gapHonestyRate < THRESHOLDS.gapHonestyRate) failures.push('gap-honesty rate under threshold')
     if (summary.shapeJudgeMean !== null && summary.shapeJudgeMean < THRESHOLDS.shapeJudgeMean) failures.push('shape-judge mean under threshold')
+    if (summary.recapVoiceRate !== null && summary.recapVoiceRate < THRESHOLDS.recapVoiceRate) failures.push('recap-voice rate under threshold')
     if (failures.length > 0) {
       console.error(c('red', `\nSTRICT FAIL: ${failures.join(' · ')}`))
       process.exitCode = 1

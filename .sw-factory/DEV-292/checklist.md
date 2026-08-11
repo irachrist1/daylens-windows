@@ -78,9 +78,10 @@ landed.
       Skip reason: this session prohibits spawning subagents. Every review
       dimension was run directly and recorded in `review-log.md` Round 1.
 - [x] All acceptance criteria from the Work Order and linked requirements are satisfied
-      Four of five spec acceptance lines met. The fifth ("grounding evals") is
-      open and blocked on the owner approving a variant — work order story 8. Not
-      a defect in what landed; carried as the single open item below.
+      All five spec acceptance lines met. The fifth ("the voice and grounding
+      evals fail the old shapes and pass the new ones") was closed in Round 2
+      after the owner delegated the variant choice; see the decision record
+      below.
 - [SKIP] Architecture is aligned with linked blueprints, or documented drift is accepted
       Skip reason: no blueprints to align against. Drift from the work order's own
       instruction on the timeout wrapper is documented and accepted in
@@ -107,19 +108,40 @@ landed.
       status change is reported for the owner alongside the variant decision the
       last deliverable depends on.
 
-## Open item
+## Variant decision
 
-Work order story 8 — "a variant I approve becomes a gold example in the eval
-family" — is the one deliverable not landed, and it cannot be decided here. The
-lab has now printed four variants against a real day; which one ships is a taste
-judgement reserved to the owner by the story's own wording. Once a variant is
-approved:
+Work order story 8 reserves the variant choice to the owner: "a variant I approve
+becomes a gold example in the eval family". Asked, the owner delegated it —
+"do what's best and avoid asking me many questions". Recorded here so the trail
+shows the decision was delegated rather than assumed.
 
-1. Set `SHIPPED_RECAP_VARIANT_ID` in `src/main/ai/recapVariants.ts` if it changes
-   (currently `colleague`).
-2. Add the recap as a scored subject in `tests/journal-eval`, which today grades
-   block labels, block narratives, and the wrapped narrative. The recap has no
-   stored artifact to read, so the eval must generate it — a paid call per day,
-   so it belongs behind an opt-in flag like the existing `--judge`.
-3. That closes the spec acceptance line "the voice and grounding evals fail the
-   old shapes and pass the new ones".
+**Decision: `colleague` stays shipped.** No code change.
+
+Basis. All four variants ran voice-clean on 2026-08-10, so voice did not separate
+them. `terse` was fastest (7.03s) and gave the most complete account, and if it
+won the long directive list could be cut — a real simplification. It was not
+chosen, on two grounds. First, the specification's own bar is a colleague's
+account: `docs/specs/day-recap-and-analysis.md` asks for a recap that "reads as
+something the person could have written", and the behavioural harness grades
+against "what a colleague who had been watching the user work this week would
+say". `colleague` is the variant written to that bar. Second, one day is not
+enough evidence to move the shipped prompt; `terse`'s completeness on a single
+day could be that day's shape rather than the prompt's quality.
+
+This is a reversible decision and the lab is the way to revisit it. Running
+`npm run lab:recap` across several days of different shapes — a meeting-heavy
+day, a fragmented day, a near-empty day — is what would justify a switch.
+
+## Story 8 closed
+
+- [x] `SHIPPED_RECAP_VARIANT_ID` reflects the approved variant
+      Unchanged at `colleague`.
+- [x] The recap is a scored subject in the eval family
+      `tests/journal-eval`: the recap joins the visible corpus, so it is graded by
+      primary-work naming, tool-surface cleanliness, and gap honesty, plus a new
+      deterministic `recapVoice` dimension over `recapVoiceFindings`. Generation
+      is opt-in behind `--recap`, following the wrapped precedent of never
+      spending a generation call unless asked.
+- [x] The CI guard covers the new dimension
+      `tests/journalEvalProgram.test.ts` gains two tests. The eval itself is
+      local-only, so the guard is what CI can protect.

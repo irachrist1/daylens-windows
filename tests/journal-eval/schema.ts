@@ -73,6 +73,9 @@ export interface DayScore {
   toolSurfaces: DimensionScore
   /** No block spans a declared gap; no narrative papers over one. */
   gapHonesty: DimensionScore
+  /** The recap's prose against the voice contract (DEV-292). Scores 1/1 when
+   *  no recap was generated — an ungenerated recap is not a voice failure. */
+  recapVoice: DimensionScore
   /** LLM judge: does the story match the day's real shape? 0–10. Absent in
    *  --fast runs. `score: null` means the judge call itself failed (transport
    *  or parse) — such a day is excluded from the mean, never scored 0. */
@@ -82,6 +85,7 @@ export interface DayScore {
     blockLabels: string[]
     wrappedLead: string | null
     wrappedLines: string[]
+    recap: string | null
     blockCount: number
     trackedSeconds: number
   }

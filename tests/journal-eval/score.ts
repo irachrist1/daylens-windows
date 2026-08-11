@@ -3,6 +3,7 @@
 // provider, so they are unit-testable and run in the fast loop.
 
 import { isDisqualifiedWorkSubject } from '../../src/shared/workNameGuards'
+import { recapVoiceFindings } from '../../src/shared/labelVoice'
 import type { DayScore, DimensionScore, EvalDay } from './schema'
 
 export interface ObservedDay {
@@ -14,6 +15,10 @@ export interface ObservedDay {
   blockNarratives: string[]
   wrappedLead: string | null
   wrappedLines: string[]
+  /** The day recap, when the run generated one (DEV-292). Null in the fast
+   *  loop: unlike wrapped, the recap has no stored artifact to read, so
+   *  scoring it costs a provider call and is opt-in. */
+  recap: string | null
   blockCount: number
   trackedSeconds: number
 }
@@ -25,7 +30,21 @@ function visibleCorpus(observed: ObservedDay): string {
     ...observed.blockNarratives,
     observed.wrappedLead ?? '',
     ...observed.wrappedLines,
+    observed.recap ?? '',
   ].join('\n').toLowerCase()
+}
+
+/** The recap's prose against the voice contract. Deterministic: generating a
+ *  recap needs a provider, scoring one does not. A day with no recap scores
+ *  1/1 rather than 0 — an ungenerated recap is not a voice failure. */
+export function scoreRecapVoice(observed: ObservedDay): DimensionScore {
+  if (!observed.recap) return { score: 1, max: 1, violations: [] }
+  const findings = recapVoiceFindings(observed.recap)
+  return {
+    score: findings.length === 0 ? 1 : 0,
+    max: 1,
+    violations: findings.map((finding) => `recap voice: "${finding.phrase}" — ${finding.reason}`),
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -62,24 +81,31 @@ export function scoreToolSurfaces(day: EvalDay, observed: ObservedDay): Dimensio
     const bannedHit = banned.find((b) => lower.includes(b))
     if (bannedHit) violations.push(`block label matches banned-as-work "${bannedHit}": "${label}"`)
   }
-  // Wrapped prose gets the substring check only — full sentences legitimately
+  // Generated prose gets the substring check only — full sentences legitimately
   // mention tools ("driving Claude in Slack"), so isDisqualifiedWorkSubject
-  // (built for labels) would misfire there.
-  const wrappedLines = [observed.wrappedLead ?? '', ...observed.wrappedLines].filter((l) => l.trim())
-  let dirtyWrappedLines = 0
-  for (const line of wrappedLines) {
-    const lower = line.toLowerCase()
+  // (built for labels) would misfire there. The recap is prose on the same
+  // footing as a wrapped line (DEV-292): both are sentences a person reads
+  // about their day, and neither may present a banned surface as the work.
+  const proseLines: Array<{ kind: string; text: string }> = [
+    ...[observed.wrappedLead ?? '', ...observed.wrappedLines]
+      .filter((l) => l.trim())
+      .map((text) => ({ kind: 'wrapped line', text })),
+    ...(observed.recap?.trim() ? [{ kind: 'recap', text: observed.recap }] : []),
+  ]
+  let dirtyProseLines = 0
+  for (const line of proseLines) {
+    const lower = line.text.toLowerCase()
     const bannedHit = banned.find((b) => lower.includes(b))
     if (bannedHit) {
-      dirtyWrappedLines += 1
-      violations.push(`wrapped line presents banned-as-work "${bannedHit}": "${line.slice(0, 90)}"`)
+      dirtyProseLines += 1
+      violations.push(`${line.kind} presents banned-as-work "${bannedHit}": "${line.text.slice(0, 90)}"`)
     }
   }
-  // Every user-visible unit counts: block labels AND wrapped lines. A day the
+  // Every user-visible unit counts: block labels AND generated prose. A day the
   // user never opened (zero blocks, zero lines) is vacuously clean, not dirty.
-  const units = observed.blockLabels.length + wrappedLines.length
+  const units = observed.blockLabels.length + proseLines.length
   if (units === 0) return { score: 1, max: 1, violations }
-  const clean = units - violations.filter((v) => v.startsWith('block label')).length - dirtyWrappedLines
+  const clean = units - violations.filter((v) => v.startsWith('block label')).length - dirtyProseLines
   return { score: Math.max(0, clean), max: units, violations }
 }
 
@@ -125,10 +151,12 @@ export function scoreDay(day: EvalDay, observed: ObservedDay): DayScore {
     primaryWork: scorePrimaryWork(day, observed),
     toolSurfaces: scoreToolSurfaces(day, observed),
     gapHonesty: scoreGapHonesty(day, observed),
+    recapVoice: scoreRecapVoice(observed),
     observed: {
       blockLabels: observed.blockLabels,
       wrappedLead: observed.wrappedLead,
       wrappedLines: observed.wrappedLines,
+      recap: observed.recap,
       blockCount: observed.blockCount,
       trackedSeconds: observed.trackedSeconds,
     },
