@@ -683,7 +683,7 @@ export async function runChatAgentTurn(
     // BEFORE coverage so a repaired figure is assessed as the figure that
     // ships rather than the one that did not.
     const enforcement = enforceDeterministicFacts(text, deterministicFacts, {
-      isBacked: (value, dimension) => evidenceBacksValue(exchangeEvidence, value, dimension),
+      isBacked: (value, dimension, kind) => evidenceBacksValue(exchangeEvidence, value, dimension, kind),
     })
     text = enforcement.text
     for (const repair of enforcement.repairs) {
