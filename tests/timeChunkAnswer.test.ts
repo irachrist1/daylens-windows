@@ -166,6 +166,26 @@ test('AC-VIC-004: a user-authored block label is kept even when it looks like ra
   assert.match(answer!, /https:\/\/ridgeline\.example\/renewal/)
 })
 
+test('a generic floor label does not bury a captured window title', () => {
+  const answer = renderTimeChunkAnswer({
+    found: true,
+    date: '2026-08-01',
+    incrementMinutes: 30,
+    chunks: [{
+      startTime: '09:00',
+      endTime: '09:30',
+      durationMinutes: 30,
+      blockLabel: 'Development',
+      activity: [{ appName: 'Chrome', windowTitle: 'Implement OAuth callback validation', seconds: 1800 }],
+      pages: [],
+      gap: null,
+    }],
+  })
+  assert.ok(answer)
+  assert.doesNotMatch(answer!, /\bDevelopment\b/)
+  assert.match(answer!, /Implement OAuth callback validation \(Chrome\)/)
+})
+
 test('AC-VIC-003.1 / AC-VIC-003.2: idle gaps never judge the person', () => {
   const answer = renderTimeChunkAnswer({
     found: true,
