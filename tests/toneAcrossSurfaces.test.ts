@@ -20,6 +20,31 @@ import {
   normalizeSummaryVoice,
   voiceDirective,
 } from '../src/shared/summaryVoice.ts'
+import {
+  buildDaySummarySystemPrompt,
+  daySummaryPromptCacheKey,
+} from '../src/main/jobs/aiService.ts'
+import type { DayTimelinePayload } from '../src/shared/types.ts'
+
+// A day with no activity: enough to key a cache entry, and it carries no
+// invented personal detail at all.
+function emptyDayPayload(): DayTimelinePayload {
+  return {
+    date: '2026-06-22',
+    sessions: [],
+    websites: [],
+    blocks: [],
+    segments: [],
+    focusSessions: [],
+    computedAt: 0,
+    version: 'test',
+    totalSeconds: 0,
+    focusSeconds: 0,
+    focusPct: 0,
+    appCount: 0,
+    siteCount: 0,
+  }
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..')
@@ -71,10 +96,14 @@ test('AC-VIC-002.2: every narrative prompt site imports and applies the tone', (
 test('AC-VIC-002.2: the brief applies the tone, and its cache is keyed on it', () => {
   // The finding this work order closes: voiceDirective moved Wrapped and not
   // the day recap, which is the surface people read every morning.
+  // Both are composed by exported helpers now, so the behavioral tests at the
+  // bottom of this file prove the tone actually lands. This scan only guards
+  // that generateDaySummary still routes through them instead of rebuilding a
+  // prompt or a key inline without the voice.
   const text = source('src/main/jobs/aiService.ts')
   const recap = text.slice(text.indexOf('export async function generateDaySummary'))
-  assert.match(recap, /voiceDirective\(voice\)/, 'the brief prompt has no tone directive')
-  assert.match(recap, /cacheKey = .*\$\{voice\}/, 'the brief cache is not keyed on the tone')
+  assert.match(recap, /buildDaySummarySystemPrompt\(voice/, 'the brief prompt has no tone directive')
+  assert.match(recap, /daySummaryPromptCacheKey\([^)]*voice\)/, 'the brief cache is not keyed on the tone')
 })
 
 // ── AC-VIC-002.3: one interpretation under every tone ──────────────────────
@@ -135,4 +164,48 @@ test('the interpretation directives themselves contain no em dash', () => {
   for (const directive of ACTIVITY_DESCRIPTION_DIRECTIVES) {
     assert.doesNotMatch(directive, /—/, `directive teaches an em dash: ${directive.slice(0, 60)}`)
   }
+})
+
+// ── The brief, executed rather than scanned ────────────────────────────────
+//
+// The checks above can only prove `voiceDirective` is mentioned in a file. The
+// ones below run the recap's own prompt composition and cache key, which is
+// what the manual check "switch the tone in Settings, reopen the day recap"
+// was standing in for. They need no provider and no live app.
+
+test('AC-VIC-002.1: the recap prompt carries the tone that was chosen', () => {
+  for (const voice of SUMMARY_VOICES) {
+    const prompt = buildDaySummarySystemPrompt(voice)
+    assert.ok(prompt.includes(voiceDirective(voice)), `the recap prompt has no ${voice} directive`)
+  }
+})
+
+test('AC-VIC-002.1: changing the tone changes the recap prompt', () => {
+  const prompts = SUMMARY_VOICES.map((voice) => buildDaySummarySystemPrompt(voice))
+  assert.equal(new Set(prompts).size, SUMMARY_VOICES.length, 'two tones compose the same recap prompt')
+})
+
+test('AC-VIC-002.3: the recap prompt carries the shared interpretation rules under every tone', () => {
+  for (const voice of SUMMARY_VOICES) {
+    const prompt = buildDaySummarySystemPrompt(voice)
+    for (const directive of INTERPRETATION_DIRECTIVES) {
+      assert.ok(prompt.includes(directive), `${voice}: missing ${directive.slice(0, 50)}…`)
+    }
+    // AC-VIC-004.3: the rule that stops a person's own wording being re-read as
+    // a system-derived fact travels with every tone, not just the default.
+    assert.match(prompt, /labelIsTheirOwnWords/, `${voice}: no user-authored label rule`)
+  }
+})
+
+test('AC-VIC-002.1: the recap cache is keyed on the tone, so the toggle is not dead', () => {
+  // Without the tone in the key, a cached recap keeps the old voice for the
+  // life of the process and switching the setting appears to do nothing.
+  const payload = emptyDayPayload()
+  const keys = SUMMARY_VOICES.map((voice) => daySummaryPromptCacheKey(payload, 'memory', 'shipped', voice))
+  assert.equal(new Set(keys).size, SUMMARY_VOICES.length, 'two tones share one cache entry')
+  assert.equal(
+    daySummaryPromptCacheKey(payload, 'memory', 'shipped', 'warm'),
+    daySummaryPromptCacheKey(payload, 'memory', 'shipped', 'warm'),
+    'the key is not stable for one tone',
+  )
 })
