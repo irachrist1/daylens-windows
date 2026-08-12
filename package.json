@@ -37,6 +37,7 @@
     "real-day:accept": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./scripts/real-day/run.ts accept",
     "verify:remote-web": "node scripts/run-tests.mjs webRemoteRoundtrip webBehavior",
     "verify:stress": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs ./tests/stress/run.ts",
+    "verify:ship-priorities": "node scripts/verify-ship-priorities.mjs",
     "verify:shipping": "npm run typecheck && npm run lint && npm test && npm run verify:stress && npm run verify:synthetic-day && npm run verify:ai-turn && npm run verify:remote-web && npm run timeline:eval -- --strict && npm run contract:check && npm run web:contract:check && npm --prefix apps/web run manifest:check && npm run web:typecheck && npm run web:build && npm run billing:check && npm run billing:sandbox && npm run build:all",
     "wrapped:bench": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs --test ./tests/wrappedBenchmark.test.ts",
     "wrapped:bench:run": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader-real.mjs ./tests/wrapped-bench/run.ts",
