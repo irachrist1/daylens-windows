@@ -95,6 +95,7 @@ A passing test suite does not mean a ticket is accepted. A ticket is shipped onl
 npm run typecheck
 npm run lint
 npm test
+npm run verify:ship-priorities
 npm run verify:synthetic-day
 npm run verify:ai-turn
 npm run verify:remote-web
@@ -102,7 +103,14 @@ npm run timeline:eval -- --strict
 npm run contract:check
 ```
 
-The verification commands are offline and deterministic. Run the boundary-specific web, billing, and packaged-runtime checks described in [Testing and verification](hygiene/testing.md) when those surfaces change. Some quality evaluations call paid providers and require explicit approval. See [Benchmarks](hygiene/benchmarks.md).
+`npm run verify:ship-priorities` re-runs the hermetic battery for the
+user-facing failures tracked in [V2 ship priorities](V2-SHIP-PRIORITIES.md)
+and prints which items are verified, partial, or still open. The other
+verification commands are offline and deterministic. Run the boundary-specific
+web, billing, and packaged-runtime checks described in
+[Testing and verification](hygiene/testing.md) when those surfaces change. Some
+quality evaluations call paid providers and require explicit approval. See
+[Benchmarks](hygiene/benchmarks.md).
 
 For changes that can alter an ordinary reconstructed day, also run the private local `npm run verify:real-day` benchmark against an accepted snapshot. Use `npm run verify:real-day:desktop -- --date YYYY-MM-DD --user-data ABSOLUTE_ISOLATED_USER_DATA --output ABSOLUTE_PRIVATE_OUTPUT` when renderer, IPC, correction, deletion, search, Apps, or AI presentation changes. These commands refuse CI and never belong in a shared fixture or pull request artifact.
 

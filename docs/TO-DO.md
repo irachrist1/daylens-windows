@@ -29,21 +29,21 @@ Review in wave order — the [implementation waves](product/v2.md#implementation
 
 Wave 2:
 
-- [ ] Review and accept the [Memory, search, and entities specification](specs/memory-and-entities.md).
-- [ ] Review and accept the [AI agent specification](specs/ai-agent.md).
-- [ ] Review and accept the [Agent runtime and context specification](specs/agent-runtime-and-context.md).
+- [x] Review and accept the [Memory, search, and entities specification](specs/memory-and-entities.md). Accepted in the specification header.
+- [ ] Review and accept the [AI agent specification](specs/ai-agent.md). Still *Ready for review*.
+- [ ] Review and accept the [Agent runtime and context specification](specs/agent-runtime-and-context.md). Still *Ready for review*.
 
 Wave 3:
 
-- [ ] Review and accept the [Connectors specification](specs/connectors.md).
-- [ ] Review and accept the [Billing and entitlements specification](specs/billing-and-entitlements.md).
-- [ ] Review and accept the [Privacy, retention, and sync specification](specs/privacy-retention-and-sync.md).
-- [ ] Review and accept the [Screen-context experiment specification](specs/screen-context.md).
+- [ ] Review and accept the [Connectors specification](specs/connectors.md). Still *Ready for review*.
+- [x] Review and accept the [Billing and entitlements specification](specs/billing-and-entitlements.md). Accepted in the specification header.
+- [x] Review and accept the [Privacy, retention, and sync specification](specs/privacy-retention-and-sync.md). Accepted in the specification header.
+- [ ] Review and accept the [Screen-context experiment specification](specs/screen-context.md). Still *Ready for review*.
 
 Wave 4:
 
-- [ ] Review and accept the [Wrapped specification](specs/wrapped.md).
-- [ ] Review and accept the [Briefs specification](specs/briefs.md).
+- [ ] Review and accept the [Wrapped specification](specs/wrapped.md). Still *Ready for review*.
+- [ ] Review and accept the [Briefs specification](specs/briefs.md). Still *Ready for review*.
 
 After Version 2:
 
@@ -77,9 +77,13 @@ Each item states the evidence required and what completes it. Items marked **(de
 - [ ] Run approved staging verification for managed AI providers, connector APIs, Convex, payment providers, and billing Postgres. The deterministic suite injects those boundaries and cannot prove credentials, quotas, provider response semantics, webhook delivery, or service availability.
 - [ ] Document billing support, cancellation, usage visibility, refunds, and incident response.
 
+## Shipping the V2 surface bar
+
+The hermetic subset of [V2 ship priorities](V2-SHIP-PRIORITIES.md) is re-checked with `npm run verify:ship-priorities`. Timeline DEV-232 / DEV-233 / DEV-231 are verified fixed on `main`. Remaining OPEN items (Apps DEV-237, AI DEV-246 / DEV-242, real-day reconciliation) and PARTIAL items need an owner regrade on a real day — see that document and [the V2 manual](testing/v2-manual.md).
+
 ## Implementation blocked by later V2 production code
 
-- [ ] Complete [real-day Timeline, Apps, and AI reconciliation](tickets/real-day-timeline-apps-reconciliation.md) after the capture/evidence, Timeline, and Apps specifications are accepted. The private 2026-07-13, 2026-07-16, and 2026-07-17 days stay failing benchmarks until then; they are reviewed and accepted only at that ticket's exit, when meetings are recognized, labels carry my voice, and Timeline, Apps, meetings, and the agent agree.
+- [ ] Complete [real-day Timeline, Apps, and AI reconciliation](tickets/real-day-timeline-apps-reconciliation.md). Capture/evidence, Timeline, and Apps specifications are accepted; the private 2026-07-13, 2026-07-16, and 2026-07-17 days stay failing benchmarks until meetings are recognized, labels carry my voice, and Timeline, Apps, meetings, and the agent agree.
 - [ ] Complete [canonical deletion ownership](tickets/canonical-deletion-ownership.md) after the organized-fact model is accepted.
 - [ ] Complete the [encrypted sync terminal foundation](tickets/encrypted-sync-terminal-foundation.md) after the desktop fact model and browser-encryption decision.
 - [ ] Complete the [screen-context terminal foundation](tickets/screen-context-terminal-foundation.md) after the experiment specification and extraction runtime are accepted.
