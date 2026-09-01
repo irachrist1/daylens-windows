@@ -100,6 +100,36 @@ function makeRig(activeWindow = () => WIN): Rig {
   }
 }
 
+test('a cross-midnight app switch flushes both day slices without recursing forever', async () => {
+  let activeWindow = WIN
+  const rig = makeRig(() => activeWindow)
+  const sessionStart = new Date(2026, 6, 3, 23, 59, 50, 0).getTime()
+  const midnight = new Date(2026, 6, 4, 0, 0, 0, 0).getTime()
+  const sessionEnd = midnight + 10_000
+
+  try {
+    await rig.poll(sessionStart, { input: true })
+    activeWindow = {
+      title: 'Calculator',
+      application: 'Calculator',
+      path: '/System/Applications/Calculator.app',
+      pid: 4322,
+      icon: '',
+    }
+    await rig.poll(sessionEnd, { input: true })
+
+    assert.deepEqual(
+      rig.flushes.map(({ startTime, endTime, endedReason }) => ({ startTime, endTime, endedReason })),
+      [
+        { startTime: sessionStart, endTime: midnight, endedReason: 'midnight_split' },
+        { startTime: midnight, endTime: sessionEnd, endedReason: 'app_switch' },
+      ],
+    )
+  } finally {
+    rig.teardown()
+  }
+})
+
 test('titleless Dia on Netflix remains active beyond the five-minute idle threshold', async () => {
   let win: typeof DIA_WIN | typeof WIN = DIA_WIN
   __setActiveBrowserContextTrackerForTest(new ActiveBrowserContextTracker(
