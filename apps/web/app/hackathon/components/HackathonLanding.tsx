@@ -9,6 +9,7 @@ import { Counter } from "./Counter";
 import { ThemeToggle } from "./ThemeToggle";
 import { HeroDemo } from "./hero-demo/HeroDemo";
 import { DEMO_ASKS } from "./hero-demo/demoData";
+import { JobsSection } from "./jobs/JobsSection";
 import { assetPath } from "@/app/lib/basePath";
 import {
   MAC_DOWNLOAD_HREF,
@@ -287,6 +288,10 @@ export function HackathonLanding() {
           </div>
         </motion.div>
       </section>
+
+      {/* JOBS — dark band after the hero, structured after the jobs a
+          computer memory does (positioning.md §4/§5) */}
+      <JobsSection />
 
       {/* SUPPORTED APPS */}
       <section className="px-4 py-16">
