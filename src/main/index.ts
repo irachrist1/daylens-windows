@@ -122,6 +122,7 @@ import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './s
 import { prewarmBrowserRegistry } from './services/browserRegistry'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { startMemoryIndexBackfill, stopMemoryIndexBackfill } from './services/memoryIndex'
+import { startMemoryMirrorBackfill, stopMemoryMirrorBackfill } from './services/memoryMirrorService'
 import { startSemanticIndexBackfill, stopSemanticIndexBackfill } from './services/semanticIndex'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
@@ -635,6 +636,12 @@ function startBackgroundServices(): void {
       // Until a day is reached, its searches serve through the legacy path.
       setTimeout(() => startMemoryIndexBackfill(getDb), 15_000)
 
+      // Write history into the readable memory mirror a few days per tick, so
+      // the folder reflects the whole record rather than only the days analyzed
+      // since the feature shipped. Later than the index backfill: it re-reads
+      // the mirror directory on each step and is pure catch-up work.
+      setTimeout(() => startMemoryMirrorBackfill(getDb), 45_000)
+
       // DEV-180: embed memory records for by-meaning search in bounded
       // background batches (local model; honest no-op when it is absent).
       // Inference runs in the embed-worker subprocess — never on this thread.
@@ -864,6 +871,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopCaptureServices()
   stopSync()
   stopMemoryIndexBackfill()
+  stopMemoryMirrorBackfill()
   stopSemanticIndexBackfill()
   stopEmbedWorker()
   stopAIUsageRetentionSchedule()

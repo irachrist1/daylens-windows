@@ -13,6 +13,7 @@ import { materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { projectDay } from '../core/projections/chunk2'
 import { bumpRangeFactsEvidenceEpoch } from '../core/query/rangeFactsCache'
+import { syncDayMemoryMirror } from './memoryMirrorService'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
 
 export interface PurgeResult {
@@ -54,6 +55,13 @@ function rematerializeAndNotify(affectedDates: string[]): void {
   invalidateProjectionScope('timeline', 'tracking_controls_purge')
   invalidateProjectionScope('apps', 'tracking_controls_purge')
   invalidateProjectionScope('insights', 'tracking_controls_purge')
+  // The readable memory mirror is prose on disk, so the rule above applies to
+  // it too: a file must never keep describing activity the person deleted.
+  // Re-projecting from the just-purged day rewrites it without the deleted
+  // content; a day left with nothing writable renders as an empty day.
+  for (const date of affectedDates) {
+    void syncDayMemoryMirror(db, date)
+  }
 }
 
 function distinctLocalDates(timestamps: number[]): string[] {
