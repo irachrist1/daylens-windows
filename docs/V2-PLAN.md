@@ -21,117 +21,82 @@ That is the whole gate. It is not a feature list.
 
 ## The five blockers
 
-Nothing else stops a release.
+What a person feels. Signing, CI and release plumbing are how we ship — they are chores,
+not blockers, and they live at the bottom of this document.
 
-### 1. Windows cannot ship or update itself
+### 1. Timeline depends on a model
 
-Most users are on Windows. Today that platform has no release path and no update path.
-
-- `release-windows.yml:100` hard-fails without `WIN_CERTIFICATE_FILE`,
-  `WIN_CERTIFICATE_PASSWORD`, `WIN_CERT_SUBJECT_NAME`. None are set.
-- `updater.ts:218` disables updates on an unsigned build.
-
-**Fix:** Azure Trusted Signing (~$10/month, signs from CI without an HSM). OV certs need a
-hardware token since June 2023 and do not work in GitHub Actions. `electron-builder.config.js:82`
-expects a PFX, so the signing hook changes shape.
+Timeline should produce a good day with any model, and a useful day with none. Today the
+deterministic pipeline is the floor but the day is only named well when a model runs
+(`analyzeDay.ts:583` — `source: modelsUsed.size > 0 ? 'ai' : 'deterministic'`), and the
+model choice is not portable across providers.
 
 **Done when:**
-- `gh workflow run release-windows.yml --repo spcsorg/daylens` completes.
-- `Get-AuthenticodeSignature <installed .exe>` returns `Valid`.
-- An installed build moves N-1 → N from the published feed without a manual download.
+- With no provider configured at all, opening a day shows named blocks built from evidence
+  — not "Unlabeled", not an empty state.
+- The same day analysed with each supported provider produces blocks whose boundaries match
+  within one session, and names that a person judges equivalent.
+- Switching provider mid-day does not orphan or relabel already-closed blocks.
 
-### 2. The app crashes twice a day and stops recording
+### 2. The answers must be right
 
-`RangeError: Maximum call stack size exceeded` in the main process, morning and evening.
-The main process owns capture, so every crash stops tracking until restart.
-
-**The ticket's stated cause is disproven.** DEV-487 blames the notifier's Timeline and
-Wrapped paths. `scripts/repro-dev487.ts` runs exactly those against the real 1.2GB profile
-— day, week, month, year — and none overflows. And `dailySummaryNotifier.ts:497` wraps all
-three checks in a `try/catch` that swallows, so a `RangeError` there never reaches the
-`uncaughtException` handler the ticket says receives it. The overflow starts elsewhere.
-
-No fix has ever existed: `git log -S"Maximum call stack" --all` is empty.
-
-**Fix:** the frame is now recoverable — `captureException` reports a PostHog `$exception`
-with parsed frames. Read the frame from the next crash, or force one locally against the
-real profile with a shortened notifier interval.
+A number the app shows must be the number it has. Per-site duration is the known hole:
+`DeterministicFactKind` has no `site_total_time`, so "how long was I on X" gets no
+deterministic override and the model guesses.
 
 **Done when:**
-- The overflowing frame is named from telemetry or a deterministic repro.
-- A regression test fails before the fix and passes after.
-- An installed build survives 48h across two morning and two evening windows on the real
-  profile with no `app_crashed` event.
+- "How long was I on <site> today" returns the same seconds `website_visits` holds, for ten
+  sites picked at random from the real profile.
+- Timeline total, Apps total, and the chat's answer for the same day agree exactly.
+- Every number in a recap traces to a row; a fact with no row is not printed.
 
-### 3. CI does not run
+### 3. The app is three times faster
 
-Not broken — pointed at the repo without runners. Blacksmith is installed on the
-`spcsorg` org, not on the `irachrist1` personal account. Measured 2026-09-04: the same job
-was picked up in <15s and succeeded on `spcsorg`, and sat queued 14+ minutes on
-`irachrist1`. On `irachrist1`, 52 of the last 60 runs auto-cancelled unpicked.
+Measured 2026-09-04 on the real 1.19GB profile: `getTimelineDayPayload` 111-166ms,
+`getAllAppsForLabeling` 16-53ms. **The database is not the bottleneck.** The wait a person
+feels is startup, renderer, and model latency — that is where the 3x comes from.
 
-Both remotes are at the same commit. Nothing to migrate; the work moves repo.
-
-`verify-macos-runtime.yml` and `verify-windows-runtime.yml` are `disabled_manually` on
-`spcsorg`, and both last failed on their packaged smoke-test step.
+`ANALYZE` has still never run on this profile (`sqlite_stat1` does not exist, 202 indexes
+across 122 tables), and 108MB of the file is freelist. Cheap to fix, not the main win.
 
 **Done when:**
-- Every push to `main` on `spcsorg` completes CI green.
-- CI packages a real macOS app and fails the run when packaging fails.
-- Zero runs auto-cancel for want of a runner across seven days.
+- Cold launch to an interactive Timeline is under 2s on the real profile.
+- Switching between Timeline, Apps and Chat paints in under 200ms, every time.
+- No interaction blocks the UI thread beyond ~200ms.
 
-### 4. Nobody can pay
-
-No checkout button can render. `DAYLENS_BILLING_API_URL` is never set by the build, no
-billing server is deployed, and release builds carry no entitlement public key.
-
-**Decision needed:** deploy the billing service, or cut to BYOK-only and delete the
-subscribe UI. Shipping as-is ships a dead button.
+### 4. Apps view loads and scrolls instantly
 
 **Done when:**
-- A packaged build reaches checkout and returns a signed entitlement, **or** the subscribe
-  UI is gone and Settings offers BYOK only.
-- `npm run billing:sandbox` passes against the deployed service.
+- Apps opens with content in under 500ms on the real profile.
+- Scrolling a year of apps holds 60fps with no blank rows and no layout shift.
+- Per-app detail opens in under 300ms.
 
-### 5. No one has confirmed the app works
+### 5. AI chat is fast
 
-Zero of 24 acceptance lines are graded `passing`. Seventeen are merged but never opened in
-a running app. This is the difference between "the code is written" and "it works", and it
-is the last thing standing between the other four and a release.
+Today the tab renders nothing until settings resolve — `AIWorkspace.tsx:451` returns
+"Loading AI…" while `settings` and `hasApiKey` are null. Then the answer waits on context
+assembly and a 90s narrative timeout (`wrappedNarrative.ts:65`).
 
-**Done when** each line below is observed in an installed build against the real profile:
-
-| # | Criterion |
-|---|---|
-| 1 | The live day is one block that grows with the clock, split only on absence, sleep, or idle |
-| 2 | A merge a person asks for produces one block, states any blocker in plain words, and survives leaving the day and returning |
-| 3 | Overlapping events and blocks render side by side, both readable and clickable |
-| 4 | Opening an application shows a plain-language account of what was done there |
-| 5 | Browser time resolves to real pages; an unattributable stretch says why in one sentence |
-| 6 | Junk strings are filtered, an app never appears twice, sub-few-second visits collapse |
-| 7 | The first answer to a factual question is the correct number, matching Timeline and Apps |
-| 8 | Provider and model have one source of truth, shown identically in Settings and the chat picker |
-| 9 | Recaps use the same numbers Timeline shows and never contradict themselves on one screen |
-| 10 | Slides render cleanly and export saves each slide as its own image |
-| 11 | Settings toggles keep their state across navigation |
-| 12 | Generate recap finishes on a heavy, fully-enriched day |
-
-Plus the database bar, which is checkable by query plan rather than opinion:
-
-| # | Criterion |
-|---|---|
-| VAL-DB-001 | `ANALYZE` has run — `sqlite_stat1` is populated. **Verified failing 2026-08-11** |
-| VAL-DB-002 | Tuned PRAGMAs applied on the live connection, including `temp_store = MEMORY` |
-| VAL-DB-003 | The window-title evidence query uses an index, not a 14K-row scan |
-| VAL-DB-004 | `gatherConcurrentEvidence`'s `website_visits` query is a true two-sided range |
-| VAL-DB-005 | The `website_visits` `GROUP BY` does not spill to a disk temp B-tree |
-| VAL-DB-010 | Hot read queries on big tables use indexes — positive `EXPLAIN QUERY PLAN` |
-
-And the interaction bar: renders in ~100ms where data is light or cached; **nothing blocks
-the UI thread beyond ~200ms**; no multi-second freeze. Correctness first — a wrong number
-fails the line even when every timing passes.
+**Done when:**
+- The chat tab paints its input in under 200ms, before settings resolve.
+- First token is under 2s for a question about today.
+- A question with no model configured still answers from deterministic facts rather than
+  failing.
 
 ---
+
+## Chores that gate distribution
+
+Not blockers — nobody feels them until release day, but a release cannot happen without
+them.
+
+- **Windows code-signing certificate.** Azure Trusted Signing, ~$10/month. Without it
+  `release-windows.yml:100` hard-fails and `updater.ts:218` disables updates. Owner action.
+- **Billing via pawapay** while the Flutterwave application is in progress. Today no
+  checkout can render: `DAYLENS_BILLING_API_URL` is never set and no service is deployed.
+- **CI lives on `spcsorg`.** Blacksmith is installed on the org, not the personal account.
+- **The morning/evening crash (DEV-487).** Real but rare, and now self-reporting: the next
+  crash sends its frame to PostHog. Screenshot it when it happens.
 
 ## Where the code actually is
 
@@ -145,8 +110,7 @@ UI reads it · command palette never reaches `planRetrieval` · entity write-thr
 but uncalled · screen context captures frames with no extractor installed, backlog full at
 100 frames and all quarantined.
 
-**Not started.** Any `passing` acceptance grade · billing at a real boundary · Windows
-signing.
+**Not started.** Billing at a real boundary · Windows signing · a model-optional Timeline.
 
 **Gone.** The OAuth connector framework, removed 2026-07-26. It is not V2 scope and no
 longer gates the release.
