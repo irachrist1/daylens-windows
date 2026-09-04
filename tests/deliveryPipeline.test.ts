@@ -35,10 +35,10 @@ test('promotes a Backlog issue with no open blockers and an accepted specificati
 test('accepts the recorded V2 product gate used by DEV-207', async () => {
   const candidate = issue({
     identifier: 'DEV-207',
-    description: '**Specification** — `docs/product/v2.md` (Version 2 release gate).',
+    description: '**Specification** — `docs/V2-PLAN.md` (Version 2 release gate).',
   })
 
-  assert.deepEqual(pipeline.specificationPaths(candidate.description), ['docs/product/v2.md'])
+  assert.deepEqual(pipeline.specificationPaths(candidate.description), ['docs/V2-PLAN.md'])
   assert.equal(
     await pipeline.hasAcceptedSpecification(candidate, {
       repositoryRoot: process.cwd(),

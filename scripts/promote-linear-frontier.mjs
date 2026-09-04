@@ -8,10 +8,10 @@ const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
 const LINEAR_REQUEST_TIMEOUT_MS = 15_000
 const CLOSED_STATE_TYPES = new Set(['completed', 'canceled'])
 const SPECIFICATION_LINE_PATTERN = /^\*\*Specification\*\*[^\n]*$/gm
-const SPECIFICATION_PATH_PATTERN = /`(docs\/specs\/[^`\n]+\.md|docs\/product\/v2\.md)`/g
+const SPECIFICATION_PATH_PATTERN = /`(docs\/specs\/[^`\n]+\.md|docs\/V2-PLAN\.md)`/g
 const ACCEPTED_STATUS_PATTERNS = new Map([
   ['docs/specs', /^\*\*Status:\*\*\s*Accepted\.\s*$/m],
-  ['docs/product/v2.md', /^\*\*Status:\*\*\s*Accepted product direction\./m],
+  ['docs/V2-PLAN.md', /^\*\*Status:\*\*\s*Accepted product direction\./m],
 ])
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -43,11 +43,11 @@ export async function hasAcceptedSpecification(issue, options = {}) {
   for (const relativePath of paths) {
     const absolutePath = path.resolve(root, relativePath)
     const specificationsRoot = path.resolve(root, 'docs/specs') + path.sep
-    const productGate = path.resolve(root, 'docs/product/v2.md')
+    const productGate = path.resolve(root, 'docs/V2-PLAN.md')
     const acceptedStatusPattern = absolutePath.startsWith(specificationsRoot)
       ? ACCEPTED_STATUS_PATTERNS.get('docs/specs')
       : absolutePath === productGate
-        ? ACCEPTED_STATUS_PATTERNS.get('docs/product/v2.md')
+        ? ACCEPTED_STATUS_PATTERNS.get('docs/V2-PLAN.md')
         : null
     if (!acceptedStatusPattern) return false
 
