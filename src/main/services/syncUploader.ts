@@ -4,6 +4,7 @@ import { projectDay, reprojectStaleDays } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { runEveningConsolidation } from '../jobs/eveningConsolidation'
 import { analyzeTimelineDay } from './analyzeDay'
+import { syncDayMemoryMirror } from './memoryMirrorService'
 import { persistedDayWasProcessed } from './workBlocks'
 
 let dayCheckTimer: ReturnType<typeof setInterval> | null = null
@@ -111,6 +112,9 @@ function analyzeFinalizedDay(dateStr: string, reason: string): void {
   if (persistedDayWasProcessed(getDb(), dateStr)) return
   void analyzeTimelineDay(getDb(), dateStr, { triggerSource: 'background', surfaceErrors: false })
     .then((result) => {
+      // A finalized day is the point its readable copy becomes worth writing:
+      // nothing about it will change again unless a person corrects it.
+      void syncDayMemoryMirror(getDb(), dateStr)
       if (result.merged || result.changed) {
         invalidateProjectedDay(dateStr, `analyze:${reason}`)
         console.log('[timeline] auto-analyzed finalized day', {
