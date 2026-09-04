@@ -76,7 +76,6 @@ jobs:
         env:
           POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DAYLENS_BILLING_API_URL: ${{ secrets.DAYLENS_BILLING_API_URL }}
         run: npm run build:all
 

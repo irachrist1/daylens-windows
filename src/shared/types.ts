@@ -3214,7 +3214,7 @@ export const IPC = {
 } as const
 
 // A render crash caught by the renderer's ErrorBoundary, forwarded to the main
-// process for Sentry reporting. Code-level context only (error identity plus
+// process for error telemetry. Code-level context only (error identity plus
 // React component names) — never captured activity, titles, or page content.
 export interface RendererCrashReport {
   name: string

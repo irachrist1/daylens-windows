@@ -11,7 +11,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // Forward to main for Sentry — getDerivedStateFromError only shows the
+    // Forward to main for error telemetry — getDerivedStateFromError only shows the
     // fallback screen; without this the crash never leaves the renderer.
     try {
       window.daylens?.errors?.reportRenderCrash({

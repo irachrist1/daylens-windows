@@ -179,7 +179,6 @@ test('initAnalytics wires telemetry with default settings — analytics is alway
 
     assert.equal(typeof storeSnapshot.analyticsId, 'string')
     assert.equal(posthogHarness.instances.length, 1)
-    assert.equal(sentryHarness.initCalls.length, 1)
   } finally {
     await analyticsModule?.shutdown()
     restoreRequire()
@@ -229,7 +228,7 @@ test('getPosthog rejects a malformed POSTHOG_HOST string the same way', async ()
   }
 })
 
-test('initAnalytics wires PostHog and Sentry when telemetry is enabled, and shutdown flushes safely', async () => {
+test('initAnalytics wires PostHog when telemetry is enabled, and shutdown flushes safely', async () => {
   resetHarnessState()
   __setSettings({
     onboardingState: {
@@ -261,16 +260,57 @@ test('initAnalytics wires PostHog and Sentry when telemetry is enabled, and shut
       is_packaged: false,
       platform: process.platform,
     })
-    assert.equal(sentryHarness.initCalls.length, 1)
-    assert.deepEqual(sentryHarness.userCalls.at(-1), { id: storeSnapshot.analyticsId })
 
     await analyticsModule.shutdown()
 
     assert.equal(client.flushCount, 1)
     assert.equal(client.shutdownCount, 1)
-    assert.deepEqual(sentryHarness.flushCalls, [2_000])
-    assert.deepEqual(sentryHarness.closeCalls, [2_000])
   } finally {
+    restoreRequire()
+  }
+})
+
+test('captureException reports a redacted stack to PostHog — the only path a crash frame reaches telemetry', async () => {
+  resetHarnessState()
+  __setSettings({
+    onboardingState: {
+      trackingPermissionState: 'granted',
+    },
+  })
+
+  const posthogHarness = createPostHogHarness()
+  const sentryHarness = createSentryHarness()
+  const restoreRequire = installRequireStub(posthogHarness, sentryHarness)
+  let analyticsModule: Awaited<ReturnType<typeof importFreshAnalyticsModule>> | null = null
+
+  try {
+    analyticsModule = await importFreshAnalyticsModule()
+    await analyticsModule.initAnalytics()
+    const client = posthogHarness.instances[0]
+
+    // A stack overflow is the DEV-487 shape: thousands of identical frames.
+    const overflow = new RangeError('Maximum call stack size exceeded')
+    overflow.stack = ['RangeError: Maximum call stack size exceeded']
+      .concat(Array.from({ length: 4000 }, () => '    at analyzeSessions (/app/src/main/services/workBlocks.ts:3202:10)'))
+      .join('\n')
+
+    analyticsModule.captureException(overflow, { tags: { reason: 'uncaught_exception' } })
+
+    const events = client.captures.filter((call) => call.event === '$exception')
+    assert.equal(events.length, 1, 'the exception reaches PostHog')
+
+    const properties = events[0].properties as Record<string, any>
+    assert.equal(properties.$exception_type, 'RangeError')
+    assert.equal(properties.reason, 'uncaught_exception')
+
+    const frames = properties.$exception_list[0].stacktrace.frames as Array<Record<string, unknown>>
+    assert.ok(frames.length > 0, 'the frame survives to telemetry')
+    assert.ok(frames.length <= 50, 'a 4000-frame overflow is capped so the payload stays ingestible')
+    assert.equal(frames[0].function, 'analyzeSessions')
+    assert.equal(frames[0].lineno, 3202)
+    assert.equal(frames[0].in_app, true)
+  } finally {
+    await analyticsModule?.shutdown()
     restoreRequire()
   }
 })

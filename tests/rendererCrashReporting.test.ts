@@ -78,7 +78,7 @@ function getRegisteredHandler(): (event: unknown, payload: unknown) => void {
   return handlers[0]
 }
 
-test('a render error forwarded over IPC reaches Sentry with component context', () => {
+test('a render error forwarded over IPC reaches telemetry with component context', () => {
   __resetElectronStore()
   __resetSettings()
   const harness = createTelemetryHarness()
@@ -96,16 +96,24 @@ test('a render error forwarded over IPC reaches Sentry with component context', 
       boundary: 'Timeline',
     })
 
-    assert.equal(harness.sentryCaptures.length, 1)
-    const { error, context } = harness.sentryCaptures[0]
-    assert.equal(error.name, 'TypeError')
-    assert.equal(error.message, "Cannot read properties of undefined (reading 'blocks')")
-    assert.ok(error.stack?.includes('errors.handlers'))
-    assert.ok(!error.stack?.includes('at Timeline'))
-    assert.equal(context.tags?.process_type, 'renderer')
-    assert.equal(context.tags?.reason, 'render_error')
-    assert.equal(context.tags?.boundary, 'Timeline')
-    assert.ok(String(context.extra?.component_stack).includes('at Timeline'))
+    const exceptions = harness.posthogCaptures.filter((c) => c.event === '$exception')
+    assert.equal(exceptions.length, 1)
+    const properties = exceptions[0].properties as Record<string, any>
+
+    assert.equal(properties.$exception_type, 'TypeError')
+    assert.equal(properties.$exception_message, "Cannot read properties of undefined (reading 'blocks')")
+
+    // The renderer's own frames are replaced by the main-process handler's, so a
+    // compromised renderer cannot dictate the trace it reports.
+    const frames = properties.$exception_list[0].stacktrace.frames as Array<Record<string, unknown>>
+    const rendered = JSON.stringify(frames)
+    assert.ok(rendered.includes('errors.handlers'))
+    assert.ok(!rendered.includes('at Timeline'))
+
+    assert.equal(properties.process_type, 'renderer')
+    assert.equal(properties.reason, 'render_error')
+    assert.equal(properties.boundary, 'Timeline')
+    assert.ok(String(properties.component_stack).includes('at Timeline'))
 
     const crashEvents = harness.posthogCaptures.filter((c) => c.event === 'app_crashed')
     assert.equal(crashEvents.length, 1)

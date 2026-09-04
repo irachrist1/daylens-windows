@@ -698,7 +698,7 @@ const api = {
   },
   errors: {
     // Forward a render crash caught by an ErrorBoundary to the main process,
-    // which reports it to Sentry the same way main-process errors are.
+    // which reports it to PostHog the same way main-process errors are.
     reportRenderCrash: (report: RendererCrashReport) =>
       ipcRenderer.send(IPC.ERRORS.RENDERER_CRASH, report),
   },

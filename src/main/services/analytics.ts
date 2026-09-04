@@ -18,7 +18,6 @@ import { isRealDayExternalAccessAllowed } from '../lib/realDayHarness'
 
 declare const __POSTHOG_KEY__: string
 declare const __POSTHOG_HOST__: string
-declare const __SENTRY_DSN__: string
 
 type StoreLike = {
   get: (key: string, defaultValue?: unknown) => unknown
@@ -35,7 +34,6 @@ type PostHogClient = {
   shutdown: () => Promise<void>
 }
 
-type SentryMain = typeof import('@sentry/electron/main')
 
 interface AnalyticsState {
   activationCompletedAt: number | null
@@ -55,7 +53,6 @@ let distinctId: string = randomUUID()
 let analyticsState: AnalyticsState = defaultAnalyticsState()
 let storePromise: Promise<StoreLike> | null = null
 let posthogClient: PostHogClient | null = null
-let sentryMain: SentryMain | null = null
 let analyticsBootstrapped = false
 let posthogErrorHandlerAttached = false
 const rateLimitAt = new Map<string, number>()
@@ -165,10 +162,6 @@ function isPosthogEnabled(): boolean {
   return isTelemetryEnabled() && Boolean(__POSTHOG_KEY__)
 }
 
-function isSentryEnabled(): boolean {
-  return isTelemetryEnabled() && Boolean(__SENTRY_DSN__)
-}
-
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com'
 
 // posthog-node forwards `host` straight into fetch() with no scheme check of
@@ -217,7 +210,7 @@ function getPosthog(): PostHogClient | null {
   return posthogClient
 }
 
-function redactSentryText(value: unknown): string | undefined {
+function redactTelemetryText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   if (!trimmed) return undefined
@@ -232,77 +225,18 @@ function redactSentryText(value: unknown): string | undefined {
     .slice(0, 180)
 }
 
-function sanitizeSentryExtra(value: unknown): unknown {
-  if (typeof value === 'string') return redactSentryText(value)
+function sanitizeTelemetryExtra(value: unknown): unknown {
+  if (typeof value === 'string') return redactTelemetryText(value)
   if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value
-  if (Array.isArray(value)) return value.slice(0, 12).map((item) => sanitizeSentryExtra(item))
+  if (Array.isArray(value)) return value.slice(0, 12).map((item) => sanitizeTelemetryExtra(item))
   if (!value || typeof value !== 'object') return undefined
 
   const sanitizedEntries = Object.entries(value as Record<string, unknown>)
     .slice(0, 20)
-    .map(([key, entry]) => [key, sanitizeSentryExtra(entry)] as const)
+    .map(([key, entry]) => [key, sanitizeTelemetryExtra(entry)] as const)
     .filter(([, entry]) => entry !== undefined)
 
   return Object.fromEntries(sanitizedEntries)
-}
-
-function sanitizeSentryEvent(event: Record<string, any>): Record<string, any> | null {
-  event.user = undefined
-  event.request = undefined
-  event.breadcrumbs = []
-
-  if (typeof event.message === 'string') {
-    event.message = redactSentryText(event.message)
-  }
-
-  if (event.logentry) {
-    event.logentry = {
-      ...event.logentry,
-      formatted: redactSentryText(event.logentry.formatted),
-      message: redactSentryText(event.logentry.message),
-    }
-  }
-
-  if (Array.isArray(event.exception?.values)) {
-    event.exception.values = event.exception.values.map((value: Record<string, unknown>) => ({
-      ...value,
-      value: redactSentryText(value.value),
-    }))
-  }
-
-  if (event.extra && typeof event.extra === 'object') {
-    event.extra = sanitizeSentryExtra(event.extra)
-  }
-
-  return event
-}
-
-function getSentry(): SentryMain | null {
-  if (!isSentryEnabled()) return null
-
-  if (!sentryMain) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Sentry = require('@sentry/electron/main') as SentryMain
-      Sentry.init({
-        beforeBreadcrumb: () => null,
-        beforeSend: ((event: any) => sanitizeSentryEvent(event)) as any,
-        dsn: __SENTRY_DSN__,
-        enabled: true,
-        environment: buildChannel(),
-        release: `daylens@${app.getVersion()}`,
-        sendDefaultPii: false,
-      })
-      Sentry.setTag('app_version', app.getVersion())
-      Sentry.setTag('build_channel', buildChannel())
-      Sentry.setTag('platform', process.platform)
-      sentryMain = Sentry
-    } catch {
-      return null
-    }
-  }
-
-  return sentryMain
 }
 
 function captureInternal(
@@ -482,9 +416,8 @@ function identifyAnonymousIdentity(): void {
   }
 
   try {
-    const Sentry = getSentry()
-    if (!Sentry) return
-    Sentry.setUser({ id: distinctId })
+    // PostHog identifies through capture's distinct_id; no separate call needed.
+    void distinctId
   } catch {
     // Best effort only.
   }
@@ -543,6 +476,58 @@ export function captureRateLimited(
   capture(event, properties)
 }
 
+// A stack filename must survive redaction or the trace is useless, but the
+// absolute path names the person's home directory. Keep the code-identifying
+// tail (everything from the last src/, dist/, app.asar/ or node_modules/
+// boundary) and drop the machine-specific prefix entirely.
+function redactStackPath(raw: string): string {
+  const path = raw.replace(/^.*?(?=(?:src|dist|app\.asar|node_modules)\/)/, '')
+  const trimmed = path === raw ? raw.split('/').slice(-2).join('/') : path
+  return trimmed.replace(/^[A-Za-z]:\\/, '').slice(0, 180)
+}
+
+// Parsed frames give PostHog a readable trace instead of one opaque string.
+// Capped at 50: a stack-overflow trace is thousands of identical frames and the
+// payload still has to be ingestible.
+function stackFrames(error: Error): Array<Record<string, unknown>> {
+  const lines = (error.stack ?? '').split('\n').slice(1, 51)
+  return lines.map((line) => {
+    const match = /^\s*at\s+(?:(.+?)\s+\()?(.+?):(\d+):(\d+)\)?$/.exec(line)
+    if (!match) return { raw_id: redactTelemetryText(line.trim()) }
+    return {
+      colno: Number(match[4]),
+      filename: redactStackPath(match[2]),
+      function: match[1] ?? '<anonymous>',
+      in_app: !match[2].includes('node_modules'),
+      lineno: Number(match[3]),
+    }
+  })
+}
+
+// $exception carries a nested $exception_list that the scalar allowlist in
+// sanitizeAnalyticsProperties() would strip to nothing. Its payload is already
+// redacted field by field on the way in, so it emits directly instead of
+// through captureInternal.
+function captureExceptionInternal(properties: Record<string, unknown>): void {
+  try {
+    const client = getPosthog()
+    if (!client) return
+    client.register?.(globalProperties())
+    client.capture({
+      disableGeoip: true,
+      distinctId,
+      event: '$exception',
+      properties: {
+        ...globalProperties(),
+        ...properties,
+        $process_person_profile: false,
+      },
+    })
+  } catch {
+    // Never let crash reporting crash the app.
+  }
+}
+
 export function captureException(
   error: unknown,
   context?: {
@@ -555,21 +540,26 @@ export function captureException(
   const errorName = error instanceof Error ? error.name : 'UnknownError'
 
   try {
-    const Sentry = getSentry()
-    if (!Sentry) return
-    const normalizedError = error instanceof Error ? error : new Error(String(error))
-    Sentry.captureException(normalizedError, {
-      extra: sanitizeSentryExtra({
-        error_name: errorName,
-        failure_kind: failureKind,
-        ...context?.extra,
-      }) as Record<string, unknown> | undefined,
-      fingerprint: context?.fingerprint,
-      tags: {
-        build_channel: buildChannel(),
-        platform: process.platform,
-        ...context?.tags,
-      },
+    const normalized = error instanceof Error ? error : new Error(String(error))
+    // PostHog error tracking ingests $exception with an $exception_list payload.
+    // The stack is the whole point of this call — it is the only place a frame
+    // reaches telemetry — so it is redacted, never dropped.
+    captureExceptionInternal({
+      $exception_fingerprint: context?.fingerprint?.join(':'),
+      $exception_list: [{
+        mechanism: { handled: true, synthetic: false },
+        stacktrace: { frames: stackFrames(normalized), type: 'raw' },
+        type: errorName,
+        value: redactTelemetryText(normalized.message) ?? errorName,
+      }],
+      $exception_message: redactTelemetryText(normalized.message),
+      $exception_type: errorName,
+      build_channel: buildChannel(),
+      error_name: errorName,
+      failure_kind: failureKind,
+      platform: process.platform,
+      ...(sanitizeTelemetryExtra(context?.extra) as Record<string, unknown> | undefined),
+      ...context?.tags,
     })
   } catch {
     // Never let crash reporting crash the app.
@@ -581,12 +571,6 @@ async function flush(): Promise<void> {
 
   try {
     if (posthogClient?.flush) pending.push(posthogClient.flush())
-  } catch {
-    // Best effort only.
-  }
-
-  try {
-    if (sentryMain?.flush) pending.push(sentryMain.flush(2_000))
   } catch {
     // Best effort only.
   }
@@ -610,11 +594,6 @@ export async function shutdown(): Promise<void> {
     // Best effort only.
   }
 
-  try {
-    if (sentryMain?.close) pending.push(sentryMain.close(2_000))
-  } catch {
-    // Best effort only.
-  }
 
   if (pending.length > 0) {
     await Promise.allSettled(pending)
@@ -622,5 +601,4 @@ export async function shutdown(): Promise<void> {
 
   posthogClient = null
   posthogErrorHandlerAttached = false
-  sentryMain = null
 }
