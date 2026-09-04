@@ -35,9 +35,10 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 
 | Document                                           | Purpose                                                          |
 | -------------------------------------------------- | ---------------------------------------------------------------- |
-| [V2 sprint state](docs/V2-SPRINT-STATE.md)         | **Read first before picking up a V2 work order.** What the six-lane sprint shipped, what it did not, and the three places where the record misleads |
+| [V2 plan](docs/V2-PLAN.md)                         | **Read first.** The five blockers, their acceptance criteria, the honest shipped/half-built/not-started state, and what is out of scope |
+| [V2 sprint state](docs/V2-SPRINT-STATE.md)         | Superseded by the V2 plan for scope. Retained for what the six-lane sprint shipped and where the record misleads |
 | [Product direction](docs/product/product.md)       | The product promise, problem, principles, and boundaries         |
-| [Landing positioning](docs/product/landing-positioning.md) | Accepted public-site audience, promise, and AI-forward voice |
+| [Positioning and plan](docs/product/positioning.md) | The standing position after OpenAI's Computer History: what to copy, what we claim, the public-site promise and voice, and what to build next |
 | [V2 direction](docs/product/v2.md)                 | Accepted V2 scope, sequencing, and technical boundaries          |
 | [Vocabulary](docs/product/vocabulary.md)           | Shared meanings for product and architecture terms               |
 | [Architecture](docs/codebase/architecture.md)      | Verified codebase map, invariants, and recorded decisions (start here) |
@@ -64,6 +65,7 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Screen context](docs/specs/screen-context.md)                           | Opt-in sampled-frame experiment, extraction, deletion, and evaluation           |
 | [Memory and entities](docs/specs/memory-and-entities.md)                 | Search, memory types, entity identity, relationships, and conversational memory |
 | [Timeline](docs/specs/timeline.md)                                       | Calendar-like day reconstruction, attention accounting, labels, and corrections |
+| [Calendar events and tracked blocks](docs/specs/calendar-and-blocks.md)  | How scheduled events and observed blocks relate: attendance, overlap, and recap wording |
 | [Day recap and analysis](docs/specs/day-recap-and-analysis.md)           | The grounded day account: gaps, threads, freshness, and clarification           |
 | [Label voice](docs/specs/label-voice.md)                                 | The recorded, evaluatable rubric block labels are scored against                |
 | [Apps](docs/specs/apps.md)                                               | Day, week, and month application explanations and canonical totals              |
@@ -72,7 +74,7 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Wrapped](docs/specs/wrapped.md)                                         | Day, week, month, and year recaps on shared facts, voice, and evidence          |
 | [Briefs](docs/specs/briefs.md)                                           | Morning, evening, and weekly notifications from the same facts and voice        |
 | [Agent runtime and context](docs/specs/agent-runtime-and-context.md)     | Context assembly, file disclosure, scoped tools, and provider runtimes          |
-| [Connectors](docs/specs/connectors.md)                                   | Authorization, read-only synchronization, normalization, and disconnection      |
+| [Connectors](docs/specs/connectors.md) _(removed 2026-07-26)_             | History only — the OAuth connector framework was dropped from the product        |
 | [Privacy, retention, and sync](docs/specs/privacy-retention-and-sync.md) | Local retention, export, model context, encryption, sync, and deletion          |
 | [Billing and entitlements](docs/specs/billing-and-entitlements.md)       | Free local access, trials, managed usage, subscriptions, and billing failures   |
 | [Web companion](docs/specs/web-companion.md)                             | Post-desktop remote recall, encrypted search, and cross-device AI threads       |

@@ -8,7 +8,15 @@ change. It previously lived outside the repository, at
 needed it. A grading authority that can go missing cannot be the authority, so
 it lives here now, versioned with the code it grades.
 
+The private `spcsorg/daylens-ux-audit` repository holds its own `INDEX.md` and
+`ACCEPTANCE.md` for the screenshot UX audit. Those are different files. This
+repository is public, so nothing carrying captured activity — screenshots,
+calendar entries, colleague names, browsing history — moves here.
+
 ## Files
+
+- [performance.md](performance.md) — 60 further acceptance lines (database, background
+  cost, correctness). Not counted in ACCEPTANCE.md's 24-line total.
 
 - [ACCEPTANCE.md](ACCEPTANCE.md) — the acceptance lines per surface, each with a
   state and the evidence behind it.

@@ -1,5 +1,9 @@
 # Acceptance
 
+> **Superseded by [../V2-PLAN.md](../V2-PLAN.md) (2026-09-04)** for V2 scope and priority.
+> The criteria here remain the verification source; see the plan's Verification bar for which are reusable.
+
+
 The acceptance lines per surface, in the order
 [V2-SHIP-PRIORITIES.md](../V2-SHIP-PRIORITIES.md) works them. Each line is the
 "When it's right" behavior from that document, restated as something a person can
@@ -9,7 +13,16 @@ States are defined in [README.md](README.md). `landed` means merged with no
 running-application evidence, and it is not a pass.
 
 Graded 2026-08-11. Board states read from Linear; `landed` derived from merged
-commits on `factory/v2-ship`.
+commits on `factory/v2-ship`, at `d0d41c02`.
+
+**This grading predates the six-lane V2 sprint.** That sprint merged to `main` at
+`f4cb36ce`, after `d0d41c02`, and delivered 26 work orders — see
+[../V2-SPRINT-STATE.md](../V2-SPRINT-STATE.md). No line below has been re-graded
+against it, so the `open` states here understate what has merged. The lines the
+sprint most directly bears on are AI chat 1 (WO-53 deterministic facts, partial —
+no `site_total_time` fact kind), AI chat 4 (WO-76 undelivered, so still `open`),
+and Recaps 1 (the voice lane, WO-99 through WO-107). Re-grading them is a pass
+against the running application, not a code read.
 
 ## Summary
 
@@ -56,7 +69,7 @@ name until it closes" — and none of the closed Timeline issues covers it.
 | # | Acceptance line | State | Tracked | Evidence |
 | --- | --- | --- | --- | --- |
 | 1 | The first answer to a factual question is the correct number, grounded in the same facts Timeline and Apps show | `open` | DEV-246 (Backlog) | — |
-| 2 | Every source Daylens ingests — calendar, Granola, connectors — is reachable by the chat | `landed` | DEV-241, DEV-256 (Done) | — |
+| 2 | Every source Daylens ingests — calendar, Granola — is reachable by the chat | `landed` | DEV-241, DEV-256 (Done) | Connectors struck: removed from the product 2026-07-26, so the line could not be graded as written |
 | 3 | Provider and model have one source of truth, shown identically in Settings and the chat picker; a provider either works for chat or is not offered | `open` | DEV-242 (Backlog) | partial: commit `28262c39` moves provider connection through every surface |
 | 4 | Tool activity is a collapsed one-line summary that expands on demand, with inline status as the agent works; context attached scales with the question | `open` | DEV-244, DEV-245, DEV-225 (Backlog) | — |
 | 5 | The tab opens instantly | `open` | DEV-243 (Backlog) | — |

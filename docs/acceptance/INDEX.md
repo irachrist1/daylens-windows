@@ -1,23 +1,35 @@
 # Failure register
 
+> **Superseded by [../V2-PLAN.md](../V2-PLAN.md) (2026-09-04)** for V2 scope and priority.
+> The criteria here remain the verification source; see the plan's Verification bar for which are reusable.
+
+
 Every tracked defect behind the acceptance lines, its true board state, and where
 the layers disagree. Read [ACCEPTANCE.md](ACCEPTANCE.md) for the graded lines;
 this file is for reconciliation.
 
 Compiled 2026-08-11 from Linear (team DEV, project Daylens V2) and from merged
-commits on `factory/v2-ship`.
+commits on `factory/v2-ship`, at `d0d41c02`. That commit predates the six-lane V2
+sprint, which merged to `main` at `f4cb36ce`; nothing below has been re-compiled
+against it. Read [../V2-SPRINT-STATE.md](../V2-SPRINT-STATE.md) alongside this
+file.
 
 ## Where the layers disagree
 
-Three kinds of drift are live right now. Each one makes a different layer lie.
+Three kinds of drift were recorded here. The first is corrected; §2 and §3 are
+still live. Each one makes a different layer lie.
 
-### 1. The priorities document describes closed defects as current failures
+### 1. The priorities document described closed defects as current failures — corrected
 
-`docs/V2-SHIP-PRIORITIES.md` is written in the present tense about defects that
-are Done. Its Timeline section is the clearest case: every failure it lists under
-"Today" is closed.
+`docs/V2-SHIP-PRIORITIES.md` was written in the present tense about defects that
+are Done. Its Timeline section was the clearest case: every failure it listed
+under "Today" was closed.
 
-| Described as a live failure | Actual state |
+Corrected on 2026-08-14. Each surface section now separates what still
+reproduces from what closed, with the code that closed it, and the "Tracked in"
+lines point at open issues only. The defects moved out of the present tense:
+
+| Was described as a live failure | Actual state |
 | --- | --- |
 | Continuous work split into fragment blocks | DEV-232 Done |
 | Selecting blocks and choosing merge does nothing | DEV-233 Done |
@@ -28,13 +40,10 @@ are Done. Its Timeline section is the clearest case: every failure it lists unde
 | The attended confirmation toast never dismisses | DEV-230 Done |
 | A block summary duplicated its own wording | DEV-266 Done |
 | Recap content is inaccurate and contradicts itself | DEV-247 Done |
+| No calendar or Granola tool is registered for the agent | False — `get_calendar_events` and `read_meeting_notes` are registered in `src/main/agent/contextTools.ts` (DEV-241, DEV-256) |
 
-The document also points at DEV-232, DEV-233, and DEV-234 under "Tracked in",
-which reads as open work.
-
-This matters because `docs/development.md` names `V2-SHIP-PRIORITIES.md` as source
-of truth zero — the first thing anyone reads. Reading it today produces a wrong
-picture of what remains.
+`docs/development.md` names `V2-SHIP-PRIORITIES.md` as source of truth zero — the
+first thing anyone reads — which is why this drift mattered.
 
 ### 2. The board lists issues whose implementation has merged
 
