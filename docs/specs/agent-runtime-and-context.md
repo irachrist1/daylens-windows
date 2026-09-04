@@ -224,7 +224,7 @@ Daylens may answer that a file was used without reading its contents. It reads o
 
 ## Connector context
 
-The OAuth connector framework was removed from the product on 2026-07-26 (see [connectors.md](connectors.md)); calendar and git enrichment now arrives through the zero-setup local probes in `externalSignals.ts`, which is also the intended home of any reborn integration — as agent-pluggable evidence behind the tier model, not a settings page. The rules below bind any such source, current or future.
+The OAuth connector framework was removed from the product on 2026-07-26 (see connectors.md); calendar and git enrichment now arrives through the zero-setup local probes in `externalSignals.ts`, which is also the intended home of any reborn integration — as agent-pluggable evidence behind the tier model, not a settings page. The rules below bind any such source, current or future.
 
 A connected source makes permitted records retrievable; it does not preload the source into every conversation.
 

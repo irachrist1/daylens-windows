@@ -2,7 +2,7 @@
 
 **Status:** Awaiting approval. Recorded 2026-08-14, the day after OpenAI shipped Computer History. Revised the same day against the full feature documentation and interface captures.
 
-This is the standing answer to "why does Daylens exist now that ChatGPT does this," and the plan that follows. It replaces `competitive-position.md` and `landing-positioning.md`, merged into this document. Product behavior still follows [product.md](product.md). Delivery order still follows [V2-SHIP-PRIORITIES.md](../V2-SHIP-PRIORITIES.md).
+This is the standing answer to "why does Daylens exist now that ChatGPT does this," and the plan that follows. It replaces `competitive-position.md` and `landing-positioning.md`, merged into this document. Product behavior still follows [product.md](product.md). Delivery order still follows [V2-SHIP-PRIORITIES.md](../V2-PLAN.md).
 
 ## Approve this, and building starts
 
@@ -249,7 +249,7 @@ Their assets and their page. Borrow the structure and the restraint; build our o
 
 ## 6. What we build
 
-The [V2 order](../V2-SHIP-PRIORITIES.md) does not change — Timeline, Apps, AI chat, recaps, settings. Computer History raises the floor on a correct answer; it does not change which surface to fix first.
+The [V2 order](../V2-PLAN.md) does not change — Timeline, Apps, AI chat, recaps, settings. Computer History raises the floor on a correct answer; it does not change which surface to fix first.
 
 Then, in order:
 

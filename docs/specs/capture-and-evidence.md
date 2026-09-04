@@ -41,7 +41,7 @@ It does not specify:
 - screen-frame capture or OCR
 - AI answer generation
 
-Those systems consume the evidence defined here and have their own specifications. The screen-context experiment remains a separate opt-in prototype governed by [V2 direction](../product/v2.md#screen-context-experiment).
+Those systems consume the evidence defined here and have their own specifications. The screen-context experiment remains a separate opt-in prototype governed by V2 direction.
 
 ## Data flow
 

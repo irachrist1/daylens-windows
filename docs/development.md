@@ -6,9 +6,9 @@ Changes begin with understanding and end with explicit acceptance.
 
 Read the smallest relevant set:
 
-0. [What actually blocks V2](V2-SHIP-PRIORITIES.md) — the user-facing failures that must ship first, and the rule that every change is graded against the acceptance dossier, not a convenient ticket.
+0. [What actually blocks V2](V2-PLAN.md) — the user-facing failures that must ship first, and the rule that every change is graded against the acceptance dossier, not a convenient ticket.
 1. [Product direction](product/product.md) for the product promise and boundaries.
-2. [V2 direction](product/v2.md) for accepted scope, sequencing, and technical boundaries.
+2. [V2 direction](V2-PLAN.md) for accepted scope, sequencing, and technical boundaries.
 3. The relevant file under `docs/specs` for expected behavior.
 4. The active file under `docs/tickets` for the implementation outcome and acceptance checks.
 5. [Architecture](codebase/architecture.md) and the code for current behavior.
@@ -28,7 +28,7 @@ A specification marked `Ready for review` is complete enough to evaluate but doe
 
 Documentation is written for people encountering the open-source project without private context. Personal intentions use first person; technical behavior uses direct, neutral language.
 
-Durable documents describe what is true or what has been explicitly accepted. Do not leave placeholders such as “this will be documented,” “this needs updating,” or “a specification will be added.” Put unfinished documentation work in [TO-DO.md](TO-DO.md) instead.
+Durable documents describe what is true or what has been explicitly accepted. Do not leave placeholders such as “this will be documented,” “this needs updating,” or “a specification will be added.” Put unfinished documentation work in [TO-DO.md](V2-PLAN.md) instead.
 
 ## From idea to shipped change
 
@@ -102,7 +102,7 @@ npm run timeline:eval -- --strict
 npm run contract:check
 ```
 
-The verification commands are offline and deterministic. Run the boundary-specific web, billing, and packaged-runtime checks described in [Testing and verification](hygiene/testing.md) when those surfaces change. Some quality evaluations call paid providers and require explicit approval. See [Benchmarks](hygiene/benchmarks.md).
+The verification commands are offline and deterministic. Run the boundary-specific web, billing, and packaged-runtime checks described in [Testing and verification](hygiene/testing.md) when those surfaces change. Some quality evaluations call paid providers and require explicit approval. See Benchmarks.
 
 For hands-on inspection, the headless CLI (`./daylens`) drives timeline, apps, wrapped, chat, and analyze from the terminal through the same code paths as the renderer, against an isolated snapshot of the real database. For day-quality work, `npm run eval:days` scores real days against journal ground truth (local-only; `--judge` adds an LLM shape judge, `--strict` gates on thresholds). Both are described in [Testing and verification](hygiene/testing.md).
 

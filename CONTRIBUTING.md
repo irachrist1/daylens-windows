@@ -9,7 +9,7 @@ Contributions are welcome. Product behavior remains intentional: understand the 
 Read the documents relevant to the work:
 
 - [Product direction](docs/product/product.md)
-- [V2 direction](docs/product/v2.md)
+- [V2 direction](docs/V2-PLAN.md)
 - [Development workflow](docs/development.md)
 - [Current architecture](docs/codebase/architecture.md)
 - [Repository structure](docs/codebase/structure.md)
@@ -67,7 +67,7 @@ npm run verify:remote-web
 npm run timeline:eval -- --strict
 ```
 
-Run contract, web, billing, or packaged-runtime checks when those boundaries change. Some AI evaluations use real data, credentials, and paid provider calls; do not run them casually. See [Testing and verification](docs/hygiene/testing.md) and [Benchmarks and evaluations](docs/hygiene/benchmarks.md).
+Run contract, web, billing, or packaged-runtime checks when those boundaries change. Some AI evaluations use real data, credentials, and paid provider calls; do not run them casually. See [Testing and verification](docs/hygiene/testing.md) and Benchmarks and evaluations.
 
 Visible behavior should also be verified in the running application. Green tests are necessary, not sufficient.
 

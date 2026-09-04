@@ -76,7 +76,7 @@ The first tool set is deliberately small:
 4. Aggregate canonical time by application, website, project, client, meeting, person, or category.
 5. Search exact and semantic memory.
 6. Retrieve supporting evidence and source links.
-7. Query one external source through the Daylens boundary — the `externalSignals` local probes (calendar, git) or a user-configured MCP server. (The OAuth connector framework was removed 2026-07-26; see [connectors.md](connectors.md).)
+7. Query one external source through the Daylens boundary — the `externalSignals` local probes (calendar, git) or a user-configured MCP server. (The OAuth connector framework was removed 2026-07-26; see connectors.md.)
 8. Compare periods or entities using the same calculation.
 9. Explain missing evidence or request one clarification.
 10. Preview and apply a reversible Daylens correction.

@@ -6,7 +6,7 @@
 
 `apps/web` contains the public Daylens site, the linked browser experience, and the Convex backend used for linking, filtered sync, and web AI. It is not a separate tracker. The desktop application remains the capture engine and local source of truth.
 
-The linked surfaces and sync are frozen per the [V2 disposition list](../product/v2.md#existing-features-during-the-transition): they continue to operate but receive no new features, and the [web companion specification](../specs/web-companion.md) defines their encrypted replacement.
+The linked surfaces and sync are frozen per the V2 disposition list: they continue to operate but receive no new features, and the web companion specification defines their encrypted replacement.
 
 ## Implemented now
 

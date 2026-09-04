@@ -3,7 +3,7 @@
 **Status:** Canonical. This document is the one place that says how every AI
 surface in Daylens behaves, sounds, and is graded. The behavior contract lives
 in [ai-agent.md](ai-agent.md), the label voice in [label-voice.md](label-voice.md),
-and the harness inventory in [../hygiene/benchmarks.md](../hygiene/benchmarks.md);
+and the harness inventory in ../hygiene/benchmarks.md;
 this document binds them to the graded queries, the judge rubric, and the hard
 caps a build must clear before it ships.
 

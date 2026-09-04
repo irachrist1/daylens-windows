@@ -29,7 +29,7 @@ is meant to read. The account of the day must be grounded in what actually
 happened, said in Daylens's own voice, and honest about what it does not know.
 
 The reference failure set is
-[the 2026-07-20 gap analysis](../reviews/gap-analysis-2026-07-20.md): a real
+the 2026-07-20 gap analysis: a real
 day's journal ground truth against what Daylens produced. Every rule in this
 specification and in [timeline.md](timeline.md) traces to a failure there.
 

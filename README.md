@@ -33,26 +33,24 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 
 ## Documentation
 
-| Document                                           | Purpose                                                          |
-| -------------------------------------------------- | ---------------------------------------------------------------- |
-| [V2 plan](docs/V2-PLAN.md)                         | **Read first.** The five blockers, their acceptance criteria, the honest shipped/half-built/not-started state, and what is out of scope |
-| [V2 sprint state](docs/V2-SPRINT-STATE.md)         | Superseded by the V2 plan for scope. Retained for what the six-lane sprint shipped and where the record misleads |
-| [Product direction](docs/product/product.md)       | The product promise, problem, principles, and boundaries         |
-| [Positioning and plan](docs/product/positioning.md) | The standing position after OpenAI's Computer History: what to copy, what we claim, the public-site promise and voice, and what to build next |
-| [V2 direction](docs/product/v2.md)                 | Accepted V2 scope, sequencing, and technical boundaries          |
-| [Vocabulary](docs/product/vocabulary.md)           | Shared meanings for product and architecture terms               |
-| [Architecture](docs/codebase/architecture.md)      | Verified codebase map, invariants, and recorded decisions (start here) |
-| [Gap analysis 2026-07-20](docs/reviews/gap-analysis-2026-07-20.md) | The reference day: journal ground truth vs Daylens output |
-| [Repository structure](docs/codebase/structure.md) | Where the major parts of the codebase live                       |
-| [Development](docs/development.md)                 | How specifications, tickets, implementation, and acceptance work |
-| [The factory](docs/factory.md)                     | The record layers, where each lives, and the execution trail per work order |
-| [Acceptance dossier](docs/acceptance/README.md)    | The graded record of what passes and what still fails, surface by surface |
-| [Testing](docs/hygiene/testing.md)                 | Normal verification and release confidence                       |
-| [Benchmarks](docs/hygiene/benchmarks.md)           | Evaluation harnesses, cost, and when to run them                 |
-| [Web companion](docs/codebase/web.md)              | What the web application currently implements and what remains   |
-| [Billing operations](docs/operations/billing.md)   | Managed AI billing architecture and deployment runbook           |
-| [Boop lessons](docs/research/boop-agent/README.md) | Agent, product, desktop, and developer-experience reference work |
-| [To-do list](docs/TO-DO.md)                        | Specification reviews, validation, and operational follow-up     |
+| Document                                            | Purpose                                                                     |
+| --------------------------------------------------- | --------------------------------------------------------------------------- |
+| [V2 plan](docs/V2-PLAN.md)                          | **Read first.** The only planning document: what V2 is, the five blockers, acceptance criteria, and what is out of scope |
+| [Product direction](docs/product/product.md)        | The product promise, problem, principles, and boundaries                    |
+| [Positioning](docs/product/positioning.md)          | What we claim, the public-site promise and voice, and what to build next    |
+| [Vocabulary](docs/product/vocabulary.md)            | Shared meanings for product and architecture terms                          |
+| [Architecture](docs/codebase/architecture.md)       | Codebase map, invariants, and recorded decisions — start here               |
+| [Repository structure](docs/codebase/structure.md)  | Where the major parts of the codebase live                                  |
+| [Web companion](docs/codebase/web.md)               | What the web application implements and what remains                        |
+| [Development](docs/development.md)                  | How specifications, implementation, and acceptance work                     |
+| [Testing](docs/hygiene/testing.md)                  | Normal verification and release confidence                                  |
+| [Install](docs/operations/install.md)               | How the app is installed and updated                                        |
+| [macOS signing](docs/operations/macos-signing.md)   | Developer ID signing and notarization                                       |
+| [Windows signing](docs/operations/windows-signing.md) | Authenticode signing                                                      |
+| [Billing operations](docs/operations/billing.md)    | Managed AI billing architecture and deployment runbook                      |
+
+Behaviour specifications live in [docs/specs/](docs/specs/) — one per surface. They define
+what the product does; the V2 plan decides what ships.
 
 Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [AGENTS.md](AGENTS.md).
 
@@ -74,11 +72,11 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Wrapped](docs/specs/wrapped.md)                                         | Day, week, month, and year recaps on shared facts, voice, and evidence          |
 | [Briefs](docs/specs/briefs.md)                                           | Morning, evening, and weekly notifications from the same facts and voice        |
 | [Agent runtime and context](docs/specs/agent-runtime-and-context.md)     | Context assembly, file disclosure, scoped tools, and provider runtimes          |
-| [Connectors](docs/specs/connectors.md) _(removed 2026-07-26)_             | History only — the OAuth connector framework was dropped from the product        |
+| Connectors _(removed 2026-07-26)_             | History only — the OAuth connector framework was dropped from the product        |
 | [Privacy, retention, and sync](docs/specs/privacy-retention-and-sync.md) | Local retention, export, model context, encryption, sync, and deletion          |
 | [Billing and entitlements](docs/specs/billing-and-entitlements.md)       | Free local access, trials, managed usage, subscriptions, and billing failures   |
-| [Web companion](docs/specs/web-companion.md)                             | Post-desktop remote recall, encrypted search, and cross-device AI threads       |
-| [Organizational sharing](docs/specs/organization-sharing.md)             | Deferred: reviewed project and client summaries without personal monitoring     |
+| Web companion                             | Post-desktop remote recall, encrypted search, and cross-device AI threads       |
+| Organizational sharing             | Deferred: reviewed project and client summaries without personal monitoring     |
 
 ## Run from source
 
@@ -97,7 +95,7 @@ npm test
 npm run contract:check
 ```
 
-Some AI evaluations call paid providers. Read [Benchmarks](docs/hygiene/benchmarks.md) before running them.
+Some AI evaluations call paid providers. Read Benchmarks before running them.
 
 Run the web companion with:
 

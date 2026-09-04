@@ -1,7 +1,7 @@
 # Label voice
 
 **Status:** Accepted. Follow-up recorded in
-[real-day-timeline-apps-reconciliation.md](../tickets/real-day-timeline-apps-reconciliation.md):
+real-day-timeline-apps-reconciliation.md:
 "The label voice has a recorded definition, and the labeling path is evaluated
 against it in the real-day review."
 
