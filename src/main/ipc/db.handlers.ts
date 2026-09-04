@@ -93,6 +93,13 @@ import { applyCorrection, previewCorrection, undoCorrection } from '../services/
 import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { analyzeTimelineDay } from '../services/analyzeDay'
+import {
+  listMemoryMirrorDays,
+  mirrorRootPath,
+  removeDayMemoryMirror,
+  revealDayMemoryMirror,
+  syncDayMemoryMirror,
+} from '../services/memoryMirrorService'
 import { detectDayClarifications, applyClarificationAnswer } from '../services/dayClarifications'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
@@ -446,6 +453,9 @@ export function registerDbHandlers(): void {
       triggerSource: 'user',
       onProgress,
     })
+    // The day just changed shape, so its readable copy is stale. Best-effort
+    // and unawaited: the analysis result must not wait on a filesystem write.
+    void syncDayMemoryMirror(getDb(), dateStr)
     return {
       payload: result.payload,
       changed: result.changed,
@@ -1470,6 +1480,23 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.ICONS.RESOLVE, async (_e, payload: IconRequest) => {
     return resolveIcon(payload)
+  })
+
+  ipcMain.handle(IPC.MEMORY_MIRROR.LIST, async () => listMemoryMirrorDays())
+
+  ipcMain.handle(IPC.MEMORY_MIRROR.ROOT, () => mirrorRootPath())
+
+  ipcMain.handle(IPC.MEMORY_MIRROR.REVEAL, async (_e, payload: { date: string }) =>
+    revealDayMemoryMirror(payload.date),
+  )
+
+  ipcMain.handle(IPC.MEMORY_MIRROR.SYNC, async (_e, payload: { date: string }) =>
+    syncDayMemoryMirror(getDb(), payload.date),
+  )
+
+  ipcMain.handle(IPC.MEMORY_MIRROR.DELETE, async (_e, payload: { date: string }) => {
+    await removeDayMemoryMirror(payload.date)
+    return true
   })
 }
 

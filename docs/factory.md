@@ -59,7 +59,9 @@ The harness exists because of one recurring failure: code that typechecks,
 passes tests, and was never opened and clicked. `docs/V2-SHIP-PRIORITIES.md`
 records the pattern — a re-analyze button that "always reports 'Labels
 refreshed'", a merge that does nothing with no error, a screen-context page that
-claims to be on while its extraction is not installed. The checklist's
+claims to be on while its extraction is not installed. The first two are now in
+that document's "Closed since this section was written" lists; the third still
+reproduces. The checklist's
 user-facing verification step is not optional and cannot be satisfied by a green
 suite.
 

@@ -1,16 +1,20 @@
 # To-do list
 
+> **Superseded by [docs/V2-PLAN.md](V2-PLAN.md) (2026-09-04)** for V2 scope, status, and priority.
+> This document keeps its detail; it no longer sets scope.
+
+
 This is the one place for documentation, decision, and research work that has not been completed or accepted. Durable documents describe what is true now, not promise that someone will update them later.
 
 ## Decisions waiting on me
 
-- [x] Choose the first-customer wedge for positioning and connector priority. Accepted: AI-forward knowledge workers who want personal memory of their laptop day and context for the AI tools they already use — see [landing positioning](product/landing-positioning.md). Alternatives considered: professionals who account for time to clients; keeping only the broad "any individual" framing without an AI-forward lead.
+- [x] Choose the first-customer wedge for positioning and connector priority. Accepted: AI-forward knowledge workers who want personal memory of their laptop day and context for the AI tools they already use — see [positioning and plan](product/positioning.md). Alternatives considered: professionals who account for time to clients; keeping only the broad "any individual" framing without an AI-forward lead.
 
 ## Product validation
 
 - [ ] Build the competitor matrix described in V2, angled at the chosen first-customer wedge.
 - [ ] Design and build the comparison hub and individual comparison pages for the website.
-- [ ] Finish the public-site copy pass against [landing positioning](product/landing-positioning.md): remaining docs sections, roadmap/changelog marketing chrome, comparison pages, and any leftover open-source or timesheet-primary framing.
+- [ ] Finish the public-site copy pass against [positioning and plan](product/positioning.md): remaining docs sections, roadmap/changelog marketing chrome, comparison pages, and any leftover open-source or timesheet-primary framing.
 - [ ] Define activation and retention measurements for the first recognizable day, useful retrieval, and useful agent answer.
 
 ## Documentation and developer experience
@@ -19,7 +23,7 @@ This is the one place for documentation, decision, and research work that has no
 - [ ] Productize the source setup path around one diagnostic/setup command and one development command. Complete when a fresh clone can verify prerequisites, start every required local component, report authoritative readiness per component, stop children cleanly, and give an exact recovery command for each failed preflight.
 - [ ] Verify the documented fresh-clone, development, test, packaging, and release paths in clean environments. Complete when CI or a repeatable release check exercises the same commands the README and operations documents give contributors.
 - [ ] Add repository checks that prevent captured personal data, real activity titles, message or document content, access tokens, provider credentials, and production identifiers from entering fixtures, logs, documentation, or Git history. Complete when the contribution guidance and automated checks use synthetic examples and fail on seeded sensitive values.
-- [ ] Normalize the existing Prettier baseline in a dedicated clean-tree mechanical change. `npm run format:check` now excludes generated output and nested agent worktrees but reports 605 existing files. Complete when those files are formatted without mixing the rewrite into product work and the command is added to CI.
+- [ ] Normalize the existing Prettier baseline in a dedicated clean-tree mechanical change. `npm run format:check` excludes generated output and nested agent worktrees and reports 979 files as of 2026-08-14, up from the 605 recorded when this item was written. Complete when those files are formatted without mixing the rewrite into product work and the command is added to CI.
 - [ ] Make `knip` and `depcheck` workspace- and alias-aware, then remove confirmed dead code and dependencies. Complete when both commands distinguish Vite aliases, workspace dependencies, generated Convex exports, and intentional public APIs from real findings and exit successfully.
 - [ ] Fix the unhandled "Database not initialised" rejection a background job raises during desktop-replay startup. Complete when `verify:real-day:desktop` starts without an unhandled rejection and the racing job is gated on database initialization.
 
@@ -29,15 +33,15 @@ Review in wave order — the [implementation waves](product/v2.md#implementation
 
 Wave 2:
 
-- [ ] Review and accept the [Memory, search, and entities specification](specs/memory-and-entities.md).
+- [x] Review and accept the [Memory, search, and entities specification](specs/memory-and-entities.md).
 - [ ] Review and accept the [AI agent specification](specs/ai-agent.md).
 - [ ] Review and accept the [Agent runtime and context specification](specs/agent-runtime-and-context.md).
 
 Wave 3:
 
-- [ ] Review and accept the [Connectors specification](specs/connectors.md).
-- [ ] Review and accept the [Billing and entitlements specification](specs/billing-and-entitlements.md).
-- [ ] Review and accept the [Privacy, retention, and sync specification](specs/privacy-retention-and-sync.md).
+- [x] ~~Review and accept the [Connectors specification](specs/connectors.md).~~ Moot — the connector framework was removed from the product 2026-07-26.
+- [x] Review and accept the [Billing and entitlements specification](specs/billing-and-entitlements.md).
+- [x] Review and accept the [Privacy, retention, and sync specification](specs/privacy-retention-and-sync.md).
 - [ ] Review and accept the [Screen-context experiment specification](specs/screen-context.md).
 
 Wave 4:

@@ -1,5 +1,9 @@
 # Shipping Daylens V2
 
+> **Superseded by [docs/V2-PLAN.md](V2-PLAN.md) (2026-09-04)** for V2 scope, status, and priority.
+> This document keeps its detail; it no longer sets scope.
+
+
 **Status:** Active. Maintained against the running desktop application.
 
 Daylens V2 is complete when the desktop experience is dependable: capture is
@@ -21,39 +25,49 @@ board state, and where the layers disagree). The dossier is the authority; this
 document explains how its entries fit together and where each is tracked in
 Linear.
 
-The surface sections below are written in the present tense against the state of
-the application when they were recorded. Several of the defects they describe have
-since closed. The dossier, not this document, is current on what still fails.
+The surface sections below are written in the present tense. They were audited
+against the code on 2026-08-14: every failure listed under "Today" either still
+reproduces in the code, or is marked as closed with the code that closed it.
+Failures that need a person to open the running application to confirm are
+marked as such and left standing. The dossier remains the grading authority.
 
 ## Timeline
 
 Timeline is a calendar-like account of what actually happened during a day —
 understandable blocks of activity aligned to wall-clock time, with the evidence
-and corrections underneath them. It is the surface a person looks at first, and
-today it misrepresents the day and resists correction.
+and corrections underneath them. It is the surface a person looks at first.
 
 **Today**
 
-- Continuous work is split into back-to-back fragment blocks. One morning of
-  building split into "daylens Channel", "ChatGPT", and "Screen & System Audio
-  Recording"; another day showed four consecutive duplicate "Working on Cursor
-  Agents" blocks. Capture was healthy throughout, so this is segmentation, not a
-  permissions artifact. A block summary also duplicated its own wording ("Spent
-  37m spent on ChatGPT").
-- Selecting two or more blocks and choosing merge does nothing — no merge, no
-  error, no feedback of any kind. The cause is a rule that refuses to join
-  blocks separated by fifteen minutes or more of absence, and the refusal never
-  reaches the interface.
+- Continuous work is split into back-to-back fragment blocks. Capture was healthy
+  throughout, so this is segmentation, not a permissions artifact. A block summary
+  also duplicated its own wording. Segmentation work has since merged (DEV-232,
+  DEV-268, DEV-277, DEV-281, DEV-266); neither symptom has been re-observed in the
+  running application.
 - A live block renames itself repeatedly during the day instead of holding a
-  stable name until it closes.
-- A calendar event overlapping a work block is greyed until unreadable. Turning
-  on a category filter dims non-matching blocks so heavily that their labels
-  collide with event labels, producing overlapping unreadable text.
-- Clicking an event in week view navigates away to that day instead of opening
-  details in place. Day and week views have a single fixed zoom.
-- "Re-analyze with AI" returns in under a second and always reports "Labels
-  refreshed," whether or not any analysis ran. The "attended" confirmation toast
-  never dismisses.
+  stable name until it closes. Untracked — no issue covers it.
+
+**Closed since this section was written**
+
+- The "attended" confirmation toast never dismissing (DEV-230). The accepted
+  [calendar-and-blocks spec](specs/calendar-and-blocks.md) records the running
+  implementation as already matching: attendance marks are durable and undoable,
+  with feedback that dismisses itself.
+- Merge doing nothing on a multi-block selection. The absence veto now applies
+  only to automatic merges; a merge a person asks for goes through, and a merge
+  that cannot proceed raises a message at the click instead of failing silently
+  (`workBlocks.ts:2172`, `Timeline.tsx:2981`, DEV-233).
+- Overlapping events and blocks, and filter dimming. Events render in their own
+  column beside blocks with lane geometry, and filters no longer collide labels
+  (`Timeline.tsx:249`, `510`, `576`, DEV-234, DEV-286).
+- Clicking an event in week view. It opens a popover in place
+  (`Timeline.tsx:2422`, `2560`, DEV-236).
+- Fixed zoom. Day and week each keep their own persisted zoom, driven by ⌘+ /
+  ⌘− / ⌘0 (`Timeline.tsx:75`, DEV-235).
+- "Re-analyze with AI" reporting "Labels refreshed" regardless. It now reports
+  what it did — re-labeled and merged counts, "All labels already up to date",
+  and a reason for anything it could not name (`Timeline.tsx:1675`, DEV-231,
+  DEV-278).
 
 **When it's right**
 
@@ -66,8 +80,10 @@ today it misrepresents the day and resists correction.
   still offers to merge anyway. The merge survives leaving the day and returning.
 - A live block keeps its name until it closes and is labeled once, after closing.
 - Overlapping events and blocks render side by side in their own columns, both
-  readable and both clickable, like Google Calendar (references in the dossier's
-  `16-reference-google-calendar/`). A filter highlights matches without making
+  readable and both clickable, like Google Calendar. The
+  `16-reference-google-calendar/` reference material this line used to cite is
+  in the old external dossier and is not in this repository.
+  A filter highlights matches without making
   anything else illegible. Clicking a week-view event opens a popup in place.
 - Re-analyze reports what it actually did ("Re-labeled 3 blocks" / "Already up to
   date"). The attended toast dismisses itself within a few seconds.
@@ -79,9 +95,10 @@ Analyze-day-with-AI (available once the day holds at least two hours of tracked
 time) or when the day ends and a new one begins. The rule that blocked merges
 across an absence is removed.
 
-**Tracked in** DEV-232 (fragment blocks), DEV-233 (merge does nothing),
-DEV-234 (overlap and filter legibility), and the remaining Timeline entries in
-INDEX §01.
+**Tracked in** the open Timeline entries in INDEX §01 — DEV-288 (stored labels
+predating the name guards), DEV-119 (detours), DEV-294 (progressive calendar
+context), and the untracked live-block renaming. DEV-232, DEV-233 and DEV-234
+are Done; do not pick them up.
 
 ## Apps
 
@@ -91,22 +108,27 @@ application — the reason the view exists — and that account is currently wro
 
 **Today**
 
-- "What you did there" is unreliable everywhere. Notion renders raw JSON on
-  screen instead of prose. Safari shows nothing for nineteen minutes of tracked
-  time. Generated titles are wrong. Even where the layout is clean, the content
-  is inaccurate — reporting fifteen minutes on an app "mostly between 10 and 11"
-  without being able to say what happened. Generate works on some app pages and
-  produces garbage on others.
-- Large stretches of browser time are unattributed: one browser showed "No page
-  recorded — 11h 21m" over seven days, and over forty hours across thirty. Safari
-  history access reads as unknown.
-- Junk data appears as real activity: a keyboard-mash string shown as a
-  fourteen-minute page, one- and two-second visits given their own rows, and the
-  same application listed twice as two separate entries.
-- Icons are wrong and ranking is untrustworthy — one app ranks first with the
-  wrong icon while another with several tracked hours is buried off-screen.
-- Performance degrades with range. Seven days is acceptable; thirty days lags
-  while scrolling; Generate at thirty days freezes the machine.
+- "What you did there" is unreliable everywhere. It renders raw JSON on screen
+  instead of prose for some apps, shows nothing at all for others despite tracked
+  time, and generates wrong titles. Even where the layout is clean, the content
+  is inaccurate — reporting a duration without being able to say what happened.
+  Generate works on some app pages and produces garbage on others. DEV-237,
+  still open.
+- Large stretches of browser time are unattributed, shown as a dead "No page
+  recorded" row running to hours across a week and tens of hours across a month.
+  Browser history access reads as unknown. DEV-238 and DEV-290, still open.
+
+**Closed since this section was written**
+
+- Junk data shown as real activity. Sub-few-second visits fold into the
+  aggregate (`appDetail.ts:129`), junk strings are caught by
+  `src/shared/workNameGuards.ts`, and one install resolves to one identity —
+  `src/main/services/entities/appIdentityTwinDedupe.ts` collapses existing twins
+  and `appsFacts.ts:55` keeps new ones from forming (DEV-239, DEV-224).
+- Wrong icons and untrustworthy ranking. `iconResolver.ts` gained a cross-site
+  redirect guard and homepage-first favicon ranking (DEV-240).
+- Performance degrading with range, and Generate freezing at thirty days
+  (DEV-227). Merged; not re-observed in the running application.
 
 **When it's right**
 
@@ -134,24 +156,29 @@ presentation.
 
 **Today**
 
-- The first numeric answer is wrong. Asked how long was spent on a learning site
-  this week, it answered ten minutes, then corrected to three hours and
-  forty-three minutes only after being pushed — both from the same local data.
-  Most people will not push back.
-- The chat cannot reach calendar or Granola data. No calendar or Granola tool is
-  registered for the agent, so "What's on my calendar tomorrow?" is answered with
-  "I have no such tool," even though Timeline itself shows calendar events.
+- The first numeric answer to a per-site duration question is wrong. WO-53
+  shipped deterministic fact enforcement, but `DeterministicFactKind` has no
+  `site_total_time`, so nothing overrides the model on that question shape
+  (`src/main/agent/deterministicFacts.ts:40`). Totals, focus time, per-app time
+  and app/site counts are enforced.
 - Provider and model state contradict across the app. Settings shows a provider
   connected while the chat's picker says it is not installed, and chats keep
   running on a previously saved model regardless of the switch.
-- Tool activity is presented as a wall of every file touched — dozens of chips,
-  including unrelated personal notes for a simple question — under the label
-  "what the AI saw." The full context packet attaches to every message,
-  including "hi." Citations render as raw filenames with hashes.
+- Tool activity is presented as a wall of every file touched, under the label
+  "what the AI saw." Context attached to a message does not scale with the
+  question — nothing in `contextPacket.ts` or `chatAgent.ts` treats a greeting
+  differently. Citations render as raw filenames with hashes.
 - The tab shows "Loading AI…" on a blank screen for several seconds on every
-  open, and sometimes sticks there.
+  open, and sometimes sticks there (`AIWorkspace.tsx:451`).
 - Answers need work in tone and clarity beyond correctness: unclear phrasing and
   responses that are sometimes flatly wrong.
+
+**Closed since this section was written**
+
+- The chat reaching calendar and Granola. `get_calendar_events` and
+  `read_meeting_notes` are registered agent tools
+  (`src/main/agent/contextTools.ts:62`, `86`), alongside `get_git_activity`
+  (DEV-241, DEV-256).
 
 **When it's right**
 
@@ -177,12 +204,20 @@ Both must be grounded in the same numbers the rest of the app shows.
 
 **Today**
 
-- Recap content is inaccurate and contradicts itself. A day's recap omitted the
-  evening that was its main activity, reported study hours that started late, and
-  a weekly summary ranked the raw string "2026-07-20" as an activity. A daily
-  wrap showed one total in its header while its prose described a different one.
-- A wrap slide rendered nearly invisible with the timeline bleeding through and
-  buttons overlapping, and exporting a wrap glued every slide into one image.
+- Stored Wrapped narratives do not re-voice when the recap tone changes. Voice is
+  deliberately kept out of `factsHash`, so a tone change writes no invalidation
+  reason. A correct fix needs a stored-voice column.
+
+**Closed since this section was written**
+
+- Recap content contradicting itself, omitting the day's main activity, and
+  ranking a raw date string as an activity (DEV-247, DEV-279, DEV-280, and the
+  voice lane's WO-99 through WO-107).
+- Wrap export gluing every slide into one image. `src/main/services/wrapSlideExport.ts`
+  writes one PNG per slide into a fresh folder, with the disk guarantees covered
+  by `tests/wrapSlideExportFiles.test.ts` (DEV-248).
+- The broken wrap slide render (DEV-248). Not re-observed in the running
+  application.
 
 **When it's right**
 
@@ -191,7 +226,7 @@ Both must be grounded in the same numbers the rest of the app shows.
   the day's dominant activities.
 - Slides render cleanly, and export saves each slide as its own image.
 
-**Tracked in** DEV-247 and INDEX §04.
+**Tracked in** DEV-292 (INDEX §04). DEV-247 is Done.
 
 ## Settings
 
@@ -199,11 +234,22 @@ Settings must state what each page does in plain words and behave predictably.
 
 **Today**
 
-- Several pages bury their function under paragraphs of filler.
-- A toggle turns itself back off after navigating away and returning.
-- "Chat about your memory" merely navigates to the AI tab with no visible effect.
-- Screen context reports itself on while admitting its extraction is not
-  installed, and its diagnostic button produces no visible result.
+- Screen context reports itself on while its extraction is not installed. Issue
+  #73 was re-confirmed against the running application on 2026-08-11, after the
+  Settings rebuild below. The Settings page now renders the backlog and
+  quarantine honestly; what it says about sampling is still wrong.
+- Several pages bury their function under paragraphs of filler, and a toggle
+  turning itself back off after navigation, both addressed in `511abf3b` but
+  neither re-observed in the running application.
+
+**Closed since this section was written**
+
+- "Chat about your memory" leading nowhere. It now stashes a seed prompt and the
+  AI tab sends it as the first message of a new thread
+  (`src/renderer/lib/aiSeed.ts`, DEV-253).
+- Screen context having no evidence it works.
+  `src/renderer/views/settings/ScreenContextSection.tsx` shows the frame backlog,
+  per-frame state, quarantine, and explicit Retry/Delete (DEV-251).
 
 **When it's right**
 

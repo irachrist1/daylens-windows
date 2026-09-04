@@ -13,7 +13,6 @@ const convexSiteUrl = JSON.stringify(
 // When the key is absent the analytics module is a no-op.
 const posthogKey = JSON.stringify(env('POSTHOG_PROJECT_TOKEN') || env('POSTHOG_KEY'))
 const posthogHost = JSON.stringify(env('POSTHOG_HOST'))
-const sentryDsn = JSON.stringify(env('SENTRY_DSN'))
 const billingApiUrl = JSON.stringify(env('DAYLENS_BILLING_API_URL'))
 // JSON map of kid → base64 raw Ed25519 public key for entitlement-snapshot
 // verification. Empty until a signing key is minted for the billing service;
@@ -35,7 +34,6 @@ export default defineConfig({
         __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
         __POSTHOG_KEY__: posthogKey,
         __POSTHOG_HOST__: posthogHost,
-        __SENTRY_DSN__: sentryDsn,
         __DAYLENS_BILLING_API_URL__: billingApiUrl,
         __DAYLENS_ENTITLEMENT_PUBLIC_KEYS__: entitlementPublicKeys,
       }
@@ -43,7 +41,6 @@ export default defineConfig({
         __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
         __POSTHOG_KEY__: posthogKey,
         __POSTHOG_HOST__: posthogHost,
-        __SENTRY_DSN__: sentryDsn,
         __DAYLENS_BILLING_API_URL__: billingApiUrl,
         __DAYLENS_ENTITLEMENT_PUBLIC_KEYS__: entitlementPublicKeys,
       },

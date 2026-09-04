@@ -13,7 +13,6 @@ const BUILD_DEFINES = {
   __DAYLENS_CONVEX_SITE_URL__: process.env.DAYLENS_CONVEX_SITE_URL || 'https://decisive-aardvark-847.convex.site',
   __POSTHOG_KEY__: process.env.POSTHOG_KEY || '',
   __POSTHOG_HOST__: process.env.POSTHOG_HOST || '',
-  __SENTRY_DSN__: process.env.SENTRY_DSN || '',
   __DAYLENS_BILLING_API_URL__: process.env.DAYLENS_BILLING_API_URL || '',
   __DAYLENS_ENTITLEMENT_PUBLIC_KEYS__: process.env.DAYLENS_ENTITLEMENT_PUBLIC_KEYS || '{}',
 }

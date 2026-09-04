@@ -120,7 +120,6 @@ jobs:
         env:
           POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: npm run build:all
 
       - name: Package preview build

@@ -29,6 +29,7 @@ import { FileAccessSection } from './settings/FileAccessSection'
 import { ScreenContextSection } from './settings/ScreenContextSection'
 import { ContextPacketSection } from './settings/ContextPacketSection'
 import { ExportSection } from './settings/ExportSection'
+import { MemoryFilesSection } from './settings/MemoryFilesSection'
 import { track } from '../lib/analytics'
 import { MEMORY_CHAT_SEED_PROMPT, setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
@@ -1159,7 +1160,7 @@ function TrackingControlsContent({
 type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory' | 'entities' | 'fileAccess'
-  | 'labels' | 'clients' | 'privacy' | 'screenContext' | 'export'
+  | 'labels' | 'clients' | 'privacy' | 'screenContext' | 'export' | 'memoryFiles'
   | 'mcp' | 'enrichment' | 'capture' | 'updates' | 'help'
 
 interface SectionDef { id: SectionId; label: string; keywords: string }
@@ -1180,6 +1181,7 @@ const SECTION_GROUPS: SectionGroup[] = [
     items: [
       { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
       { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you what the ai saw context packet disclosure' },
+      { id: 'memoryFiles', label: 'Memory files', keywords: 'markdown files folder local disk readable codex claude code agent reveal finder open plain text mirror export interop' },
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
       { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed granola meeting notes terminal commands capability' },
       { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
@@ -1222,6 +1224,7 @@ function SectionIcon({ id }: { id: SectionId }) {
     usage: <><path d="M2.6 11.5a5.4 5.4 0 1 1 10.8 0" /><path d="M8 11.5 10.4 8" /></>,
     ai: <path d="M8 2 L8.7 6 L12.8 7 L8.7 8 L8 12 L7.3 8 L3.2 7 L7.3 6 Z" />,
     memory: <><rect x="4" y="4" width="8" height="8" rx="1.6" /><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6" /></>,
+    memoryFiles: <><path d="M3.4 2.6h5.4l3.8 3.8v7H3.4Z" /><path d="M8.8 2.6v3.8h3.8" /><path d="M5.6 8.6h4.8M5.6 10.8h3.2" /></>,
     entities: <><circle cx="5" cy="5" r="1.8" /><circle cx="11" cy="5" r="1.8" /><circle cx="8" cy="11" r="1.8" /><path d="M6.2 6.4 7.4 9.4M9.8 6.4 8.6 9.4M6.8 5h2.4" /></>,
     fileAccess: <><path d="M3 2.6h6l3 3v7.8H3Z" /><path d="M9 2.6v3h3" /><rect x="6" y="8" width="4" height="3.2" rx="0.8" /><path d="M7 8V7a1 1 0 0 1 2 0v1" /></>,
     labels: <><path d="M2.6 7.4 7.2 2.8h4.2v4.2L6.8 11.6Z" /><circle cx="9.4" cy="5.6" r="0.85" fill="currentColor" stroke="none" /></>,
@@ -3657,6 +3660,17 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           maxWidth={760}
         >
           <ScreenContextSection />
+        </SectionPage>
+      )
+      break
+    case 'memoryFiles':
+      content = (
+        <SectionPage
+          title="Memory files"
+          description="Daylens keeps each finished day as a plain Markdown file on this computer. Nothing is sent anywhere to write them."
+          maxWidth={760}
+        >
+          {settings && <MemoryFilesSection settings={settings} persist={persist} />}
         </SectionPage>
       )
       break

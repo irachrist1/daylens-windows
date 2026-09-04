@@ -1978,6 +1978,17 @@ export type WrapSlidesExportResult =
   | { canceled: true }
   | { canceled: false; dir: string; files: string[] }
 
+/** One day's readable memory file, after a write attempt. `unchanged` means the
+ *  rendered day was byte-identical to what was already on disk, so nothing was
+ *  rewritten. `codexPath` is null unless the Codex export is enabled. */
+export interface MemoryMirrorSyncResult {
+  date: string
+  mirrorPath: string
+  codexPath: string | null
+  outcome: 'written' | 'unchanged'
+  bytes: number
+}
+
 /** The day's external signals, RESOLVED for the wrap writer: sanitized,
  *  humanized, pre-formatted, and stripped of anything the model must never
  *  echo (raw paths, branches, clock times it can't ground). Each block is
@@ -2318,6 +2329,14 @@ export interface AppSettings {
   userGoals: string[]
   userIntent: string            // why the user is here, captured in onboarding; fed to AI suggestions
   summaryVoice?: SummaryVoice   // how recaps/wraps/briefs should sound; default 'warm'
+  /** Write each finished day as a readable Markdown file under the app data
+   *  directory. On by default: the file IS the local-first claim, and a person
+   *  who can open it can verify what Daylens recorded. */
+  memoryMirrorEnabled?: boolean
+  /** Additionally write those files into `$CODEX_HOME/memories/extensions/daylens`
+   *  so Codex and Claude Code read Daylens as a memory source. Off by default —
+   *  it writes outside Daylens's own data directory. */
+  memoryMirrorCodexExport?: boolean
   focusApps?: string[]          // apps the user counts as "real work" (bundle ids and/or names)
   interestedCategories?: AppCategory[] // categories the user said they care about; fed to AI context
   userRole?: string             // what the user does (e.g. "Designer"); seeds suggestions + AI context
@@ -3188,6 +3207,16 @@ export const IPC = {
     // person picks once. One dialog, many files, never a glued mega-image.
     WRAP_SLIDES: 'export:wrap-slides',
   },
+  MEMORY_MIRROR: {
+    // The readable memory mirror: one Markdown file per finished day. REVEAL is
+    // the trust action — it opens the actual file, so the local-first claim is
+    // something a person can check rather than take on faith.
+    LIST: 'memory-mirror:list',
+    ROOT: 'memory-mirror:root',
+    REVEAL: 'memory-mirror:reveal',
+    SYNC: 'memory-mirror:sync',
+    DELETE: 'memory-mirror:delete',
+  },
   CONTEXT_PACKETS: {
     GET: 'context-packets:get',
     GET_FOR_MESSAGE: 'context-packets:get-for-message',
@@ -3214,7 +3243,7 @@ export const IPC = {
 } as const
 
 // A render crash caught by the renderer's ErrorBoundary, forwarded to the main
-// process for Sentry reporting. Code-level context only (error identity plus
+// process for error telemetry. Code-level context only (error identity plus
 // React component names) — never captured activity, titles, or page content.
 export interface RendererCrashReport {
   name: string

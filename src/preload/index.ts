@@ -41,6 +41,7 @@ import type {
   HistoryExportRunResult,
   HistoryExportVerification,
   WrapSlidesExportResult,
+  MemoryMirrorSyncResult,
   BillingUsageReport,
   SpendGuardrailsReport,
   IntercomIdentity,
@@ -675,6 +676,18 @@ const api = {
     wrapSlides: (payload: { stem: string; files: Array<{ filename: string; bytes: Uint8Array }> }): Promise<WrapSlidesExportResult> =>
       ipcRenderer.invoke(IPC.EXPORT.WRAP_SLIDES, payload),
   },
+  memoryMirror: {
+    // The readable memory mirror: one Markdown file per finished day.
+    list: (): Promise<string[]> => ipcRenderer.invoke(IPC.MEMORY_MIRROR.LIST),
+    root: (): Promise<string | null> => ipcRenderer.invoke(IPC.MEMORY_MIRROR.ROOT),
+    // Opens the day's actual file in the OS file manager.
+    reveal: (date: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.MEMORY_MIRROR.REVEAL, { date }),
+    sync: (date: string): Promise<MemoryMirrorSyncResult | null> =>
+      ipcRenderer.invoke(IPC.MEMORY_MIRROR.SYNC, { date }),
+    delete: (date: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.MEMORY_MIRROR.DELETE, { date }),
+  },
   contextPackets: {
     // DEV-181: the recorded, deterministic bundle behind an AI exchange.
     get: (packetId: string) => ipcRenderer.invoke(IPC.CONTEXT_PACKETS.GET, packetId),
@@ -698,7 +711,7 @@ const api = {
   },
   errors: {
     // Forward a render crash caught by an ErrorBoundary to the main process,
-    // which reports it to Sentry the same way main-process errors are.
+    // which reports it to PostHog the same way main-process errors are.
     reportRenderCrash: (report: RendererCrashReport) =>
       ipcRenderer.send(IPC.ERRORS.RENDERER_CRASH, report),
   },
