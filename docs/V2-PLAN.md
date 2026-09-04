@@ -14,130 +14,119 @@ disagree, this document is wrong and gets fixed.
 
 ## What V2 is
 
-Daylens remembers your computer day and can answer questions about it.
+**Daylens describes your day the way you would.** Not the tabs you had open — the work you
+actually did.
 
-V2 ships when a stranger can install it, use it for a week, and trust what it says.
-That is the whole gate. It is not a feature list.
+That is one measurable thing, and the measurement already exists. `npm run eval:days` scores
+19 ground-truth days against the journal the owner actually wrote. Today:
+
+```
+primary work named:   85%   (threshold 85%)
+tool-surface clean:   97%   (threshold 95%)
+gap honesty:          95%   (threshold 95%)
+```
+
+Two of three are sitting exactly on their floor. What that percentage means in practice, from
+today's run:
+
+```
+✗ primary work never named anywhere visible: TARS (chief-of-staff skill, npm publish, landing page)
+✗ primary work never named anywhere visible: ML study (Coursera)
+✗ block label is a tool surface, not work: "Cursor Agents"      ×6
+✗ block label is a tool surface, not work: "ChatGPT"            ×4
+✗ block label is a tool surface, not work: "Claude Code"
+✗ wrapped line presents banned-as-work "claude": "Claude quietly took 22m today."
+```
+
+You spent a day building TARS and the app said "Cursor Agents". That is the product failing at
+the only thing it claims to do.
+
+**V2 ships when the eval reads 95 / 99 / 100 and a stranger's day reads true on first open.**
+
+The model that gets there is written down: [activity understanding](north-star/activity-understanding.md)
+and [the context agent](north-star/context-agent.md). Both were deleted by accident in
+`d5cdcdbe` — a commit about eval plumbing — and are restored.
 
 ---
 
 ## The five blockers
 
-Each one is a list of named defects, not a theme. Issue numbers are `spcsorg/daylens`
-unless marked. Nothing ships while any of these is open.
+Ranked by how much each moves the score above. Issue IDs are Linear `DEV-nnn` and
+`spcsorg/daylens#nn` — both, always, so the trackers and this document cannot drift.
 
-### 1. Timeline needs a model to be any good
+### 1. The day is named after tools instead of work
 
-The deterministic pipeline is the floor, but a day is only *named* well when a model runs —
-`analyzeDay.ts:583` sets `source: modelsUsed.size > 0 ? 'ai' : 'deterministic'`. With no
-provider you get blocks with no useful names. With a different provider you get different
-boundaries. Neither is acceptable for a product whose main screen is the day.
+The single biggest gap: 15% of primary work is never named, and tool surfaces still leak into
+labels. `activity-understanding.md` gives the naming ladder — durable entity, then subject
+inferred from content signals, then never the tool.
 
-- **#109** — `analyzeDay.ts` has an `interpretationAgentEnabled` flag whose runtime logs
-  "not wired yet" and falls back to the legacy pipeline. Called the highest-leverage
-  remaining build for activity understanding, and it is switched off.
-- **#110** — stored block labels written before the name guards still say "Cursor Agents".
-  Read-path guards do not rewrite what is already in the database; this needs a backfill.
-- **#116** — calendar context blocks the first Timeline paint instead of loading behind it.
-- **#113** — the question card asks about meetings that have not happened yet. The detector
-  never checks the clock and writes durable attendance marks for future events.
+- **DEV-287 / #109** — `analyzeDay.ts` has an `interpretationAgentEnabled` flag whose runtime
+  logs "not wired yet" and falls back to the legacy pipeline. Day analysis should be an agent
+  turn over the tiered tools in `context-agent.md`, with deterministic heuristics as the floor.
+  This is the build that moves primary-work naming.
+- **DEV-288 / #110** — labels stored before the name guards still say "Cursor Agents". Guards
+  run on read and do not rewrite the database. Needs a backfill.
+- **DEV-223 / #21** — Timeline, Apps, chat and exports disagree about the same day.
 
-**Done when:**
-- With no provider configured, a day opens with blocks named from evidence — window titles,
-  page titles, file names. Not "Unlabeled", not an empty state.
-- The same day run through each supported provider gives boundaries within one session of
-  each other.
-- No stored label contains a name the current guards would reject.
+**Done when:** `npm run eval:days` reports primary work ≥95% and tool-surface clean ≥99%, and
+no block on any of the 19 ground-truth days is labelled with an app or assistant name.
 
-### 2. The numbers are wrong
+### 2. Time is credited to the wrong thing
 
-- **#68** — "How much time did I spend on Coursera this week?" returns the wrong number on
-  the first try. Cause: `DeterministicFactKind` has no `site_total_time`, so per-site
-  duration questions get no deterministic override and the model guesses. Every other fact
-  kind is enforced; this one hole is the whole bug.
-- **#112** — `reconcileWebsiteVisits` grants a history row up to `HISTORY_FILL_MAX_MS` (4h)
-  of foreground time until the next navigation. For a browser with no window titles and no
-  active-tab events, the last-visited page — often Netflix or YouTube — absorbs a long work
-  dwell. Block labelling was hardened 2026-07-26 so it no longer flips blocks, but the
-  per-domain minutes are still inflated. `browser_context_events` exists and nothing writes
-  to it; populating it for Chromium browsers fixes this properly.
-- **#60** — half of browser time has no page attached. Safari needs Full Disk Access; Dia
-  exposes no tab API.
-- **#21** — Timeline, Apps, the chat and exports disagree about the same day.
+`activity-understanding.md` states the rule: **attention is the budget.** One foreground window
+at a time. Anything that credits more seconds to a domain than the browser was foregrounded is
+wrong by construction. Netflix once took 1249s inside a block where the browsers held ~800
+foreground seconds.
 
-**Done when:**
-- Ten domain-time questions picked at random from the real profile return the seconds
-  `website_visits` holds.
-- Timeline total, Apps total and the chat's answer for one day are identical.
-- No domain's daily minutes exceed the foreground time of the browser that hosted it.
+- **DEV-246 / #68** — "how long was I on Coursera this week" returns the wrong number.
+  `DeterministicFactKind` has no `site_total_time`, so per-site duration is the one fact kind
+  the model is left to guess.
+- **DEV-290 / #112** — `HISTORY_FILL_MAX_MS` lets a titleless browser credit up to 4h to its
+  last-visited page, usually Netflix or YouTube. `browser_context_events` exists and nothing
+  writes to it; populating it for Chromium browsers is the real fix.
+- **DEV-238 / #60** — half of browser time has no page attached.
+
+**Done when:** no domain's credited seconds exceed its browser's foreground seconds in the same
+interval, on all 19 eval days; and ten random domain-time questions match `website_visits`.
 
 ### 3. Startup and navigation are slow
 
-`#253` (irachrist1) measured this properly. The 5.7s unconditional `PRAGMA integrity_check`
-before `createWindow()` was the dominant cost and is fixed — it now runs `quick_check`
-(1.2s) after an unclean shutdown and escalates only on a real fault. Dev launch went ~12s →
-~6.6s. What is left, from that issue's own checklist:
+**DEV-259 / irachrist1#253** measured this and fixed the dominant cost — a 5.7s unconditional
+`PRAGMA integrity_check` before `createWindow()`, now a 1.2s `quick_check` that escalates only
+on a real fault. Dev launch went ~12s → ~6.6s. Left from that issue's own checklist:
 
-- **~1.1s of eager module eval** at "Electron ready". The AI SDK and ExcelJS load at
-  top level, on the paint path. Still open. Lazy-import them so they load when chat or
-  export actually runs.
-- **#83** — the app freezes for minutes and silently stops recording, with no marker in the
-  day. Needs a main-thread stall watchdog.
+- **~1.1s of eager module eval** at Electron ready. The AI SDK and ExcelJS load at top level, on
+  the paint path. Lazy-import them.
+- **DEV-261 / #83** — the app freezes for minutes and silently stops recording, leaving no marker.
 
-Measured 2026-09-04 on the real 1.19GB profile via `npm run bench:surfaces`:
-`getTimelineDayPayload` 111-166ms, `getAllAppsForLabeling` 16-53ms. **The database is not
-the bottleneck.** Do not spend time on SQL for this blocker.
+Measured 2026-09-04 on the real 1.19GB profile (`npm run bench:surfaces`):
+`getTimelineDayPayload` 111-166ms, `getAllAppsForLabeling` 16-53ms. **The database is not the
+bottleneck — do not spend time on SQL here.**
 
-Cheap and unrelated to the above: `ANALYZE` has never run on this profile — `sqlite_stat1`
-does not exist across 202 indexes on 122 tables — and 108MB of the 1.19GB file is freelist.
+**Done when:** cold launch to an interactive Timeline under 2s; Timeline → Apps → Chat paints
+under 200ms; a stall over 5s writes a marker the day can show.
 
-**Done when:**
-- Cold launch to an interactive Timeline is under 2s on the real profile.
-- Switching Timeline → Apps → Chat paints in under 200ms every time.
-- A stall over 5s writes a marker the day can show, instead of vanishing.
+### 4. Apps view lies about what you did there
 
-### 4. Apps view
+- **DEV-237 / #59** — summaries are unreliable: raw JSON on screen, empty summaries where time
+  was tracked, invented specifics.
+- **DEV-239 / #61** — junk strings shown as activity; the same app twice; 1-2s visits get rows.
+- **DEV-240 / #62** — wrong icons, unbelievable ranking, real hours hidden from the main list.
 
-Four named defects, all in Phase 3:
+**Done when:** Apps opens in under 500ms; the five most-used apps at Today / 7d / 30d each show a
+summary matching what you remember; each app appears once; short visits collapse to one line.
 
-- **#59** — "What you did there" summaries are unreliable: raw JSON on screen, empty
-  summaries where time was tracked, invented specifics.
-- **#61** — junk strings shown as real activity; the same app appears twice; one- and
-  two-second visits get their own rows instead of collapsing.
-- **#62** — wrong icons, unbelievable ranking, and apps with real hours hidden out of the
-  main list.
-- **#60** — browser rows resolve to no page (shared with blocker 2).
+### 5. AI chat is slow and contradicts itself
 
-**Done when:**
-- Apps opens with content in under 500ms on the real profile.
-- The five most-used apps at Today / 7d / 30d each show a summary that matches what you
-  remember doing, with no raw JSON and no empty summary where time was tracked.
-- Each app appears exactly once. Google shows its own icon. YouTube's real hours are in the
-  main list.
-- One- and two-second visits collapse into a single "everything else" line.
+- **DEV-243 / #65** — "Loading AI…" on a blank screen every open. `AIWorkspace.tsx:451` returns
+  early while `settings` and `hasApiKey` are null, so nothing renders — not even the input box.
+- **DEV-242 / #64** — provider and model state disagree between Settings and the chat picker.
+- **DEV-292 / #114** — the day recap times out on two stacked 15s timeouts, with model-tier
+  selection that does not do what it claims. One measured budget, following `NARRATIVE_TIMEOUT_MS`.
+- **DEV-244 / #66**, **DEV-245 / #67** — tool activity is a wall of files; no structured progress.
 
-### 5. AI chat
-
-- **#65** — the tab shows "Loading AI…" on a blank screen every open.
-  `AIWorkspace.tsx:451` returns early while `settings` and `hasApiKey` are null, so the
-  chat renders nothing — not even its own input box — until a settings round-trip finishes.
-- **#64** — provider and model state contradict across the app. Settings and the chat picker
-  disagree; a CLI provider shows connected in one place and missing in another. Default out
-  of the box should be Haiku 4.5, shown identically everywhere.
-- **#66** — tool activity is a wall of file names instead of a one-line summary that expands.
-- **#67** — multi-step work shows no structured progress.
-- **#114** — the day recap times out. Two stacked 15s timeouts, and model-tier selection
-  that does not do what it claims. Needs one measured budget, following the pattern
-  `wrappedNarrative.ts:65` already set with `NARRATIVE_TIMEOUT_MS`.
-
-**Done when:**
-- The chat paints its input in under 200ms, before settings resolve.
-- First token under 2s for a question about today.
-- Opening the tab repeatedly never shows a blank screen.
-- Switching provider in Settings changes the next answer, and the picker agrees.
-- With no model configured the chat still answers from deterministic facts.
-
----
+**Done when:** the chat paints its input under 200ms before settings resolve; first token under
+2s; opening repeatedly never blanks; switching provider changes the next answer.
 
 ## Chores that gate distribution
 
@@ -151,8 +140,13 @@ Real, required to release, felt by nobody until release day.
 - **CI lives on `spcsorg`.** Blacksmith is installed on the org, not the personal account.
 - **DEV-487, the morning/evening crash.** Rare, and now self-reporting — the frame goes to
   PostHog. Screenshot it when it fires.
-- **#51** — the app trusts the accessibility flag instead of verifying capture works.
+- **DEV-229 / #51** — the app trusts the accessibility flag instead of verifying capture works.
   0 of 83 samples carried a window title while the health page read "granted".
+- **DEV-255 / #77** — calendar depends on icalBuddy, a third-party CLI most users will not
+  have. **Urgent in Linear.** It works on the owner's machine by accident. Native EventKit.
+- **DEV-289 / #111** — focus score and distraction alerter are spec-removed but fully live.
+  Needs a decision, not code.
+- **DEV-207** — the V2 acceptance run. The gate itself; it cannot pass until the five close.
 
 ## Where the code actually is
 

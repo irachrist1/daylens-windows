@@ -35,7 +35,9 @@ Daylens is a working cross-platform desktop application undergoing an incrementa
 
 | Document                                            | Purpose                                                                     |
 | --------------------------------------------------- | --------------------------------------------------------------------------- |
-| [V2 plan](docs/V2-PLAN.md)                          | **Read first.** The only planning document: what V2 is, the five blockers, acceptance criteria, and what is out of scope |
+| [V2 plan](docs/V2-PLAN.md)                          | **Read first.** What V2 is, measured by the journal eval, the five blockers, and what is out of scope |
+| [Activity understanding](docs/north-star/activity-understanding.md) | The model: attention is the budget, browser history explains and never adds, entities above strings |
+| [The context agent](docs/north-star/context-agent.md) | How day analysis becomes an agent turn over tiered tools, with deterministic heuristics as the floor |
 | [Product direction](docs/product/product.md)        | The product promise, problem, principles, and boundaries                    |
 | [Positioning](docs/product/positioning.md)          | What we claim, the public-site promise and voice, and what to build next    |
 | [Vocabulary](docs/product/vocabulary.md)            | Shared meanings for product and architecture terms                          |
