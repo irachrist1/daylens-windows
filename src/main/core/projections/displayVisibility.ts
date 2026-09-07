@@ -12,7 +12,7 @@ import type Database from 'better-sqlite3'
 import type { AppSession, SecondaryDisplayVisibleSpan } from '@shared/types'
 import {
   listDisplayVisibilityEventsInRange,
-  type StoredFocusEvent,
+  type ProjectionFocusEvent,
 } from '../../db/focusEventRepository'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
 import {
@@ -64,7 +64,7 @@ function identityKey(bundleId: string | null, appName: string | null): string {
  *  (heartbeat/change) by more than MAX_SAMPLE_GAP_MS, and machine-state
  *  boundaries (sleep, lock, capture stop/pause/failure) close everything. */
 export function foldDisplayVisibleSessions(
-  events: readonly StoredFocusEvent[],
+  events: readonly ProjectionFocusEvent[],
   rangeEndMs: number,
 ): DisplayVisibleSession[] {
   const sessions: DisplayVisibleSession[] = []

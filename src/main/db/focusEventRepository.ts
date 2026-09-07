@@ -24,6 +24,23 @@ export interface StoredFocusEvent extends FocusEvent {
   policy_version: number
 }
 
+/** What a projection fold sees: evidence identity and provenance bookkeeping
+ *  stay in the repository. `StoredFocusEvent` satisfies this shape, so a
+ *  caller holding full rows can still pass them to a fold. */
+export type ProjectionFocusEvent = Pick<
+  StoredFocusEvent,
+  | 'ts_ms'
+  | 'event_type'
+  | 'source'
+  | 'display_id'
+  | 'app_bundle_id'
+  | 'app_name'
+  | 'window_title'
+  | 'url'
+  | 'page_title'
+  | 'confidence'
+>
+
 export interface InsertFocusEventsResult {
   inserted: number
   duplicates: number
@@ -50,6 +67,16 @@ const STORED_COLUMNS = `
   id, evidence_id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
   window_title, url, page_title, source, confidence, platform, display_id, sensitivity,
   provenance_method, permission_scope, policy_version, schema_ver
+`
+
+// The columns the session, gap, and display-visibility folds actually read.
+// A window read is the widest thing on the corrected-facts path — one Apps
+// "All" range is half a million rows — and the ten columns left out (the
+// evidence uuid, provenance, policy and schema bookkeeping) cost more to
+// hydrate into JavaScript than the ten the folds consume.
+const PROJECTION_COLUMNS = `
+  ts_ms, event_type, source, display_id, app_bundle_id, app_name,
+  window_title, url, page_title, confidence
 `
 
 function canonicalRow(event: FocusEventInsert): StoredFocusEvent {
@@ -124,6 +151,22 @@ export function listFocusEventsInRange(
      WHERE ts_ms >= ? AND ts_ms < ?
      ORDER BY ts_ms ASC, id ASC
   `).all(fromMs, toMs) as StoredFocusEvent[]
+}
+
+/** The same window as `listFocusEventsInRange`, narrowed to the columns the
+ *  projections read. Ordering is identical, so a fold cannot tell the two
+ *  reads apart. */
+export function listProjectionFocusEventsInRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): ProjectionFocusEvent[] {
+  return db.prepare(`
+    SELECT ${PROJECTION_COLUMNS}
+      FROM focus_events
+     WHERE ts_ms >= ? AND ts_ms < ?
+     ORDER BY ts_ms ASC, id ASC
+  `).all(fromMs, toMs) as ProjectionFocusEvent[]
 }
 
 export function countFocusEventsInRange(
@@ -225,9 +268,9 @@ export function listDisplayVisibilityEventsInRange(
   db: Database.Database,
   fromMs: number,
   toMs: number,
-): StoredFocusEvent[] {
+): ProjectionFocusEvent[] {
   return db.prepare(`
-    SELECT ${STORED_COLUMNS}
+    SELECT ${PROJECTION_COLUMNS}
       FROM focus_events
      WHERE ts_ms >= ? AND ts_ms < ?
        AND (
@@ -235,7 +278,7 @@ export function listDisplayVisibilityEventsInRange(
          OR event_type IN ('sleep', 'lock', 'capture_stopped', 'capture_paused', 'capture_failed')
        )
      ORDER BY ts_ms ASC, id ASC
-  `).all(fromMs, toMs) as StoredFocusEvent[]
+  `).all(fromMs, toMs) as ProjectionFocusEvent[]
 }
 
 export interface DisplayVisibilityStats {

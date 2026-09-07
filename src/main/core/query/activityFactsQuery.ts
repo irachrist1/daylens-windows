@@ -15,8 +15,8 @@ import { applyTimelineCorrectionsToSessions } from '../../services/activityFacts
 import {
   countFocusEventsInRange,
   firstFocusEventTsMs,
-  listFocusEventsInRange,
-  type StoredFocusEvent,
+  listProjectionFocusEventsInRange,
+  type ProjectionFocusEvent,
 } from '../../db/focusEventRepository'
 import {
   PROJECTION_VERSION,
@@ -157,7 +157,7 @@ function derivedRowToAppSession(
 }
 
 function projectGapsFromFocusEvents(
-  events: readonly StoredFocusEvent[],
+  events: readonly ProjectionFocusEvent[],
   rangeEndMs: number,
 ): ActivityGapFact[] {
   const gaps: ActivityGapFact[] = []
@@ -330,7 +330,7 @@ export function queryCorrectedActivityFactsForRange(
   const focusApps = getSettings().focusApps
 
   const focusEventCount = countFocusEventsInRange(db, fromMs, toMs)
-  const events = listFocusEventsInRange(db, fromMs, toMs)
+  const events = listProjectionFocusEventsInRange(db, fromMs, toMs)
   const projected = projectSessionsFromFocusEvents(events, projectionEndMs)
   const visibleRows = projected
     .filter((row) => !isSystemNoiseApp({ bundleId: row.app_bundle_id, appName: row.app_name }))

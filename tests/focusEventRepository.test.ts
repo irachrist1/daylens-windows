@@ -4,11 +4,15 @@ import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   countFocusEventsInRange,
   insertFocusEvents,
+  listDisplayVisibilityEventsInRange,
   listFocusEventsInRange,
   listFocusEvidenceInRange,
+  listProjectionFocusEventsInRange,
   toFocusEvidenceEnvelope,
+  type ProjectionFocusEvent,
 } from '../src/main/db/focusEventRepository.ts'
-import { projectDay } from '../src/main/core/projections/chunk2.ts'
+import { projectDay, projectSessionsFromFocusEvents } from '../src/main/core/projections/chunk2.ts'
+import { foldDisplayVisibleSessions } from '../src/main/core/projections/displayVisibility.ts'
 import type { FocusEventInsert } from '../src/main/core/evidence/focusEvent.ts'
 import {
   getCaptureEventRejections,
@@ -327,6 +331,111 @@ test('rebuilding a projection never changes an evidence identity', () => {
     assert.deepEqual(identitiesAfter, identitiesBefore)
     assert.equal(firstRun.sessions, secondRun.sessions)
     assert.equal(firstRun.blocks, secondRun.blocks)
+  } finally {
+    db.close()
+  }
+})
+
+// The projection read exists only to stop hydrating columns no fold consumes
+// — a single Apps "All" window is half a million rows. It must stay
+// indistinguishable from the full read wherever a fold can see.
+
+const PROJECTION_FIELDS = [
+  'ts_ms', 'event_type', 'source', 'display_id', 'app_bundle_id',
+  'app_name', 'window_title', 'url', 'page_title', 'confidence',
+] as const
+
+function projectionShape(row: ProjectionFocusEvent): Record<string, unknown> {
+  return Object.fromEntries(PROJECTION_FIELDS.map((field) => [field, row[field]]))
+}
+
+test('the projection read returns the same rows, in the same order, as the full read', () => {
+  const db = createProductionTestDatabase()
+  try {
+    const base = new Date(2026, 5, 10, 9, 0, 0, 0).getTime()
+    insertFocusEvents(db, [
+      event(base, 'Editor', { window_title: 'index.ts', confidence: 'uncertain' }),
+      event(base + 1_000, 'Editor B'),
+      event(base, 'Editor A'),
+      event(base + 5_000, 'Browser', {
+        event_type: 'tab_changed',
+        url: 'https://example.com/a',
+        page_title: 'Example A',
+      }),
+      event(base + 9_000, 'Browser', { event_type: 'app_deactivated' }),
+      event(base + 11_000, 'Dia', {
+        event_type: 'display_visible_sampled',
+        source: 'cg_display_visibility',
+        display_id: 724062012,
+      }),
+      event(base + 13_000, 'idle', { event_type: 'idle_started', app_bundle_id: null, app_name: null, pid: null }),
+    ])
+
+    const full = listFocusEventsInRange(db, 0, Number.MAX_SAFE_INTEGER)
+    const projection = listProjectionFocusEventsInRange(db, 0, Number.MAX_SAFE_INTEGER)
+
+    assert.equal(projection.length, full.length)
+    assert.deepEqual(projection.map(projectionShape), full.map(projectionShape))
+  } finally {
+    db.close()
+  }
+})
+
+test('the projection read carries only the columns the folds consume', () => {
+  const db = createProductionTestDatabase()
+  try {
+    insertFocusEvents(db, [event(1_000, 'Editor')])
+    const [row] = listProjectionFocusEventsInRange(db, 0, 2_000)
+    assert.deepEqual(Object.keys(row).sort(), [...PROJECTION_FIELDS].sort())
+  } finally {
+    db.close()
+  }
+})
+
+test('both folds produce identical output from the projection read and the full read', () => {
+  const db = createProductionTestDatabase()
+  try {
+    const base = new Date(2026, 5, 10, 9, 0, 0, 0).getTime()
+    const end = base + 40 * 60_000
+    insertFocusEvents(db, [
+      event(base, 'Editor', { window_title: 'index.ts' }),
+      event(base + 60_000, 'Browser', { event_type: 'tab_changed', url: 'https://example.com/a', page_title: 'A' }),
+      event(base + 120_000, 'Browser', { event_type: 'tab_changed', url: 'https://example.com/b', page_title: 'B' }),
+      event(base + 200_000, 'away', { event_type: 'idle_started', app_bundle_id: null, app_name: null, pid: null }),
+      event(base + 400_000, 'away', { event_type: 'idle_ended', app_bundle_id: null, app_name: null, pid: null }),
+      event(base + 500_000, 'Editor'),
+      event(base + 600_000, 'Dia', {
+        event_type: 'display_visible_changed',
+        source: 'cg_display_visibility',
+        display_id: 724062012,
+        window_title: 'Coursera',
+      }),
+      event(base + 660_000, 'Dia', {
+        event_type: 'display_visible_sampled',
+        source: 'cg_display_visibility',
+        display_id: 724062012,
+        window_title: 'Coursera',
+      }),
+      event(base + 700_000, 'lock', { event_type: 'lock', app_bundle_id: null, app_name: null, pid: null }),
+    ])
+
+    assert.deepEqual(
+      projectSessionsFromFocusEvents(listProjectionFocusEventsInRange(db, base, end), end),
+      projectSessionsFromFocusEvents(listFocusEventsInRange(db, base, end), end),
+    )
+
+    const visibility = listDisplayVisibilityEventsInRange(db, base, end)
+    assert.ok(visibility.length > 0, 'expected display-visibility evidence in the window')
+    assert.deepEqual(
+      foldDisplayVisibleSessions(visibility, end),
+      foldDisplayVisibleSessions(
+        listFocusEventsInRange(db, base, end).filter((row) => (
+          row.source === 'cg_display_visibility'
+          || ['sleep', 'lock', 'capture_stopped', 'capture_paused', 'capture_failed'].includes(row.event_type)
+        )),
+        end,
+      ),
+    )
   } finally {
     db.close()
   }
