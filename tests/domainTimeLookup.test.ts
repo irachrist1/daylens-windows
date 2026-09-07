@@ -29,12 +29,13 @@ function seedSession(
   app: { bundleId: string; appName: string; canonicalAppId: string; category: string },
   startMs: number,
   endMs: number,
+  windowTitle: string | null = null,
 ): void {
   db.prepare(`
     INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
       category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
       capture_source, capture_version)
-    VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 'test', 1)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'test', 1)
   `).run(
     app.bundleId,
     app.appName,
@@ -42,6 +43,7 @@ function seedSession(
     endMs,
     Math.round((endMs - startMs) / 1000),
     app.category,
+    windowTitle,
     app.appName,
     app.canonicalAppId,
     app.bundleId,
@@ -78,7 +80,12 @@ function seedDomainDay(db: Database.Database): void {
   seedSession(db, course, localMs(13, 0), localMs(13, 10))
   seedSession(db, slack, localMs(14, 0), localMs(15, 0))
 
-  seedSession(db, chrome, localMs(15, 0), localMs(16, 30))
+  // Chrome reports window titles. That matters here: the history-fill media
+  // cap (DEV-290) only clamps an entertainment host when the browser group is
+  // titleless — the Dia case, where the last history row would otherwise
+  // inherit hours of someone else's work. A titled Chrome window on YouTube
+  // for 90 minutes is exactly the evidence the cap is meant to spare.
+  seedSession(db, chrome, localMs(15, 0), localMs(16, 30), 'Lecture - YouTube - Google Chrome')
   seedVisit(db, {
     domain: 'youtube.com',
     title: 'Lecture - YouTube',
@@ -87,7 +94,7 @@ function seedDomainDay(db: Database.Database): void {
     canonicalBrowserId: 'chrome',
   }, localMs(15, 0))
 
-  seedSession(db, chrome, localMs(17, 0), localMs(17, 20))
+  seedSession(db, chrome, localMs(17, 0), localMs(17, 20), 'irachrist1/daylens - Google Chrome')
   seedVisit(db, {
     domain: 'github.com',
     title: 'irachrist1/daylens',
