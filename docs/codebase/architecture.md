@@ -107,7 +107,9 @@ The current sync path sends live presence and selected day-level facts. Raw capt
 
 ## MCP
 
-`packages/mcp-server` is a local stdio server bundled and launched by the desktop app when enabled. It opens the database read-only, reuses the same tool executors as the in-app agent, and fails closed on a malformed exclusion environment. It is another consumer of Daylens facts and should not invent a parallel activity model.
+`packages/mcp-server` is a local stdio server bundled and launched by the desktop app when enabled. External clients also spawn it. It opens the database read-only, reuses the same tool executors as the in-app agent, and fails closed on a malformed exclusion environment. It is another consumer of Daylens facts and should not invent a parallel activity model.
+
+Each external tool call is appended to `mcp-activity.jsonl` next to the database (tool name, timestamp, sanitized arguments, success/outcome — not the result). The AI tab reads that sidecar over `ai:get-mcp-activity` and shows a plain feed. Settings → Enrichment sources discovers MCP servers from Claude Desktop, Claude Code (`~/.claude.json`, including project-scoped `mcpServers`), and Cursor (`~/.cursor/mcp.json`).
 
 ## Billing
 

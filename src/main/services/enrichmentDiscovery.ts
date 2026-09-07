@@ -1,27 +1,52 @@
 // Enrichment discovery — optional local sources beyond
-// Daylens' own tracking: MCP servers configured for Claude Desktop, and known
-// focus-timer apps installed on this machine.
+// Daylens' own tracking: MCP servers configured in Claude Desktop, Claude Code,
+// and Cursor, plus known focus-timer apps installed on this machine.
 //
 // Discovery only. This module never launches an MCP server, never calls a
-// tool, and never spawns a subprocess. It reads a JSON config file and probes
+// tool, and never spawns a subprocess. It reads JSON config files and probes
 // the filesystem for known app bundles/containers, nothing else. Every path
 // is best-effort and silent: a missing file, a malformed config, or an
 // unreadable store returns an empty/null result, never a thrown error.
 //
 // Server command arguments, paths, and env values are deliberately never
-// surfaced here (they can carry tokens/secrets) — only the server name and
-// transport kind leave this module.
+// surfaced here (they can carry tokens/secrets) — only the server name,
+// transport kind, and which config named it leave this module.
 
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { FocusAppSignal } from '@shared/types'
+import type { FocusAppSignal, McpDiscoverySource } from '@shared/types'
+import {
+  claudeCodeConfigDisplayPath,
+  claudeDesktopConfigDisplayPath,
+  cursorMcpConfigDisplayPath,
+} from '@shared/platformPaths'
 
 export interface McpServerDiscovery {
   /** Server key from the config ("notion", "linear", "jira"). */
   name: string
   /** 'stdio' when a command is configured, 'http' when a url is. */
   transport: 'stdio' | 'http' | 'unknown'
+  source?: McpDiscoverySource
+  sourceLabel?: string
+}
+
+export interface McpConfigFile {
+  source: McpDiscoverySource
+  label: string
+  path: string
+  displayPath: string
+}
+
+export interface McpDiscoveryResult {
+  servers: Array<McpServerDiscovery & { source: McpDiscoverySource; sourceLabel: string }>
+  checkedFiles: Array<{ label: string; displayPath: string }>
+}
+
+export interface McpDiscoveryRoots {
+  homeDir?: string
+  platform?: NodeJS.Platform
+  appData?: string
 }
 
 export interface FocusAppDiscovery {
@@ -59,43 +84,131 @@ export function claudeDesktopConfigPath(
   return path.join(homeDir, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
 }
 
-/** Installed MCP servers from the Claude Desktop config. Discovery ONLY —
- *  never launches or calls them. Empty array when no config exists. */
-export function discoverMcpServers(configPath: string = claudeDesktopConfigPath()): McpServerDiscovery[] {
+export function claudeCodeConfigPath(homeDir: string = os.homedir()): string {
+  return path.join(homeDir, '.claude.json')
+}
+
+export function cursorMcpConfigPath(homeDir: string = os.homedir()): string {
+  return path.join(homeDir, '.cursor', 'mcp.json')
+}
+
+const SOURCE_LABEL: Record<McpDiscoverySource, string> = {
+  'claude-desktop': 'Claude Desktop',
+  'claude-code': 'Claude Code',
+  cursor: 'Cursor',
+}
+
+function transportOf(value: unknown): McpServerDiscovery['transport'] {
+  if (!value || typeof value !== 'object') return 'unknown'
+  const entry = value as Record<string, unknown>
+  if (typeof entry.command === 'string' && entry.command.length > 0) return 'stdio'
+  if (typeof entry.url === 'string' && entry.url.length > 0) return 'http'
+  return 'unknown'
+}
+
+function serversFromObject(servers: unknown): McpServerDiscovery[] {
+  if (!servers || typeof servers !== 'object') return []
+  return Object.entries(servers as Record<string, unknown>).map(([name, value]) => ({
+    name,
+    transport: transportOf(value),
+  }))
+}
+
+function readJsonObject(filePath: string): Record<string, unknown> | null {
   let raw: string
   try {
-    raw = fs.readFileSync(configPath, 'utf8')
+    raw = fs.readFileSync(filePath, 'utf8')
   } catch {
-    return []
+    return null
   }
-
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch {
-    return []
+    return null
   }
+  if (!parsed || typeof parsed !== 'object') return null
+  return parsed as Record<string, unknown>
+}
 
-  if (!parsed || typeof parsed !== 'object') return []
-  const servers = (parsed as Record<string, unknown>).mcpServers
-  if (!servers || typeof servers !== 'object') return []
+/** Installed MCP servers from one config file. Discovery ONLY —
+ *  never launches or calls them. Empty array when no config exists. */
+export function discoverMcpServers(configPath: string = claudeDesktopConfigPath()): McpServerDiscovery[] {
+  const parsed = readJsonObject(configPath)
+  if (!parsed) return []
+  return serversFromObject(parsed.mcpServers)
+}
 
-  const result: McpServerDiscovery[] = []
-  for (const [name, value] of Object.entries(servers as Record<string, unknown>)) {
-    if (!value || typeof value !== 'object') {
-      result.push({ name, transport: 'unknown' })
-      continue
-    }
-    const entry = value as Record<string, unknown>
-    if (typeof entry.command === 'string' && entry.command.length > 0) {
-      result.push({ name, transport: 'stdio' })
-    } else if (typeof entry.url === 'string' && entry.url.length > 0) {
-      result.push({ name, transport: 'http' })
-    } else {
-      result.push({ name, transport: 'unknown' })
+function serversFromClaudeCodeConfig(parsed: Record<string, unknown>): McpServerDiscovery[] {
+  const found = serversFromObject(parsed.mcpServers)
+  const seen = new Set(found.map((server) => server.name))
+  const projects = parsed.projects
+  if (!projects || typeof projects !== 'object') return found
+  for (const project of Object.values(projects as Record<string, unknown>)) {
+    if (!project || typeof project !== 'object') continue
+    for (const server of serversFromObject((project as Record<string, unknown>).mcpServers)) {
+      if (seen.has(server.name)) continue
+      seen.add(server.name)
+      found.push(server)
     }
   }
-  return result
+  return found
+}
+
+export function listMcpConfigFiles(roots: McpDiscoveryRoots = {}): McpConfigFile[] {
+  const homeDir = roots.homeDir ?? os.homedir()
+  const platform = roots.platform ?? process.platform
+  const appData = roots.appData ?? process.env.APPDATA
+  return [
+    {
+      source: 'claude-desktop',
+      label: SOURCE_LABEL['claude-desktop'],
+      path: claudeDesktopConfigPath(homeDir, platform, appData),
+      displayPath: claudeDesktopConfigDisplayPath(platform),
+    },
+    {
+      source: 'claude-code',
+      label: SOURCE_LABEL['claude-code'],
+      path: claudeCodeConfigPath(homeDir),
+      displayPath: claudeCodeConfigDisplayPath(platform),
+    },
+    {
+      source: 'cursor',
+      label: SOURCE_LABEL.cursor,
+      path: cursorMcpConfigPath(homeDir),
+      displayPath: cursorMcpConfigDisplayPath(platform),
+    },
+  ]
+}
+
+/** MCP servers from Claude Desktop, Claude Code (user + project-scoped),
+ *  and Cursor. Deduplicated by server name; first config in listMcpConfigFiles
+ *  order wins. */
+export function discoverAllMcpServers(roots: McpDiscoveryRoots = {}): McpDiscoveryResult {
+  const files = listMcpConfigFiles(roots)
+  const seen = new Set<string>()
+  const servers: McpDiscoveryResult['servers'] = []
+  for (const file of files) {
+    const parsed = readJsonObject(file.path)
+    const found = parsed
+      ? file.source === 'claude-code'
+        ? serversFromClaudeCodeConfig(parsed)
+        : serversFromObject(parsed.mcpServers)
+      : []
+    for (const server of found) {
+      if (seen.has(server.name)) continue
+      seen.add(server.name)
+      servers.push({
+        ...server,
+        source: file.source,
+        sourceLabel: file.label,
+      })
+    }
+  }
+  return {
+    servers,
+    checkedFiles: files.map(({ label, displayPath }) => ({ label, displayPath })),
+  }
 }
 
 function defaultFocusAppRoots(homeDir: string): Required<Omit<FocusAppRoots, 'homeDir'>> {
