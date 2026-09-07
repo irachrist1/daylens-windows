@@ -313,13 +313,11 @@ function collectNativeActivityItems(
   canonicalAppId: string,
 ): AppActivityItem[] {
   const items: AppActivityItem[] = []
-  const seenTitles = new Set<string>()
+  const artifactTitles = new Set<string>()
   for (const artifact of artifacts) {
     const title = extractDisplayProse(artifact.displayTitle, displayName)
     if (!title) continue
-    const key = title.toLowerCase()
-    if (seenTitles.has(key)) continue
-    seenTitles.add(key)
+    artifactTitles.add(title.toLowerCase())
     items.push(activityItemFromArtifact({ ...artifact, displayTitle: title }, title, canonicalAppId))
   }
   const titleSeconds = new Map<string, { title: string; seconds: number }>()
@@ -328,7 +326,7 @@ function collectNativeActivityItems(
     const title = raw ? extractDisplayProse(compactWindowTitle(raw), displayName) : null
     if (!title) continue
     const key = title.toLowerCase()
-    if (seenTitles.has(key)) continue
+    if (artifactTitles.has(key)) continue
     const current = titleSeconds.get(key)
     if (current) current.seconds += session.durationSeconds
     else titleSeconds.set(key, { title, seconds: session.durationSeconds })

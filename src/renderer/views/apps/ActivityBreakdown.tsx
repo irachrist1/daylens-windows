@@ -84,7 +84,7 @@ export default function ActivityBreakdown({
     })
   }
 
-  const renderItemRow = (item: AppActivityItem) => {
+  const renderItemRow = (item: AppActivityItem, groupKind: AppActivityGroup['kind']) => {
     const deleteTarget = itemDeleteTarget(item)
     return (
       <div key={item.id} style={{ display: 'flex', alignItems: 'start', gap: 10, width: '100%' }}>
@@ -125,7 +125,7 @@ export default function ActivityBreakdown({
               {item.detail && (
                 <InlineRevealText text={item.detail} style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }} />
               )}
-              {item.visitCount != null && (
+              {groupKind === 'domain' && item.visitCount != null && (
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
                   {item.visitCount} visit{item.visitCount === 1 ? '' : 's'}
                 </div>
@@ -170,7 +170,7 @@ export default function ActivityBreakdown({
             <div style={{ flex: 1, minWidth: 0 }}>
               <InlineRevealText text={entry.label} style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }} />
               <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                {entry.visitCount != null
+                {entry.kind === 'domain' && entry.visitCount != null
                   ? `${entry.visitCount} visit${entry.visitCount === 1 ? '' : 's'} · ${entry.itemCount} page${entry.itemCount === 1 ? '' : 's'}`
                   : `${entry.itemCount} item${entry.itemCount === 1 ? '' : 's'}`}
               </div>
@@ -189,7 +189,7 @@ export default function ActivityBreakdown({
         </div>
         {expanded && entry.items.length > 0 && (
           <div style={{ display: 'grid', gap: 12, margin: '10px 0 4px', paddingLeft: 20, borderLeft: '2px solid var(--color-border-ghost)', marginLeft: 4 }}>
-            {entry.items.slice(0, pageLimits[entry.id] ?? PAGE_WINDOW).map(renderItemRow)}
+            {entry.items.slice(0, pageLimits[entry.id] ?? PAGE_WINDOW).map((item) => renderItemRow(item, entry.kind))}
             {entry.items.length > (pageLimits[entry.id] ?? PAGE_WINDOW) && (
               <button
                 type="button"
@@ -199,7 +199,7 @@ export default function ActivityBreakdown({
                 }))}
                 style={{ justifySelf: 'start', padding: '4px 10px', borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, cursor: 'pointer' }}
               >
-                Show {Math.min(PAGE_WINDOW, entry.items.length - (pageLimits[entry.id] ?? PAGE_WINDOW))} more of {entry.items.length} pages
+                Show {Math.min(PAGE_WINDOW, entry.items.length - (pageLimits[entry.id] ?? PAGE_WINDOW))} more of {entry.items.length} {entry.kind === 'domain' ? 'pages' : 'items'}
               </button>
             )}
           </div>

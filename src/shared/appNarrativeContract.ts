@@ -72,21 +72,34 @@ function citationTokens(title: string): string[] {
   return [...tokens]
 }
 
-export function narrativeCitesEvidence(summary: string, evidenceTitles: readonly string[]): boolean {
+function citedEvidenceTitles(summary: string, evidenceTitles: readonly string[]): string[] {
   const haystack = summary.toLowerCase()
-  const titles = evidenceTitles.map((title) => title.trim()).filter((title) => title.length >= 3)
-  if (titles.length === 0) return false
-  let hits = 0
+  const cited: string[] = []
   const seen = new Set<string>()
-  for (const title of titles) {
+  for (const rawTitle of evidenceTitles) {
+    const title = rawTitle.trim()
+    if (title.length < 3 || /^(files|pages|projects)$/i.test(title)) continue
     for (const token of citationTokens(title)) {
       if (seen.has(token) || !haystack.includes(token)) continue
       seen.add(token)
-      hits += 1
+      cited.push(title)
       break
     }
   }
-  return hits >= (titles.length >= 2 ? 2 : 1)
+  return cited
+}
+
+export function narrativeCitesEvidence(summary: string, evidenceTitles: readonly string[]): boolean {
+  const titles = evidenceTitles.map((title) => title.trim()).filter((title) => title.length >= 3)
+  if (titles.length === 0) return false
+  return citedEvidenceTitles(summary, titles).length >= (titles.length >= 2 ? 2 : 1)
+}
+
+function evidenceNarrative(titles: readonly string[]): string {
+  const subjects = titles.length === 1
+    ? titles[0]
+    : `${titles.slice(0, -1).join(', ')} and ${titles[titles.length - 1]}`
+  return `Your recorded activity included ${subjects}.`
 }
 
 export function selectVisibleAppNarrative(
@@ -98,5 +111,6 @@ export function selectVisibleAppNarrative(
   if (!prose) return null
   if (evidenceTitles.length === 0) return null
   if (!narrativeCitesEvidence(prose, evidenceTitles)) return null
-  return prose
+  const citedTitles = citedEvidenceTitles(prose, evidenceTitles)
+  return evidenceNarrative(citedTitles)
 }

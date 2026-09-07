@@ -2864,7 +2864,10 @@ async function generateAppNarrative(
       ...detail.topArtifacts.map((artifact) => artifact.displayTitle),
       ...detail.blockAppearances.map((block) => block.label),
     ]
-    if (!isThinAppNarrative(parsed.summary) && !selectVisibleAppNarrative(parsed.summary, evidenceTitles)) {
+    const groundedSummary = isThinAppNarrative(parsed.summary)
+      ? parsed.summary
+      : selectVisibleAppNarrative(parsed.summary, evidenceTitles)
+    if (!groundedSummary) {
       console.warn(`[ai] app_narrative rejected ungrounded or structured dump for ${scopeKey}`)
       return fallback
     }
@@ -2874,7 +2877,7 @@ async function generateAppNarrative(
       jobType: 'app_narrative',
       inputSignature,
       title: parsed.title,
-      summary: parsed.summary,
+      summary: groundedSummary,
     })
     invalidateProjectionScope('apps', 'ai:app_narrative', {
       canonicalAppId,

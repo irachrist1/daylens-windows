@@ -96,7 +96,11 @@ test('Generate path keeps grounded prose and drops invented or thin text', () =>
   const evidence = ['appDetail.ts', 'github.com']
   assert.equal(
     selectVisibleAppNarrative('You edited appDetail.ts while checking github.com.', evidence),
-    'You edited appDetail.ts while checking github.com.',
+    'Your recorded activity included appDetail.ts and github.com.',
+  )
+  assert.equal(
+    selectVisibleAppNarrative('You edited appDetail.ts, joined the ACME meeting, and checked github.com.', evidence),
+    'Your recorded activity included appDetail.ts and github.com.',
   )
   assert.equal(
     selectVisibleAppNarrative('You mostly worked between 10 and 11 inventing a meeting with ACME.', evidence),
@@ -166,6 +170,71 @@ test('Notion JSON window titles never reach the visible account or breakdown lab
     assert.equal(looksLikeStructuredDump(label), false, `JSON leaked onto screen: ${label}`)
   }
   assert.equal(resolveAppDetailAccount(detail, '{"oops":true}'), 'Most of this time was on Hiring plan.')
+  db.close()
+})
+
+test('native artifacts with duplicate titles keep all attributed duration', () => {
+  const db = createProductionTestDatabase()
+  const date = todayKey()
+  const start = localMs(date, 10)
+  insertSession(db, {
+    bundleId: 'com.todesktop.230313mzl4w4u92',
+    appName: 'Cursor',
+    start,
+    seconds: 100,
+    category: 'development',
+    windowTitle: 'Release plan — daylens',
+    canonicalAppId: 'cursor',
+  })
+  const evidence = {
+    apps: [{
+      bundleId: 'com.todesktop.230313mzl4w4u92',
+      canonicalAppId: 'cursor',
+      appName: 'Cursor',
+      category: 'development',
+      totalSeconds: 100,
+      sessionCount: 1,
+      isBrowser: false,
+    }],
+    documents: [
+      {
+        id: 'release-plan-one',
+        artifactType: 'document',
+        canonicalKey: 'document:release-plan-one',
+        displayTitle: 'Release plan',
+        totalSeconds: 60,
+        confidence: 0.9,
+        canonicalAppId: 'cursor',
+        openTarget: { kind: 'unsupported', value: null },
+      },
+      {
+        id: 'release-plan-two',
+        artifactType: 'document',
+        canonicalKey: 'document:release-plan-two',
+        displayTitle: 'Release plan',
+        totalSeconds: 40,
+        confidence: 0.9,
+        canonicalAppId: 'cursor',
+        openTarget: { kind: 'unsupported', value: null },
+      },
+    ],
+  }
+  db.prepare(`
+    INSERT INTO timeline_blocks (
+      id, date, start_time, end_time, block_kind, dominant_category,
+      category_distribution_json, switch_count, label_current, label_source,
+      label_confidence, narrative_current, evidence_summary_json, is_live,
+      heuristic_version, computed_at, invalidated_at
+    ) VALUES (?, ?, ?, ?, 'work', 'development', '{}', 0, 'Release planning', 'rule', 0.8, NULL, ?, 0, 'timeline-v13', ?, NULL)
+  `).run('duplicate-release-plans', date, start, start + 100_000, JSON.stringify(evidence), start)
+
+  const detail = getAppDetailPayload(db, 'cursor', 1, null)
+  const items = detail.activityBreakdown?.groups.flatMap((group) => group.items) ?? []
+  const releasePlans = items.filter((item) => item.displayTitle === 'Release plan')
+  assert.equal(releasePlans.length, 2)
+  assert.deepEqual(releasePlans.map((item) => item.totalSeconds).sort((left, right) => left - right), [40, 60])
+  assert.equal(detail.activityBreakdown?.attributedSeconds, 100)
+  assert.equal(detail.activityBreakdown?.unattributedSeconds, 0)
   db.close()
 })
 
