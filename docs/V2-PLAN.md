@@ -92,17 +92,18 @@ The single biggest gap: 15% of primary work is never named, and tool surfaces st
 labels. `activity-understanding.md` gives the naming ladder — durable entity, then subject
 inferred from content signals, then never the tool.
 
-- **DEV-287 / #109** — **the ticket is out of date: the runtime is wired.**
-  `analyzeDay.ts:220` reads `interpretationAgentEnabled(getSettings())` and calls
-  `runInterpretationAgentRelabel`, with a Settings toggle at `Settings.tsx:3197`. It is
-  OFF by default. The open work is not wiring it — it is turning it on and proving it beats
-  the legacy path on the eval, then making that the default. This is still the build that
-  moves primary-work naming.
+- **DEV-287 / #109** — the packet-based interpretation runtime is wired.
+  `analyzeDay.ts` reads `interpretationAgentEnabled(getSettings())` and calls
+  `runInterpretationAgentRelabel`, which assembles an interpret-purpose context
+  packet and runs `AISdkAgentRuntime` over the same tiered tools as chat. The
+  Settings toggle defaults on. The remaining work is proving it beats the
+  legacy path on `npm run eval:days`, then treating that as the default naming
+  path. This is still the build that moves primary-work naming.
 - **DEV-288 / #110** — **the backfill is in place.** `labelGuardRepair` rewrites stored
   `timeline_blocks` labels that fail today's work-name guards on startup, once per
   `WORK_NAME_GUARD_VERSION`. The finalize ladder also rejects those labels on read, so a
   compacted window title (`Cursor Agents — daylens …`) cannot persist as the block name
-  after the stamp. Remaining naming work is DEV-287 (turn the interpretation agent on).
+  after the stamp. Remaining naming work is DEV-287 (eval-proof the packet runtime).
 - **DEV-223 / #21** — Timeline, Apps, chat and exports disagree about the same day.
 
 **Done when:** `npm run eval:days` reports primary work ≥95% and tool-surface clean ≥99%, and
@@ -197,11 +198,11 @@ Real, required to release, felt by nobody until release day.
 
 **Works.** Calendar and Granola agent tools · Timeline merge, zoom, week popover ·
 per-slide wrap export · screen-context honesty pane · corrupt-database recovery with
-restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan, fixed.
+restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan, fixed ·
+interpretation-agent packet runtime behind `interpretationAgentEnabled` — #109.
 
 **Half-built.**
 - ~~`site_total_time` missing from `DeterministicFactKind`~~ — #68; domain-time questions now compute and enforce a site total
-- interpretation-agent runtime behind a flag that logs "not wired yet" — #109
 - Context Inspector: backend fills `ChatAgentResult.evidence`, no UI reads it
 - ~~command palette never reaches `planRetrieval`~~ — **not true**;
   `search.handlers.ts:56` returns `planRetrieval(...)`

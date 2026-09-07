@@ -1,23 +1,24 @@
 // The interpretation-agent relabel turn (agent-runtime-and-context.md §Agent
 // roles / §Two consumers, one loop): for ONE low-confidence timeline block,
-// run a small AI SDK tool loop instead of the single direct relabel call. The
-// agent may pull Tier-1 read-only context — window-title clusters, calendar,
-// git, entity attribution — before naming the block. Same evidence prompt as
-// the direct relabel (workBlockPrompt), same voice rules, same output
-// contract; the only new capability is going and getting more context.
+// run the same packet-based AI SDK runtime as chat instead of a single direct
+// relabel call. The agent may pull Tier-1 context (window titles, calendar,
+// git, entities) and consented Tier-3 screen capture before naming the block.
+// Same evidence prompt as the direct relabel (workBlockPrompt), same voice
+// rules, same output contract.
 //
 // Boundaries, deliberately identical to the chat agent's:
+//   - the turn starts from a recorded interpret-purpose Context packet;
 //   - tools reuse the SAME executors as the wrap/MCP/chat surfaces
-//     (executeWrappedTool, executeTool), which apply exclusion filtering +
-//     string sanitization on every result;
+//     (executeWrappedTool, executeTool, buildContextTools, buildScreenTools);
 //   - no ask_user / interaction / correction tools — interpretation proposes
 //     over evidence in the background, it never talks to the person;
 //   - usage meters through recordInterpretationAgentUsage (its own
 //     'interpretation_agent' lane, grouped under Timeline labeling);
 //   - the caller (analyzeDay) treats any throw as "fall back to the direct
 //     relabel" — this module never needs to degrade internally.
-import { generateText, stepCountIs, tool, type LanguageModel } from 'ai'
+import { tool, type LanguageModel } from 'ai'
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { AIInvocationSource, WorkContextBlock, WorkContextInsight } from '@shared/types'
 import { labelCandidateViolation, labelVoiceContextForBlock } from '@shared/labelVoice'
@@ -26,6 +27,9 @@ import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import { upsertWorkContextInsight } from '../db/queries'
 import { stripCodeFence } from '../lib/wrapNarrativeShared'
 import { languageModelFor } from '../agent/providerModel'
+import { AISdkAgentRuntime } from '../agent/agentRuntime'
+import { buildContextTools } from '../agent/contextTools'
+import { buildScreenTools } from '../agent/screenTools'
 import {
   recordInterpretationAgentUsage,
   resolveProviderConfigsForJob,
@@ -37,6 +41,15 @@ import { executeWrappedTool } from './wrappedTools'
 import { executeTool } from './aiTools'
 import { workBlockPrompt } from '../jobs/aiService'
 import { localDateKeyForTimestamp } from './workBlocks'
+import {
+  buildContextPacket,
+  CONTEXT_POLICY_VERSION,
+  contextPacketsAvailable,
+  DEFAULT_CONTEXT_BUDGET,
+  recordContextPacket,
+  type AgentToolDescriptor,
+  type ContextPacket,
+} from './contextPacket'
 
 // Small loop by design: one look at the evidence, at most a few context pulls,
 // one answer. A block that needs more than this isn't going to be named better
@@ -46,6 +59,45 @@ const INTERPRETATION_AGENT_TIMEOUT_MS = 45_000
 const INTERPRETATION_AGENT_MAX_OUTPUT_TOKENS = 1_000
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').describe('Local date, YYYY-MM-DD')
+
+const INTERPRETATION_TOOL_DESCRIPTORS: AgentToolDescriptor[] = [
+  {
+    name: 'get_window_title_context',
+    description: 'Window-title clusters for one app on one day',
+    source: 'daylens',
+    permissionState: 'available',
+  },
+  {
+    name: 'get_calendar_events',
+    description: 'The day\'s meetings',
+    source: 'daylens',
+    permissionState: 'available',
+  },
+  {
+    name: 'get_git_activity',
+    description: 'The day\'s git story',
+    source: 'daylens',
+    permissionState: 'available',
+  },
+  {
+    name: 'read_meeting_notes',
+    description: 'Consented Granola meeting notes',
+    source: 'daylens',
+    permissionState: 'requires_permission',
+  },
+  {
+    name: 'lookup_entity',
+    description: 'Work attributed to one named client or project',
+    source: 'daylens',
+    permissionState: 'available',
+  },
+  {
+    name: 'capture_screen',
+    description: 'One consented still of the live screen, never stored',
+    source: 'daylens',
+    permissionState: 'requires_permission',
+  },
+]
 
 /** The agent's output contract: the direct relabel's {label, narrative} plus
  *  the agent's own confidence and reasoning (logged and versioned, never
@@ -120,13 +172,135 @@ export interface InterpretationAgentOptions {
   signal?: AbortSignal
 }
 
-// Tier-1 read-only context tools. Executors are the SAME functions the
-// wrap/MCP surface (executeWrappedTool) and the chat tools (executeTool)
-// dispatch through, so every result crosses the same two privacy boundaries
-// (exclusion filtering + sanitization) before reaching the model.
-function buildInterpretationTools(db: Database.Database, options: { allowCollect: boolean; onTool: (name: string) => void }) {
-  const run = async (name: string, fn: () => Promise<unknown> | unknown): Promise<unknown> => {
-    options.onTool(name)
+function interpretQuestion(block: WorkContextBlock, date: string): string {
+  const apps = block.topApps.map((app) => app.appName.trim()).filter(Boolean).slice(0, 5)
+  const titles = (block.evidenceSummary.windowTitles ?? [])
+    .map((window) => window.title?.trim())
+    .filter((title): title is string => Boolean(title))
+    .slice(0, 4)
+  const parts = [
+    `Name the activity in the low-confidence block on ${date}.`,
+    `Heuristic label: ${block.label.current.trim() || 'unnamed'}.`,
+  ]
+  if (apps.length > 0) parts.push(`Apps: ${apps.join(', ')}.`)
+  if (titles.length > 0) parts.push(`Window titles: ${titles.join('; ')}.`)
+  return parts.join(' ')
+}
+
+function emptyInterpretPacket(
+  question: string,
+  destination: string,
+  date: string,
+  now: Date,
+): ContextPacket {
+  return {
+    id: `ctx_interpret_empty_${now.getTime().toString(36)}`,
+    purpose: 'interpret',
+    request: {
+      originalText: question,
+      timeRange: {
+        startDate: date,
+        endDate: date,
+        dates: [date],
+        resolution: 'caller',
+      },
+      dates: [date],
+      entityIds: [],
+    },
+    person: {
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      confirmedPreferences: [],
+    },
+    items: [],
+    conflicts: [],
+    gaps: [],
+    permissions: [],
+    tools: INTERPRETATION_TOOL_DESCRIPTORS,
+    actionContext: null,
+    contextBudget: DEFAULT_CONTEXT_BUDGET,
+    disclosure: {
+      destination,
+      leftDevice: false,
+      policyVersion: CONTEXT_POLICY_VERSION,
+      itemCount: 0,
+      counts: {},
+      omissions: [{ kind: 'day_fact', count: 1, reason: 'unavailable' }],
+    },
+    policyVersion: CONTEXT_POLICY_VERSION,
+    contentFingerprint: 'empty',
+    assembledAt: now.getTime(),
+  }
+}
+
+function renderInterpretPacket(packet: ContextPacket): string {
+  if (packet.items.length === 0) {
+    return [
+      `Context packet ${packet.id} — assembled locally for this interpretation turn.`,
+      'It contains no additional recorded items. Use the block evidence and the read-only tools. Never invent activity.',
+    ].join(' ')
+  }
+  const lines = packet.items.map((item) => `- ${item.statement}`)
+  const extras: string[] = []
+  if (packet.conflicts.length > 0) {
+    extras.push(
+      'Where the record disagrees with itself, treat the person\'s correction as authority:',
+      ...packet.conflicts.map((conflict) => `- ${conflict.detail}`),
+    )
+  }
+  if (packet.gaps.length > 0) {
+    extras.push(
+      'Gaps in the record — do not read silence as inactivity:',
+      ...packet.gaps.map((gap) => `- ${gap.detail}`),
+    )
+  }
+  return [
+    `Context packet ${packet.id} — assembled locally from corrected Daylens data before this request. Orienting context only; verify specifics with tools. Do not put citation markers in the JSON label or narrative.`,
+    'Recorded items:',
+    ...lines,
+    ...extras,
+  ].join('\n')
+}
+
+async function assembleInterpretPacket(
+  db: Database.Database,
+  block: WorkContextBlock,
+  date: string,
+  destination: string,
+): Promise<ContextPacket> {
+  const now = new Date()
+  const question = interpretQuestion(block, date)
+  try {
+    const packet = await buildContextPacket(db, {
+      purpose: 'interpret',
+      question,
+      dates: [date],
+      now,
+      destination,
+      availableTools: INTERPRETATION_TOOL_DESCRIPTORS,
+    })
+    if (contextPacketsAvailable(db)) {
+      try {
+        recordContextPacket(db, packet, {
+          exchangeKind: 'day_analysis',
+          scopeKey: date,
+        })
+      } catch (error) {
+        console.warn('[interpretation] context packet recording failed; the turn still uses the assembled packet', error)
+      }
+    }
+    return packet
+  } catch (error) {
+    console.warn('[interpretation] context packet assembly failed; naming from block evidence and tools only', error)
+    return emptyInterpretPacket(question, destination, date, now)
+  }
+}
+
+// Tier-1 read-only context plus consented Tier-3 capture. Calendar, git, and
+// meeting notes come from the SAME builders the chat agent uses; window titles
+// and entity lookup reuse the wrap/MCP executors so every result crosses the
+// same privacy boundaries before reaching the model.
+function buildInterpretationTools(db: Database.Database, options: { allowCollect: boolean }) {
+  const run = async (fn: () => Promise<unknown> | unknown): Promise<unknown> => {
     try {
       const result = await fn()
       return result ?? { found: false, reason: 'No data for that query.' }
@@ -139,26 +313,16 @@ function buildInterpretationTools(db: Database.Database, options: { allowCollect
       description: 'What the window titles say was being done in one app on one day, clustered into semantic groups. Use to understand what a vague block was really about.',
       inputSchema: z.object({ date: DATE, appName: z.string().min(1) }),
       execute: ({ date, appName }) =>
-        run('get_window_title_context', () => executeWrappedTool('getWindowTitleContext', { date, appName }, db)),
+        run(() => executeWrappedTool('getWindowTitleContext', { date, appName }, db)),
     }),
-    get_calendar_events: tool({
-      description: 'The day\'s meetings: calendar events (names, times, durations, attendee counts) plus which were actually attended. Use when the block might be a meeting.',
-      inputSchema: z.object({ date: DATE }),
-      execute: ({ date }) =>
-        run('get_calendar_events', () => executeWrappedTool('getCalendarEvents', { date }, db, undefined, { allowCollect: options.allowCollect })),
-    }),
-    get_git_activity: tool({
-      description: 'The day\'s git story: repositories touched, commit messages and times, PR activity. Use when the block might be development work.',
-      inputSchema: z.object({ date: DATE }),
-      execute: ({ date }) =>
-        run('get_git_activity', () => executeWrappedTool('getGitActivity', { date }, db, undefined, { allowCollect: options.allowCollect })),
-    }),
+    ...buildContextTools(db, { allowCollect: options.allowCollect }),
     lookup_entity: tool({
       description: 'Work attributed to one named client or project (partial name match). Use to check whether a name in the evidence is a known client/project.',
       inputSchema: z.object({ entityName: z.string().min(1) }),
       execute: ({ entityName }) =>
-        run('lookup_entity', () => executeTool('getAttributionContext', { entityName }, db)),
+        run(() => executeTool('getAttributionContext', { entityName }, db)),
     }),
+    ...buildScreenTools(),
   }
 }
 
@@ -170,13 +334,10 @@ function markUsageRecorded(error: Error): UsageRecordedError {
   return Object.assign(error, { usageRecorded: true })
 }
 
-function usageFromTotal(total: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | undefined): AIProviderUsage {
-  return {
-    inputTokens: total?.inputTokens ?? 0,
-    outputTokens: total?.outputTokens ?? 0,
-    cacheReadTokens: total?.cachedInputTokens ?? 0,
-    cacheWriteTokens: 0,
-  }
+function addUsage(target: AIProviderUsage, incoming: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }): void {
+  target.inputTokens = (target.inputTokens ?? 0) + (incoming.inputTokens ?? 0)
+  target.outputTokens = (target.outputTokens ?? 0) + (incoming.outputTokens ?? 0)
+  target.cacheReadTokens = (target.cacheReadTokens ?? 0) + (incoming.cacheReadTokens ?? 0)
 }
 
 /** Run one agent-assisted relabel turn for one low-confidence block. Returns a
@@ -201,12 +362,16 @@ export async function runInterpretationAgentRelabel(
   const triggerSource = options.triggerSource ?? 'background'
   const date = localDateKeyForTimestamp(block.startTime)
   const toolsUsed: string[] = []
+  const usage: AIProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  const destination = `${config.provider}:${config.model}`
+  const packet = await assembleInterpretPacket(db, block, date, destination)
 
   const system = [
     VOICE_SYSTEM_PROMPT,
     'You are Daylens.',
     'You label productivity timeline blocks from local activity evidence.',
-    'This block\'s evidence was too weak for a confident name, so you may call the provided read-only tools to pull more context (window titles, calendar, git, known clients/projects) before answering.',
+    'This block\'s evidence was too weak for a confident name, so you may call the provided read-only tools to pull more context (window titles, calendar, git, known clients/projects, consented screen) before answering.',
+    'Exhaust cheaper tools first. Escalate to capture_screen only when the block is happening now, naming confidence is still low, and the database cannot resolve the ambiguity — and say why in the required reason.',
     'Call a tool only when it can plausibly resolve the ambiguity; answer directly when the evidence already suffices.',
     'Do not use emoji. Be concrete, restrained, and evidence-led. Never mention the model provider.',
     'When you have enough context, reply with ONLY strict JSON:',
@@ -215,7 +380,8 @@ export async function runInterpretationAgentRelabel(
     'narrative: 1-2 plain sentences, evidence-led, no hype.',
     'confidence: your honest 0-1 confidence in the label.',
     'reasoning: one sentence naming the evidence that decided it.',
-  ].join(' ')
+    renderInterpretPacket(packet),
+  ].join('\n\n')
 
   const prompt = [
     workBlockPrompt(block),
@@ -229,20 +395,57 @@ export async function runInterpretationAgentRelabel(
   const abortSignal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal
 
   try {
-    const result = await generateText({
-      model: options.model ?? languageModelFor(config),
+    const runtime = new AISdkAgentRuntime(options.model ?? languageModelFor(config))
+    const tools = buildInterpretationTools(db, { allowCollect: options.allowCollect ?? true })
+    let finalText = ''
+    let runFailure: { message: string } | null = null
+    for await (const event of runtime.run({
+      runId: `interpret_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+      contextPacket: packet,
+      tools,
+      output: { kind: 'text' },
+      limits: {
+        maxSteps: INTERPRETATION_AGENT_MAX_STEPS,
+        maxOutputTokens: INTERPRETATION_AGENT_MAX_OUTPUT_TOKENS,
+        timeoutMs: INTERPRETATION_AGENT_TIMEOUT_MS,
+      },
       system,
-      prompt,
-      tools: buildInterpretationTools(db, {
-        allowCollect: options.allowCollect ?? true,
-        onTool: (name) => toolsUsed.push(name),
-      }),
-      stopWhen: stepCountIs(INTERPRETATION_AGENT_MAX_STEPS),
-      maxOutputTokens: INTERPRETATION_AGENT_MAX_OUTPUT_TOKENS,
-      abortSignal,
-    })
-    const usage = usageFromTotal(result.totalUsage)
-    const parsed = parseInterpretationAgentInsight(result.text)
+      messages: [{ role: 'user', content: prompt }],
+      signal: abortSignal,
+      execution: {
+        provider: config.provider,
+        cachePolicy: 'off',
+        promptCachingEnabled: false,
+        label: 'interpretation_agent',
+      },
+    })) {
+      switch (event.type) {
+        case 'text':
+          finalText += event.text
+          break
+        case 'tool_request':
+          toolsUsed.push(event.toolName)
+          break
+        case 'usage':
+          addUsage(usage, {
+            inputTokens: event.usage.inputTokens,
+            outputTokens: event.usage.outputTokens,
+            cacheReadTokens: event.usage.cacheReadTokens,
+          })
+          break
+        case 'failure':
+          runFailure = event.error
+          break
+        case 'cancellation':
+          throw new Error(event.reason || 'Interpretation agent run cancelled.')
+        default:
+          break
+      }
+    }
+    if (runFailure) {
+      throw new Error(runFailure.message)
+    }
+    const parsed = parseInterpretationAgentInsight(finalText)
     if (!parsed) {
       recordInterpretationAgentUsage({
         config, usage, startedAt, success: false, triggerSource,
@@ -281,7 +484,7 @@ export async function runInterpretationAgentRelabel(
     // Paths above record their own usage event before throwing.
     if (!(error instanceof Error && (error as UsageRecordedError).usageRecorded)) {
       recordInterpretationAgentUsage({
-        config, usage: null, startedAt, success: false, triggerSource,
+        config, usage: usage.inputTokens || usage.outputTokens ? usage : null, startedAt, success: false, triggerSource,
         failureReason: error instanceof Error ? error.message : String(error),
       })
     }

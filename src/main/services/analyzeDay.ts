@@ -208,13 +208,14 @@ export async function analyzeTimelineDay(
   // hermetic suite never reaches real connectors.
   await runExternalSignalBackfill(dateStr)
 
-  // The interpretation-agent live switch (DEV-206): OFF by default. When on,
-  // the per-block relabel of LOW-CONFIDENCE blocks becomes an agent turn (a
-  // small Tier-1 tool loop, services/interpretationAgent.ts) instead of the
-  // single direct provider call. The deterministic pipeline stays the floor:
-  // any agent failure falls back per block to the exact direct behavior, and
-  // the whole agent pass is gated on evaluateInterpretationRun before one
-  // label persists. Flag off → this function is byte-identical to before.
+  // The interpretation-agent live switch (DEV-206 / DEV-287): when on, the
+  // per-block relabel of LOW-CONFIDENCE blocks becomes a packet-based agent
+  // turn (services/interpretationAgent.ts — same runtime and tiered tools as
+  // chat) instead of the single direct provider call. The deterministic
+  // pipeline stays the floor: any agent failure falls back per block to the
+  // exact direct behavior, and the whole agent pass is gated on
+  // evaluateInterpretationRun before one label persists. Flag off → this
+  // function is byte-identical to the direct pipeline.
   let agentEnabled = false
   try {
     agentEnabled = interpretationAgentEnabled(getSettings())

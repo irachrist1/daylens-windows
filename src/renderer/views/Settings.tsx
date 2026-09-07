@@ -3187,7 +3187,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             <SettingsRow
               first
               title="Interpretation agent"
-              description="Day analysis may pull extra context (titles, calendar, git) before naming low-confidence blocks."
+              description="Day analysis may pull extra context (titles, calendar, git, consented screen) before naming low-confidence blocks."
               control={<Toggle checked={settings.interpretationAgentEnabled ?? false} onChange={(value) => void persist({ interpretationAgentEnabled: value })} />}
             />
           </div>

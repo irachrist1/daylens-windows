@@ -6,12 +6,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type Database from 'better-sqlite3'
+import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import { __resetSettings, __setSettings, setApiKey } from './support/settings-stub.mjs'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
+import { listContextPackets } from '../src/main/services/contextPacket.ts'
 import {
   parseInterpretationAgentInsight,
   runInterpretationAgentRelabel,
@@ -67,31 +69,45 @@ const mockUsage = {
   outputTokens: { total: 20, text: 20, reasoning: 0 },
 }
 
+function response(chunks: unknown[]) {
+  return { stream: simulateReadableStream({ chunks }) }
+}
+
 test('flag off: the agent is never consulted and the direct relabel runs unchanged', async () => {
   const db = createProductionTestDatabase()
   seedLowConfidenceDay(db)
+  __setSettings({ interpretationAgentEnabled: false })
   assert.ok(lowConfidenceBlockCount(db) >= 1, 'seed must produce a low-confidence block')
 
   let agentCalls = 0
   let directCalls = 0
-  const result = await analyzeTimelineDay(db, TEST_DATE, {
-    triggerSource: 'background',
-    regroupPlan: async () => null,
-    blockInsight: async () => {
-      directCalls += 1
-      return { label: 'Reviewing team updates', narrative: 'Steady coordination work.' }
-    },
-    agentBlockInsight: async () => {
-      agentCalls += 1
-      throw new Error('the interpretation agent must not run while the flag is off')
-    },
-  })
+  try {
+    const result = await analyzeTimelineDay(db, TEST_DATE, {
+      triggerSource: 'background',
+      regroupPlan: async () => null,
+      blockInsight: async () => {
+        directCalls += 1
+        return { label: 'Reviewing team updates', narrative: 'Steady coordination work.' }
+      },
+      agentBlockInsight: async () => {
+        agentCalls += 1
+        throw new Error('the interpretation agent must not run while the flag is off')
+      },
+    })
 
-  assert.equal(agentCalls, 0, 'flag off means the agent path is never consulted')
-  assert.ok(directCalls >= 1, 'the direct relabel still names the block')
-  assert.ok(result.relabeled >= 1)
-  assert.ok(persistedLabels(db).includes('Reviewing team updates'))
-  db.close()
+    assert.equal(agentCalls, 0, 'flag off means the agent path is never consulted')
+    assert.ok(directCalls >= 1, 'the direct relabel still names the block')
+    assert.ok(result.relabeled >= 1)
+    assert.ok(persistedLabels(db).includes('Reviewing team updates'))
+    assert.equal(
+      listContextPackets(db, { exchangeKind: 'day_analysis' }).length,
+      0,
+      'flag off never records an interpret packet',
+    )
+  } finally {
+    __resetSettings()
+    db.close()
+  }
 })
 
 test('flag on: a valid agent label (after a tool call) lands with source ai and a metered usage row', async () => {
@@ -103,35 +119,34 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
 
   let modelCall = 0
   const model = new MockLanguageModelV3({
-    doGenerate: async () => {
+    doStream: async () => {
       modelCall += 1
       if (modelCall === 1) {
-        return {
-          content: [{
-            type: 'tool-call' as const,
+        return response([
+          {
+            type: 'tool-call',
             toolCallId: 'ctx-1',
             toolName: 'get_window_title_context',
             input: JSON.stringify({ date: TEST_DATE, appName: 'Slack' }),
-          }],
-          finishReason: { unified: 'tool-calls' as const, raw: undefined },
-          usage: mockUsage,
-          warnings: [],
-        }
+          },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage: mockUsage },
+        ] as never[])
       }
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify({
+      return response([
+        { type: 'text-start', id: 'answer-1' },
+        {
+          type: 'text-delta',
+          id: 'answer-1',
+          delta: JSON.stringify({
             label: 'Coordinating a release across tools',
             narrative: 'Short hops between notes, chat, and the terminal around one release effort.',
             confidence: 0.74,
             reasoning: 'Window titles and chat context point at one coordinated effort.',
           }),
-        }],
-        finishReason: { unified: 'stop' as const, raw: undefined },
-        usage: mockUsage,
-        warnings: [],
-      }
+        },
+        { type: 'text-end', id: 'answer-1' },
+        { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: mockUsage },
+      ] as never[])
     },
   })
 
@@ -156,6 +171,15 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
     assert.ok(labeled, 'the agent label persisted on the block')
     assert.equal(labeled.label.source, 'ai')
     assert.equal(directCalls, 0, 'the low-confidence block was handled by the agent, not the direct path')
+
+    const packets = listContextPackets(db, { exchangeKind: 'day_analysis', scopeKey: TEST_DATE })
+    assert.ok(packets.length >= 1, 'the turn recorded an interpret-purpose context packet before the model ran')
+    assert.equal(packets[0]?.packet.purpose, 'interpret')
+    const toolNames = new Set(packets[0]?.packet.tools.map((tool) => tool.name))
+    assert.ok(toolNames.has('get_window_title_context'))
+    assert.ok(toolNames.has('get_calendar_events'))
+    assert.ok(toolNames.has('lookup_entity'))
+    assert.ok(toolNames.has('capture_screen'))
 
     // Usage metering: the turn wrote one interpretation_agent row (DEV-228
     // lanes) — the tool loop is never invisible to Usage.
@@ -212,12 +236,12 @@ test('flag on: an invariant-violating agent pass is discarded and the determinis
 // One-shot mock model that answers with the given insight JSON directly.
 function answerModel(insight: Record<string, unknown>): MockLanguageModelV3 {
   return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: 'text' as const, text: JSON.stringify(insight) }],
-      finishReason: { unified: 'stop' as const, raw: undefined },
-      usage: mockUsage,
-      warnings: [],
-    }),
+    doStream: async () => response([
+      { type: 'text-start', id: 'answer-1' },
+      { type: 'text-delta', id: 'answer-1', delta: JSON.stringify(insight) },
+      { type: 'text-end', id: 'answer-1' },
+      { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: mockUsage },
+    ] as never[]),
   })
 }
 

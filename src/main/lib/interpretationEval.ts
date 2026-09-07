@@ -1,7 +1,7 @@
 // Offline interpretation evaluation (DEV-206 / agent-runtime-and-context.md).
-// The interpretation agent — today implemented by the direct regroup/relabel
-// pipeline in services/analyzeDay.ts, tomorrow by the packet-based agent
-// runtime — may only write product state if a run over representative-day
+// The interpretation agent — the packet-based runtime behind
+// interpretationAgentEnabled, with the direct regroup/relabel pipeline as
+// the floor — may only write product state if a run over representative-day
 // fixtures upholds the interpretation invariants. This module is that gate:
 // pure scoring of a before/after pair, no DB, no AI, so the fixture eval runs
 // hermetically in CI and locally before any rollout.
@@ -17,17 +17,16 @@
 // - Proposed labels stay human (the voice-contract floor): non-empty, no raw
 //   paths/branches/ids leaking into prose.
 //
-// The live switch (`interpretationAgentEnabled`, OFF by default) may only be
-// turned on for the packet-based runtime once this eval passes over the
-// fixture set for that runtime.
+// The live switch (`interpretationAgentEnabled`) routes low-confidence
+// relabels through the packet-based runtime. This eval is the write gate
+// analyzeDay applies before any agent label persists.
 
 import type { AppSettings, DayTimelinePayload } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { absenceSpannedBy, formatAbsenceRange } from './absenceGuard'
 import { findRawArtifactLeak } from './wrapNarrativeShared'
 
-/** True when the packet-based interpretation agent is switched on. OFF by
- *  default; flipping it is gated on the offline fixture eval passing. */
+/** True when the packet-based interpretation agent is switched on. */
 export function interpretationAgentEnabled(
   settings: Pick<AppSettings, 'interpretationAgentEnabled'>,
 ): boolean {
