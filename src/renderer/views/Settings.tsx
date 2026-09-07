@@ -1185,7 +1185,7 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
       { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed granola meeting notes terminal commands capability' },
       { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
-      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
+      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals claude desktop claude code cursor' },
     ],
   },
   {
@@ -2549,6 +2549,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     const next = { ...(settings.enrichmentSources ?? {}), [key]: value }
     if (!await persist({ enrichmentSources: next })) return
     setEnrichmentSources((prev) => prev && ({
+      ...prev,
       mcpServers: prev.mcpServers.map((s) => (`mcp:${s.name}` === key ? { ...s, enabled: value } : s)),
       focusApps: prev.focusApps.map((f) => (`focus:${f.app}` === key ? { ...f, enabled: value } : f)),
     }))
@@ -4133,7 +4134,14 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Looking for installed servers…</div>
               ) : enrichmentSources.mcpServers.length === 0 ? (
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                  None found in your Claude Desktop config. If you use Notion, Linear, or Jira through MCP, they'll show up here as future wrap sources.
+                  None found. Daylens checked these files:
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {enrichmentSources.mcpConfigFiles.map((file) => (
+                      <li key={`${file.label}:${file.displayPath}`}>
+                        {file.label} (<code style={{ fontSize: 11 }}>{file.displayPath}</code>)
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               ) : (
                 enrichmentSources.mcpServers.map((server, i) => (
@@ -4141,7 +4149,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                     key={server.name}
                     first={i === 0}
                     title={server.name}
-                    description={`Discovered in your Claude Desktop config (${server.transport}). Turning it on marks it as a wrap source; Daylens doesn't read it yet.`}
+                    description={`Discovered in ${server.sourceLabel} (${server.transport}). Turning it on marks it as a wrap source; Daylens doesn't read it yet.`}
                     control={
                       <Toggle
                         checked={server.enabled}

@@ -2051,13 +2051,36 @@ export interface DayEnrichment {
   } | null
 }
 
+export type McpDiscoverySource = 'claude-desktop' | 'claude-code' | 'cursor'
+
 /** Discovered optional enrichment sources shown in Settings: MCP servers from
- *  the Claude Desktop config and focus tools on this machine. Discovery
- *  only — nothing is called until the user enables it AND the enrichment is
- *  actually wired up. */
+ *  Claude Desktop, Claude Code, and Cursor configs, plus focus tools on this
+ *  machine. Discovery only — nothing is called until the user enables it AND
+ *  the enrichment is actually wired up. */
 export interface EnrichmentSourcesState {
-  mcpServers: Array<{ name: string; transport: 'stdio' | 'http' | 'unknown'; enabled: boolean }>
+  mcpServers: Array<{
+    name: string
+    transport: 'stdio' | 'http' | 'unknown'
+    enabled: boolean
+    source: McpDiscoverySource
+    sourceLabel: string
+  }>
   focusApps: Array<{ app: string; installed: boolean; enabled: boolean }>
+  /** Config files this scan looked at, so an empty state can name them. */
+  mcpConfigFiles: Array<{ label: string; displayPath: string }>
+}
+
+/** One external MCP tool call recorded next to the database. */
+export interface McpActivityEntry {
+  tool: string
+  timestamp: string
+  arguments: unknown
+  ok: boolean
+  error?: string
+}
+
+export interface McpActivityLog {
+  entries: McpActivityEntry[]
 }
 
 // ─── Wrap pre-flight ────────────────────────────────────────────────────────
@@ -3074,6 +3097,7 @@ export const IPC = {
     GET_THREAD_SETTINGS: 'ai:get-thread-settings',
     SET_THREAD_SETTINGS: 'ai:set-thread-settings',
     OPEN_ARTIFACT: 'ai:open-artifact',
+    GET_MCP_ACTIVITY: 'ai:get-mcp-activity',
   },
   SETTINGS: {
     GET: 'settings:get',

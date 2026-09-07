@@ -12,7 +12,7 @@ import { recordTrackingPauseTransition } from '../services/tracking'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
-import { detectFocusApps, discoverMcpServers } from '../services/enrichmentDiscovery'
+import { detectFocusApps, discoverAllMcpServers, listMcpConfigFiles } from '../services/enrichmentDiscovery'
 import { applyProviderChangeToSettings } from '../lib/providerRouting'
 import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings, EnrichmentSourcesState } from '@shared/types'
@@ -26,26 +26,34 @@ export function registerSettingsHandlers(): void {
     return getSettingsAsync()
   })
 
-  // Discovered optional enrichment sources: MCP servers
-  // from the Claude Desktop config plus focus tools on this machine. Discovery
-  // only — nothing is launched or called from here.
+  // Discovered optional enrichment sources: MCP servers from Claude Desktop,
+  // Claude Code, and Cursor configs plus focus tools on this machine.
+  // Discovery only — nothing is launched or called from here.
   ipcMain.handle(IPC.SETTINGS.GET_ENRICHMENT_SOURCES, async (): Promise<EnrichmentSourcesState> => {
     const settings = await getSettingsAsync()
     const enabled = settings.enrichmentSources ?? {}
     if (isRealDayHarness()) {
-      return { mcpServers: [], focusApps: [] }
+      return {
+        mcpServers: [],
+        focusApps: [],
+        mcpConfigFiles: listMcpConfigFiles().map(({ label, displayPath }) => ({ label, displayPath })),
+      }
     }
+    const discovered = discoverAllMcpServers()
     return {
-      mcpServers: discoverMcpServers().map((server) => ({
+      mcpServers: discovered.servers.map((server) => ({
         name: server.name,
         transport: server.transport,
         enabled: enabled[`mcp:${server.name}`] ?? false,
+        source: server.source,
+        sourceLabel: server.sourceLabel,
       })),
       focusApps: detectFocusApps().map((focus) => ({
         app: focus.app,
         installed: focus.installed,
         enabled: enabled[`focus:${focus.app}`] ?? false,
       })),
+      mcpConfigFiles: discovered.checkedFiles,
     }
   })
 

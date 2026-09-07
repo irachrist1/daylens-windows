@@ -42,6 +42,7 @@ import type {
   HistoryExportVerification,
   WrapSlidesExportResult,
   MemoryMirrorSyncResult,
+  McpActivityLog,
   BillingUsageReport,
   SpendGuardrailsReport,
   IntercomIdentity,
@@ -443,6 +444,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.SET_THREAD_SETTINGS, { threadId, settings }),
     openArtifact: (artifactId: number): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
+    getMcpActivity: (): Promise<McpActivityLog> =>
+      ipcRenderer.invoke(IPC.AI.GET_MCP_ACTIVITY),
   },
   search: {
     // The unified boundary: the planner scopes, retrieves, reconciles, and
