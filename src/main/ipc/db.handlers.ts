@@ -428,9 +428,20 @@ export function registerDbHandlers(): void {
     return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
   })
 
-  ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (_e, dateStr: string) => {
+  // `withClarifications` is what keeps the day view from building this
+  // projection twice. Detecting the day's questions needs the payload and
+  // nothing else, so the caller that already triggered the build asks for them
+  // in the same breath; the week and month views, which never show them, pay
+  // nothing. GET_DAY_CLARIFICATIONS below still stands on its own for the
+  // refresh after an answer.
+  ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (
+    _e,
+    dateStr: string,
+    options: { withClarifications?: boolean } = {},
+  ) => {
     const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false, analysis: false })
-    return payload
+    if (!options.withClarifications) return payload
+    return { ...payload, clarifications: detectDayClarifications(getDb(), payload) }
   })
 
   ipcMain.handle(IPC.DB.REBUILD_TIMELINE_DAY, async (_e, dateStr: string, hint?: string) => {
