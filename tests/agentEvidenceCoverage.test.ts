@@ -456,6 +456,92 @@ test('an app is only named when it is a real captured app, not a word in the sen
   db.close()
 })
 
+const COURSERA_SECONDS = (3 * 3600) + (43 * 60)
+
+function seedCourseraMorning(db: Database.Database): void {
+  insertAppSession(db, {
+    bundleId: 'company.thebrowser.dia',
+    appName: 'Dia',
+    startTime: ms(9, 0),
+    endTime: ms(12, 43),
+    durationSeconds: COURSERA_SECONDS,
+    category: 'browsing',
+    isFocused: true,
+    windowTitle: 'Supervised Machine Learning | Coursera',
+    rawAppName: 'Dia',
+    canonicalAppId: 'dia',
+    appInstanceId: 'company.thebrowser.dia',
+    captureSource: 'foreground_poll',
+    endedReason: 'app_switch',
+    captureVersion: 2,
+  })
+  insertAppSession(db, {
+    bundleId: 'edu.course.app',
+    appName: 'Course',
+    startTime: ms(13, 0),
+    endTime: ms(13, 10),
+    durationSeconds: 10 * 60,
+    category: 'productivity',
+    isFocused: false,
+    windowTitle: 'Course',
+    rawAppName: 'Course',
+    canonicalAppId: 'course',
+    appInstanceId: 'edu.course.app',
+    captureSource: 'foreground_poll',
+    endedReason: 'app_switch',
+    captureVersion: 2,
+  })
+  db.prepare(`
+    INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source)
+    VALUES ('coursera.org', 'Supervised ML | Coursera', 'https://www.coursera.org/learn/ml', ?, ?, 30, ?, 'dia', 'chrome_history')
+  `).run(ms(9, 0), ms(9, 0) * 1000, 'company.thebrowser.dia')
+}
+
+test('DEV-246: a Coursera time question is a site total, not the Course app or the day', () => {
+  const db = createProductionTestDatabase()
+  seedCourseraMorning(db)
+  const nowMs = ms(23, 0)
+
+  const facts = deterministicFactsForQuestion(
+    db,
+    `How much time did I spend on Coursera on ${DATE}?`,
+    { dates: [DATE] },
+    { nowMs },
+  )
+  assert.equal(facts[0]?.kind, 'site_total_time')
+  assert.equal(facts[0]?.value, COURSERA_SECONDS)
+  assert.equal(facts[0]?.rendered, '3h 43m')
+
+  const requests = detectDeterministicFactRequests(
+    `How much time did I spend on Coursera on ${DATE}?`,
+    { dates: [DATE] },
+    ['Dia', 'Course'],
+    ['coursera.org'],
+  )
+  assert.deepEqual(requests.map((request) => request.kind), ['site_total_time'])
+  db.close()
+})
+
+test('DEV-246: a model that states the 10m app miss does not reach the person', async () => {
+  const db = createProductionTestDatabase()
+  seedCourseraMorning(db)
+
+  const result = await runTurn(
+    db,
+    `How much time did I spend on Coursera on ${DATE}?`,
+    'You spent 10 minutes on Coursera.',
+  )
+
+  assert.ok(!/10 minutes/.test(result.text), `wrong first figure survived: ${result.text}`)
+  assert.match(result.text, /3h 43m/)
+  assert.equal(result.evidence.deterministicFacts[0]?.kind, 'site_total_time')
+  assert.equal(result.evidence.deterministicFacts[0]?.value, COURSERA_SECONDS)
+  assert.equal(result.evidence.deterministicRepairs[0]?.claimed, '10 minutes')
+  assert.equal(result.evidence.deterministicRepairs[0]?.corrected, '3h 43m')
+  db.close()
+})
+
 // ─── AC-AIA-002.1: claims bind to evidence from this exchange ────────────────
 
 test('AC-AIA-002.1: a supported claim binds to the evidence item that backs it', () => {
