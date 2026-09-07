@@ -1802,7 +1802,11 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
-  const [clarifications, setClarifications] = useState<TimelineClarification[]>([])
+  // Seeded from the payload the day arrived with; refetched only when an
+  // answer or an invalidation changes what the day is asking.
+  const [clarifications, setClarifications] = useState<TimelineClarification[]>(
+    () => payload.clarifications ?? [],
+  )
   const { analyzing, status: analyzeStatus, progress: analyzeProgress, run: runAnalyze } = analysis
   // The optional-note step of Analyze day: a one-line hint grounds the AI.
   const [wrapOpen, setWrapOpen] = useState(false)
@@ -1816,6 +1820,15 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
     void ipc.db.getDayClarifications(payload.date).then(setClarifications).catch(() => setClarifications([]))
   }, [payload.date])
 
+  // A payload that carries its own questions needs no second round trip. One
+  // that does not — an older main process, or a caller that did not ask —
+  // falls back to fetching them, so the day is never left without them.
+  const carriedClarifications = payload.clarifications
+  useEffect(() => {
+    if (carriedClarifications) setClarifications(carriedClarifications)
+    else loadClarifications()
+  }, [carriedClarifications, loadClarifications])
+
   useEffect(() => {
     setRecapError(null)
     setWrapOpen(false)
@@ -1823,8 +1836,7 @@ function DaySummaryInspector({ payload, analysis }: { payload: DayTimelinePayloa
     const cached = daySummaryRecapCache.get(payload.date)
     setRecap(cached ?? null)
     setRecapLoading(false)
-    loadClarifications()
-  }, [payload.date, loadClarifications])
+  }, [payload.date])
 
   useEffect(() => ipc.projections.onInvalidated((event) => {
     if (event.scope !== 'timeline' && event.scope !== 'all') return
@@ -3097,7 +3109,11 @@ export default function Timeline() {
     enabled: view === 'day',
     dependencies: [date, view],
     intervalMs: isToday ? 30_000 : 0,
-    load: () => ipc.db.getTimelineDay(date),
+    // The day view shows the day's clarifying questions, and detecting them
+    // needs exactly this payload. Asking here means one projection instead of
+    // two: the separate fetch below rebuilt it from scratch to reach the same
+    // answer (329-675ms on a real day).
+    load: () => ipc.db.getTimelineDay(date, { withClarifications: true }),
   })
 
   const payload = timelineResource.data?.date === date ? timelineResource.data : null

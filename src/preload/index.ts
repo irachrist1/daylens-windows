@@ -280,7 +280,10 @@ const api = {
     close: () => ipcRenderer.send('window:close'),
   },
   db: {
-    getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
+    getTimelineDay: (
+      date: string,
+      options?: { withClarifications?: boolean },
+    ): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date, options),
     rebuildTimelineDay: (date: string, hint?: string): Promise<RebuildTimelineDayResult> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
     // Subscribe to analyze progress ticks (DEV-270) for the duration of one run.
     onAnalyzeProgress: (callback: (update: TimelineAnalyzeProgress) => void): (() => void) => {

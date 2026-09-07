@@ -408,6 +408,13 @@ export interface DayTimelinePayload {
   // Additive: the durable entities the day's evidence supports naming.
   // Absent on payloads built before the entity ledger existed.
   dayEntities?: DayWrapEntity[]
+  // Additive: the day's open clarifying questions, detected over THIS payload.
+  // Present only when the caller asked for them — the day view needs them on
+  // first paint, the week and month views never do. Detecting them costs
+  // nothing next to the projection they are detected over, so asking for them
+  // here is what stops the day view from paying for a second projection just
+  // to reach the same answer.
+  clarifications?: TimelineClarification[]
 }
 
 /** What a manual Analyze / Re-analyze run actually did, so the UI reports the
