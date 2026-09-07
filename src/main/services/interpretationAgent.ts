@@ -2,20 +2,19 @@
 // roles / §Two consumers, one loop): for ONE low-confidence timeline block,
 // run the same packet-based AI SDK runtime as chat instead of a single direct
 // relabel call. The agent may pull Tier-1 context (window titles, calendar,
-// git, entities) and consented Tier-3 screen capture before naming the block.
-// Same evidence prompt as the direct relabel (workBlockPrompt), same voice
-// rules, same output contract.
+// git, entities) before naming the historical block. Same evidence prompt as
+// the direct relabel (workBlockPrompt), same voice rules, same output contract.
 //
 // Boundaries, deliberately identical to the chat agent's:
 //   - the turn starts from a recorded interpret-purpose Context packet;
 //   - tools reuse the SAME executors as the wrap/MCP/chat surfaces
-//     (executeWrappedTool, executeTool, buildContextTools, buildScreenTools);
+//     (executeWrappedTool, executeTool, buildContextTools);
 //   - no ask_user / interaction / correction tools — interpretation proposes
 //     over evidence in the background, it never talks to the person;
 //   - usage meters through recordInterpretationAgentUsage (its own
 //     'interpretation_agent' lane, grouped under Timeline labeling);
-//   - the caller (analyzeDay) treats any throw as "fall back to the direct
-//     relabel" — this module never needs to degrade internally.
+//   - the caller (analyzeDay) treats runtime failures as "fall back to the
+//     direct relabel"; disclosure-recording failures keep the local label.
 import { tool, type LanguageModel } from 'ai'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
@@ -29,7 +28,6 @@ import { stripCodeFence } from '../lib/wrapNarrativeShared'
 import { languageModelFor } from '../agent/providerModel'
 import { AISdkAgentRuntime } from '../agent/agentRuntime'
 import { buildContextTools } from '../agent/contextTools'
-import { buildScreenTools } from '../agent/screenTools'
 import {
   recordInterpretationAgentUsage,
   resolveProviderConfigsForJob,
@@ -43,9 +41,7 @@ import { workBlockPrompt } from '../jobs/aiService'
 import { localDateKeyForTimestamp } from './workBlocks'
 import {
   buildContextPacket,
-  CONTEXT_POLICY_VERSION,
   contextPacketsAvailable,
-  DEFAULT_CONTEXT_BUDGET,
   recordContextPacket,
   type AgentToolDescriptor,
   type ContextPacket,
@@ -90,12 +86,6 @@ const INTERPRETATION_TOOL_DESCRIPTORS: AgentToolDescriptor[] = [
     description: 'Work attributed to one named client or project',
     source: 'daylens',
     permissionState: 'available',
-  },
-  {
-    name: 'capture_screen',
-    description: 'One consented still of the live screen, never stored',
-    source: 'daylens',
-    permissionState: 'requires_permission',
   },
 ]
 
@@ -187,51 +177,6 @@ function interpretQuestion(block: WorkContextBlock, date: string): string {
   return parts.join(' ')
 }
 
-function emptyInterpretPacket(
-  question: string,
-  destination: string,
-  date: string,
-  now: Date,
-): ContextPacket {
-  return {
-    id: `ctx_interpret_empty_${now.getTime().toString(36)}`,
-    purpose: 'interpret',
-    request: {
-      originalText: question,
-      timeRange: {
-        startDate: date,
-        endDate: date,
-        dates: [date],
-        resolution: 'caller',
-      },
-      dates: [date],
-      entityIds: [],
-    },
-    person: {
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      confirmedPreferences: [],
-    },
-    items: [],
-    conflicts: [],
-    gaps: [],
-    permissions: [],
-    tools: INTERPRETATION_TOOL_DESCRIPTORS,
-    actionContext: null,
-    contextBudget: DEFAULT_CONTEXT_BUDGET,
-    disclosure: {
-      destination,
-      leftDevice: false,
-      policyVersion: CONTEXT_POLICY_VERSION,
-      itemCount: 0,
-      counts: {},
-      omissions: [{ kind: 'day_fact', count: 1, reason: 'unavailable' }],
-    },
-    policyVersion: CONTEXT_POLICY_VERSION,
-    contentFingerprint: 'empty',
-    assembledAt: now.getTime(),
-  }
-}
-
 function renderInterpretPacket(packet: ContextPacket): string {
   if (packet.items.length === 0) {
     return [
@@ -266,37 +211,34 @@ async function assembleInterpretPacket(
   block: WorkContextBlock,
   date: string,
   destination: string,
+  availableTools: AgentToolDescriptor[],
 ): Promise<ContextPacket> {
   const now = new Date()
   const question = interpretQuestion(block, date)
-  try {
-    const packet = await buildContextPacket(db, {
-      purpose: 'interpret',
-      question,
-      dates: [date],
-      now,
-      destination,
-      availableTools: INTERPRETATION_TOOL_DESCRIPTORS,
-    })
-    if (contextPacketsAvailable(db)) {
-      try {
-        recordContextPacket(db, packet, {
-          exchangeKind: 'day_analysis',
-          scopeKey: date,
-        })
-      } catch (error) {
-        console.warn('[interpretation] context packet recording failed; the turn still uses the assembled packet', error)
-      }
-    }
-    return packet
-  } catch (error) {
-    console.warn('[interpretation] context packet assembly failed; naming from block evidence and tools only', error)
-    return emptyInterpretPacket(question, destination, date, now)
+  const packet = await buildContextPacket(db, {
+    purpose: 'interpret',
+    question,
+    dates: [date],
+    now,
+    destination,
+    availableTools,
+  })
+  if (!contextPacketsAvailable(db)) {
+    throw markContextPacketFailure(new Error('Context packet recording is unavailable.'))
   }
+  try {
+    recordContextPacket(db, packet, {
+      exchangeKind: 'day_analysis',
+      scopeKey: date,
+    })
+  } catch (error) {
+    throw markContextPacketFailure(error instanceof Error ? error : new Error(String(error)))
+  }
+  return packet
 }
 
-// Tier-1 read-only context plus consented Tier-3 capture. Calendar, git, and
-// meeting notes come from the SAME builders the chat agent uses; window titles
+// Tier-1 read-only context. Calendar, git, and meeting notes come from the SAME
+// builders the chat agent uses; window titles
 // and entity lookup reuse the wrap/MCP executors so every result crosses the
 // same privacy boundaries before reaching the model.
 function buildInterpretationTools(db: Database.Database, options: { allowCollect: boolean }) {
@@ -322,11 +264,20 @@ function buildInterpretationTools(db: Database.Database, options: { allowCollect
       execute: ({ entityName }) =>
         run(() => executeTool('getAttributionContext', { entityName }, db)),
     }),
-    ...buildScreenTools(),
   }
 }
 
 type UsageRecordedError = Error & { usageRecorded?: boolean }
+
+type ContextPacketFailure = Error & { contextPacketFailure?: boolean }
+
+function markContextPacketFailure(error: Error): ContextPacketFailure {
+  return Object.assign(error, { contextPacketFailure: true })
+}
+
+export function isInterpretationContextPacketFailure(error: unknown): boolean {
+  return error instanceof Error && (error as ContextPacketFailure).contextPacketFailure === true
+}
 
 /** Marks an error whose failure event is already metered, so the outer catch
  *  never records the same turn twice. */
@@ -364,14 +315,28 @@ export async function runInterpretationAgentRelabel(
   const toolsUsed: string[] = []
   const usage: AIProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
   const destination = `${config.provider}:${config.model}`
-  const packet = await assembleInterpretPacket(db, block, date, destination)
+  let packet: ContextPacket
+  try {
+    packet = await assembleInterpretPacket(
+      db,
+      block,
+      date,
+      destination,
+      INTERPRETATION_TOOL_DESCRIPTORS,
+    )
+  } catch (error) {
+    recordInterpretationAgentUsage({
+      config, usage: null, startedAt, success: false, triggerSource,
+      failureReason: error instanceof Error ? error.message : String(error),
+    })
+    throw markUsageRecorded(error instanceof Error ? error : new Error(String(error)))
+  }
 
   const system = [
     VOICE_SYSTEM_PROMPT,
     'You are Daylens.',
     'You label productivity timeline blocks from local activity evidence.',
-    'This block\'s evidence was too weak for a confident name, so you may call the provided read-only tools to pull more context (window titles, calendar, git, known clients/projects, consented screen) before answering.',
-    'Exhaust cheaper tools first. Escalate to capture_screen only when the block is happening now, naming confidence is still low, and the database cannot resolve the ambiguity — and say why in the required reason.',
+    'This block\'s evidence was too weak for a confident name, so you may call the provided read-only tools to pull more context (window titles, calendar, git, known clients/projects) before answering.',
     'Call a tool only when it can plausibly resolve the ambiguity; answer directly when the evidence already suffices.',
     'Do not use emoji. Be concrete, restrained, and evidence-led. Never mention the model provider.',
     'When you have enough context, reply with ONLY strict JSON:',
@@ -398,6 +363,8 @@ export async function runInterpretationAgentRelabel(
     const runtime = new AISdkAgentRuntime(options.model ?? languageModelFor(config))
     const tools = buildInterpretationTools(db, { allowCollect: options.allowCollect ?? true })
     let finalText = ''
+    let stepText = ''
+    let stepUsedTool = false
     let runFailure: { message: string } | null = null
     for await (const event of runtime.run({
       runId: `interpret_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
@@ -420,11 +387,22 @@ export async function runInterpretationAgentRelabel(
       },
     })) {
       switch (event.type) {
+        case 'step_started':
+          stepText = ''
+          stepUsedTool = false
+          break
         case 'text':
-          finalText += event.text
+          stepText += event.text
           break
         case 'tool_request':
+          stepUsedTool = true
           toolsUsed.push(event.toolName)
+          break
+        case 'step_completed':
+          if (!stepUsedTool && stepText.trim()) finalText = stepText.trim()
+          break
+        case 'completion':
+          if (!stepUsedTool && stepText.trim()) finalText = stepText.trim()
           break
         case 'usage':
           addUsage(usage, {

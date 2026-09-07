@@ -110,6 +110,59 @@ test('flag off: the agent is never consulted and the direct relabel runs unchang
   }
 })
 
+test('flag on: packet recording must succeed before the provider is called', async () => {
+  for (const recordingFailure of ['unavailable', 'insert failure'] as const) {
+    const db = createProductionTestDatabase()
+    seedLowConfidenceDay(db)
+    setTestDb(db)
+    __setSettings({ interpretationAgentEnabled: true, aiProvider: 'anthropic', aiChatProvider: 'anthropic' })
+    await setApiKey('anthropic', 'test-key')
+    if (recordingFailure === 'unavailable') {
+      db.exec('DROP TABLE context_packets')
+    } else {
+      db.exec(`
+        CREATE TRIGGER fail_interpret_packet_insert
+        BEFORE INSERT ON context_packets
+        BEGIN
+          SELECT RAISE(ABORT, 'forced packet insert failure');
+        END
+      `)
+    }
+
+    let modelCalls = 0
+    let directCalls = 0
+    const model = new MockLanguageModelV3({
+      doStream: async () => {
+        modelCalls += 1
+        return response([])
+      },
+    })
+    try {
+      await assert.rejects(
+        analyzeTimelineDay(db, TEST_DATE, {
+          triggerSource: 'background',
+          regroupPlan: async () => null,
+          blockInsight: async () => {
+            directCalls += 1
+            return { label: 'Reviewing team updates', narrative: 'Direct path.' }
+          },
+          agentBlockInsight: (block, opts) =>
+            runInterpretationAgentRelabel(db, block, { ...opts, model, allowCollect: false }),
+        }),
+        /could not record what it was about to send/,
+        `${recordingFailure} must surface the blocked manual analysis`,
+      )
+
+      assert.equal(modelCalls, 0, `${recordingFailure} must prevent remote interpretation`)
+      assert.equal(directCalls, 0, `${recordingFailure} keeps the deterministic label instead of making another remote call`)
+    } finally {
+      __resetSettings()
+      clearTestDb()
+      db.close()
+    }
+  }
+})
+
 test('flag on: a valid agent label (after a tool call) lands with source ai and a metered usage row', async () => {
   const db = createProductionTestDatabase()
   seedLowConfidenceDay(db)
@@ -123,6 +176,16 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
       modelCall += 1
       if (modelCall === 1) {
         return response([
+          { type: 'text-start', id: 'draft-1' },
+          {
+            type: 'text-delta',
+            id: 'draft-1',
+            delta: JSON.stringify({
+              label: 'Drafting an early guess',
+              narrative: 'This draft precedes the tool result.',
+            }),
+          },
+          { type: 'text-end', id: 'draft-1' },
           {
             type: 'tool-call',
             toolCallId: 'ctx-1',
@@ -179,7 +242,7 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
     assert.ok(toolNames.has('get_window_title_context'))
     assert.ok(toolNames.has('get_calendar_events'))
     assert.ok(toolNames.has('lookup_entity'))
-    assert.ok(toolNames.has('capture_screen'))
+    assert.ok(!toolNames.has('capture_screen'), 'historical relabel packets do not advertise live screen capture')
 
     // Usage metering: the turn wrote one interpretation_agent row (DEV-228
     // lanes) — the tool loop is never invisible to Usage.
