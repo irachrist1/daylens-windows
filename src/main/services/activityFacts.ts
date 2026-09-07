@@ -663,7 +663,7 @@ export function getCorrectedPageFactsForRange(
   // Every browser with corrected foreground time appears in the coverage
   // report, page rows or not — a browser without tab access (zero page rows)
   // is exactly the case the coverage note exists for.
-  const visibleMsByBrowser = new Map<string, number>()
+  const visibleSpansByBrowser = new Map<string, CorrectionSpan[]>()
   const visibleNameByBrowser = new Map<string, string>()
   for (const span of getSecondaryDisplayVisibleSpansForRange(
     db, fromMs, toMs, getCorrectedSessionsForRange(db, fromMs, toMs),
@@ -672,9 +672,17 @@ export function getCorrectedPageFactsForRange(
       ? resolveCanonicalApp(span.bundleId, span.appName ?? '').canonicalAppId
       : null) ?? span.bundleId
     if (!key) continue
-    visibleMsByBrowser.set(key, (visibleMsByBrowser.get(key) ?? 0) + (span.endTime - span.startTime))
+    const spans = visibleSpansByBrowser.get(key) ?? []
+    spans.push({ startMs: span.startTime, endMs: span.endTime })
+    visibleSpansByBrowser.set(key, spans)
     if (span.appName && !visibleNameByBrowser.has(key)) visibleNameByBrowser.set(key, span.appName)
   }
+  const visibleMsByBrowser = new Map<string, number>(
+    [...visibleSpansByBrowser].map(([key, spans]): [string, number] => [
+      key,
+      mergeCorrectionSpans(spans).reduce((total, span) => total + span.endMs - span.startMs, 0),
+    ]),
+  )
 
   const coverage: BrowserPageCoverage[] = []
   const seenCoverage = new Set<string>()

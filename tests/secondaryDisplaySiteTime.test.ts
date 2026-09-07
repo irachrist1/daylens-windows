@@ -33,6 +33,7 @@ function localMs(hour: number, minute = 0, second = 0): number {
 function displayEvent(
   tsMs: number,
   eventType: 'display_visible_changed' | 'display_visible_sampled',
+  displayId = DISPLAY_2,
 ): FocusEventInsert {
   return {
     ts_ms: tsMs,
@@ -48,7 +49,7 @@ function displayEvent(
     confidence: 'observed',
     platform: 'darwin',
     schema_ver: 2,
-    display_id: DISPLAY_2,
+    display_id: displayId,
   }
 }
 
@@ -175,6 +176,73 @@ test('how long on Coursera binds to site_total_time and repairs a 608-second fir
     ['total_tracked_time'],
     'an ISO date is not a site name',
   )
+
+  const projectQuestion = detectDeterministicFactRequests(
+    'how long did I work on project-x?',
+    { dates: [DATE] },
+    ['Notion', 'Cursor'],
+    [],
+  )
+  assert.deepEqual(projectQuestion.map((request) => request.kind), ['total_tracked_time'])
+
+  const appQuestion = detectDeterministicFactRequests(
+    'how long was I in Notion?',
+    { dates: [DATE] },
+    ['Notion'],
+    ['notion'],
+  )
+  assert.deepEqual(appQuestion.map((request) => request.kind), ['app_total_time'])
+  db.close()
+})
+
+test('equivalent www and bare domains aggregate into one site fact', () => {
+  const db = createProductionTestDatabase()
+  const { fromMs } = seedMorning(db, 600)
+  db.prepare(`
+    INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, source)
+    VALUES ('coursera.org', 'Coursera lesson', 'https://coursera.org/lesson', ?, ?, 300, ?, 'chrome_history')
+  `).run(fromMs + 60_000, (fromMs + 60_000) * 1000, DIA)
+
+  const facts = deterministicFactsForQuestion(
+    db,
+    'how long was I on Coursera?',
+    { dates: [DATE] },
+    { nowMs: localMs(14, 0) },
+  )
+  const [dayFrom, dayTo] = ownedDayBounds(db, DATE)
+  const sites = getCorrectedWebsiteSummariesForRange(db, dayFrom, dayTo)
+  const expected = sites
+    .filter((site) => site.domain.replace(/^www\./, '') === 'coursera.org')
+    .reduce((total, site) => total + site.totalSeconds, 0)
+  assert.equal(facts[0]?.value, expected)
+  const count = deterministicFactsForQuestion(
+    db,
+    'how many sites?',
+    { dates: [DATE] },
+    { nowMs: localMs(14, 0) },
+  )
+  assert.equal(count[0]?.kind, 'site_count')
+  assert.equal(count[0]?.value, 1)
+  db.close()
+})
+
+test('coverage unions the same browser visible on overlapping displays', () => {
+  const db = createProductionTestDatabase()
+  const fromMs = localMs(9)
+  const toMs = localMs(10)
+  const otherDisplay = DISPLAY_2 + 1
+  insertFocusEvents(db, [
+    displayEvent(fromMs, 'display_visible_changed'),
+    displayEvent(fromMs, 'display_visible_changed', otherDisplay),
+    ...heartbeats(fromMs, toMs),
+    ...heartbeats(fromMs, toMs).map((event) => ({ ...event, display_id: otherDisplay })),
+  ])
+
+  const coverage = getCorrectedPageFactsForRange(db, fromMs, toMs).coverage
+  const dia = coverage.find((entry) => entry.appName === 'Dia' || entry.canonicalBrowserId.includes('dia'))
+  assert.ok(dia)
+  assert.ok(dia.visibleSeconds <= Math.round((toMs - fromMs) / 1000))
   db.close()
 })
 
