@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
+import { CLI_PROVIDERS, cliToolForProvider, isCliProvider } from '@shared/aiProviderState'
 import type { AIProvider, AIProviderMode, ProviderConnectionResult } from '@shared/types'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
@@ -27,24 +28,11 @@ type CLIToolDetection = {
   codex?: string | null
 }
 
-const CLI_PROVIDER_TO_TOOL: Partial<Record<AIProviderMode, keyof CLIToolDetection>> = {
-  'claude-cli': 'claude',
-  'chatgpt-cli': 'chatgpt',
-  'gemini-cli': 'gemini',
-  'codex-cli': 'codex',
-}
-
 const CLI_PROVIDER_BASE: Partial<Record<AIProviderMode, AIProvider>> = {
   'claude-cli': 'anthropic',
   'chatgpt-cli': 'openai',
   'gemini-cli': 'google',
   'codex-cli': 'openai',
-}
-
-const CLI_PROVIDERS: AIProviderMode[] = ['claude-cli', 'chatgpt-cli', 'gemini-cli']
-
-function isCLIProvider(provider: AIProviderMode): boolean {
-  return provider in CLI_PROVIDER_TO_TOOL
 }
 
 function providerLabel(provider: AIProviderMode): string {
@@ -116,20 +104,20 @@ export default function ConnectAI({
   }, [])
 
   const detectedProvider = useMemo(() => detectProviderFromApiKey(apiKey), [apiKey])
-  const activeApiProvider: AIProvider = (isCLIProvider(selectedProvider)
+  const activeApiProvider: AIProvider = (isCliProvider(selectedProvider)
     ? (CLI_PROVIDER_BASE[selectedProvider] ?? detectedProvider ?? 'anthropic')
     : selectedProvider as AIProvider)
   const isEmbedded = variant === 'embedded'
   const selectedProviderConnected = connectedProvider === selectedProvider
-  const selectedCliProvider = isCLIProvider(selectedProvider)
-  const selectedCliTool = CLI_PROVIDER_TO_TOOL[selectedProvider]
+  const selectedCliProvider = isCliProvider(selectedProvider)
+  const selectedCliTool = cliToolForProvider(selectedProvider)
   const selectedCliPath = selectedCliTool ? cliTools[selectedCliTool] : null
   const canSubmitKey = selectedCliProvider ? Boolean(selectedCliPath) : apiKey.trim().length > 0
 
   useEffect(() => {
     if (!detectedProvider) return
     if (selectedProvider === detectedProvider) return
-    if (isCLIProvider(selectedProvider) || AI_PROVIDERS.includes(selectedProvider as AIProvider)) {
+    if (isCliProvider(selectedProvider) || AI_PROVIDERS.includes(selectedProvider as AIProvider)) {
       setSelectedProvider(detectedProvider)
       setFeedback({
         tone: 'neutral',
@@ -144,18 +132,15 @@ export default function ConnectAI({
   }
 
   async function persistConnection(provider: AIProviderMode, key: string | null) {
-    if (key && !isCLIProvider(provider)) {
+    if (key && !isCliProvider(provider)) {
       await ipc.settings.setApiKey(key, provider)
     }
     const currentSettings = await ipc.settings.get()
     await ipc.settings.set({
       aiProvider: provider,
-      // Chat keeps its own provider so a single conversation can be run
-      // elsewhere. Connecting in Settings is the person saying "use this",
-      // so it clears that override — otherwise a chat pinned to an earlier
-      // provider (or to the old 'anthropic' default) silently keeps billing
-      // the account they just switched away from.
-      aiChatProvider: provider,
+      // Connecting in Settings is the account default. Clear any leftover
+      // chat pin so Settings and the picker resolve the same provider.
+      aiChatProvider: null,
       onboardingState: {
         ...currentSettings.onboardingState,
         aiSetupState: 'connected',
@@ -179,14 +164,14 @@ export default function ConnectAI({
     setFeedback(null)
 
     track(ANALYTICS_EVENT.AI_PROVIDER_CONNECTION_STARTED, {
-      connection_kind: isCLIProvider(selectedProvider) ? 'cli' : 'api_key',
-      provider: isCLIProvider(selectedProvider) ? selectedProvider : activeApiProvider,
+      connection_kind: isCliProvider(selectedProvider) ? 'cli' : 'api_key',
+      provider: isCliProvider(selectedProvider) ? selectedProvider : activeApiProvider,
       surface: isEmbedded ? 'settings' : 'ai',
       trigger: 'manual',
     })
 
     try {
-      if (isCLIProvider(selectedProvider)) {
+      if (isCliProvider(selectedProvider)) {
         if (!selectedCliPath) {
           track(ANALYTICS_EVENT.AI_PROVIDER_CONNECTION_FAILED, {
             connection_kind: 'cli',
@@ -293,7 +278,7 @@ export default function ConnectAI({
       }
   const primaryButtonLabel = busy ? 'Connecting…' : 'Connect'
   const cliProviderOptions = CLI_PROVIDERS.filter((provider) => {
-    const tool = CLI_PROVIDER_TO_TOOL[provider]
+    const tool = cliToolForProvider(provider)
     return Boolean(tool && cliTools[tool]) || provider === selectedProvider
   })
 

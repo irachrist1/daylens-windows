@@ -81,7 +81,7 @@ export function registerSettingsHandlers(): void {
     // Only reload Insights when an AI model/provider value actually changed —
     // not merely because the key was present in the saved partial (F42). Saving
     // unrelated settings no longer triggers a full Insights projection reload.
-    const AI_INVALIDATING_KEYS = ['aiProvider', 'anthropicModel', 'openaiModel', 'googleModel', 'openrouterModel']
+    const AI_INVALIDATING_KEYS = ['aiProvider', 'aiChatProvider', 'anthropicModel', 'openaiModel', 'googleModel', 'openrouterModel']
     if (rawChangedKeys.some((key) => AI_INVALIDATING_KEYS.includes(key))) {
       invalidateProjectionScope('insights', 'ai_settings_changed')
     }

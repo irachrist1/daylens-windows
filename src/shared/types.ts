@@ -2379,7 +2379,7 @@ export interface AppSettings {
   // The only per-surface provider override left: an explicit, user-chosen
   // provider for the AI chat tab. Every other surface follows `aiProvider`
   // (invariant #12). When unset, chat follows `aiProvider` too.
-  aiChatProvider?: AIProviderMode
+  aiChatProvider?: AIProviderMode | null
   aiBackgroundEnrichment?: boolean
   aiActiveBlockPreview?: boolean
   aiPromptCachingEnabled?: boolean

@@ -46,6 +46,7 @@ import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariant
 import { claudeCodeChatAvailable, runClaudeCodeChat } from '../agent/claudeCodeChat'
 import { buildAgentSystemPrompt } from '../agent/systemPrompt'
 import { decodeProviderErrorMeta, isHardProviderWall } from '@shared/aiProviderError'
+import { cliToolForProvider, resolveChatSelection } from '@shared/aiProviderState'
 import {
   resolveDayContext,
 } from '../core/query/attributionResolvers'
@@ -3556,26 +3557,24 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     : userMessage
 
   const settings = getSettings()
-  // D4: a per-thread override (provider + model, set together from the catalog)
-  // wins for this thread — but only when that provider has a key.
   const threadSettings = getThreadSettings(threadId)
-  let providerOverride: AIProviderMode | null = null
-  let modelOverride: string | null = null
+  const threadAvailability: Partial<Record<AIProviderMode, boolean>> = {}
   if (threadSettings.provider && threadSettings.model) {
-    const overrideHasKey = threadSettings.provider === 'claude-cli'
-      || threadSettings.provider === 'chatgpt-cli'
-      || threadSettings.provider === 'gemini-cli'
-      || threadSettings.provider === 'codex-cli'
-      || Boolean(await getApiKey(threadSettings.provider))
-    if (overrideHasKey) {
-      providerOverride = threadSettings.provider
-      modelOverride = threadSettings.model
-    }
+    const tool = cliToolForProvider(threadSettings.provider)
+    threadAvailability[threadSettings.provider] = tool
+      ? Boolean((await detectCLITools())[tool])
+      : Boolean(await getApiKey(threadSettings.provider))
   }
+  const selection = resolveChatSelection({
+    settings,
+    thread: threadSettings,
+    providerAvailability: threadAvailability,
+  })
+  const providerOverride = selection.source === 'thread' ? selection.provider : null
   const configs = await resolveProviderConfigsForJob('chat_answer', settings, providerOverride)
   let agentConfig = configs[0]
-  if (modelOverride && providerOverride && agentConfig.provider === providerOverride) {
-    agentConfig = { ...agentConfig, model: modelOverride }
+  if (selection.source === 'thread' && agentConfig.provider === selection.provider) {
+    agentConfig = { ...agentConfig, model: selection.model }
   }
 
   // A CLI provider cannot make the structured tool calls this loop needs, but
