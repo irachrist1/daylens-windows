@@ -114,13 +114,16 @@ no block on any of the 19 ground-truth days is labelled with an app or assistant
 ### 2. Time is credited to the wrong thing
 
 `activity-understanding.md` states the rule: **attention is the budget.** One foreground window
-at a time. Anything that credits more seconds to a domain than the browser was foregrounded is
-wrong by construction. Netflix once took 1249s inside a block where the browsers held ~800
-foreground seconds.
+at a time — that is the application total. Site totals may also fill a browser's full-screen
+second-monitor visible span (DEV-223); they still cannot exceed that browser's in-front time
+plus its own visible time. Netflix once took 1249s inside a block where the browsers held ~800
+foreground seconds — that kind of over-credit, with no visible presence to explain it, is still
+wrong.
 
 - **DEV-246 / #68** — "how long was I on Coursera this week" returned the wrong first number
   because the name was looked up as an app and per-site duration was left to the model.
-  Domain-time questions now resolve through website lookup and a computed `site_total_time`.
+  Domain-time questions now resolve through website lookup and a computed `site_total_time`
+  from the same reconciled website ledger Apps reads, including second-monitor fill.
 - **DEV-290 / #112** — `HISTORY_FILL_MAX_MS` lets a titleless browser credit up to 4h to its
   last-visited page, usually Netflix or YouTube. The original ticket said to populate
   `browser_context_events`; that table was dropped (`migrations.ts:2071`). The restated
@@ -129,8 +132,9 @@ foreground seconds.
   browsers at two minutes.
 - **DEV-238 / #60** — half of browser time has no page attached.
 
-**Done when:** no domain's credited seconds exceed its browser's foreground seconds in the same
-interval, on all 19 eval days; and ten random domain-time questions match `website_visits`.
+**Done when:** no domain's credited seconds exceed its browser's in-front plus second-display
+visible seconds in the same interval, on all 19 eval days; and ten random domain-time questions
+match the reconciled website ledger Timeline and Apps already read.
 
 ### 3. Startup and navigation are slow
 
@@ -204,7 +208,7 @@ restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan,
 interpretation-agent packet runtime behind `interpretationAgentEnabled` — #109.
 
 **Half-built.**
-- ~~`site_total_time` missing from `DeterministicFactKind`~~ — #68; domain-time questions now compute and enforce a site total
+- ~~`site_total_time` missing from `DeterministicFactKind`~~ — #68 / DEV-223; domain-time questions compute and enforce a site total from the reconciled ledger, including second-monitor fill
 - Context Inspector: backend fills `ChatAgentResult.evidence`, no UI reads it
 - ~~command palette never reaches `planRetrieval`~~ — **not true**;
   `search.handlers.ts:56` returns `planRetrieval(...)`
