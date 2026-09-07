@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Copy, Pencil, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
-import type { AIModelCostCatalog, AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
 import { buildModelSources } from '@shared/aiModelSources'
+import {
+  chatProvider,
+  cliToolForProvider,
+  modelSettingForProvider,
+  resolveChatSelection,
+} from '@shared/aiProviderState'
+import type { AIModelCostCatalog, AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META } from '../../lib/aiProvider'
@@ -27,18 +33,6 @@ import { ANSWER_TRANSFORMS, type ThreadMessage } from './types'
 
 const SIDEBAR_COLLAPSED_KEY = 'daylens.ai.sidebarCollapsed'
 
-// Map a chat provider to the settings key holding its chosen model, so picking a
-// model for a brand-new (thread-less) chat updates the right global default.
-const PROVIDER_MODEL_KEY: Record<AIProviderMode, 'anthropicModel' | 'openaiModel' | 'googleModel' | 'openrouterModel'> = {
-  anthropic: 'anthropicModel',
-  'claude-cli': 'anthropicModel',
-  openai: 'openaiModel',
-  'chatgpt-cli': 'openaiModel',
-  'codex-cli': 'openaiModel',
-  google: 'googleModel',
-  'gemini-cli': 'googleModel',
-  openrouter: 'openrouterModel',
-}
 
 export default function AIWorkspace() {
   const chat = useAIChat()
@@ -136,6 +130,7 @@ export default function AIWorkspace() {
   const modelSources = useMemo(() => buildModelSources({
     providerAvailability,
     billing: billingAccess,
+    purpose: 'chat',
   }), [providerAvailability, billingAccess])
   useEffect(() => {
     if (!modelSelectorOpen) return
@@ -426,10 +421,19 @@ export default function AIWorkspace() {
     }
     if (provider && model) {
       try {
-        await ipc.settings.set({ aiChatProvider: provider, [PROVIDER_MODEL_KEY[provider]]: model })
+        await ipc.settings.set({
+          aiProvider: provider,
+          aiChatProvider: null,
+          [modelSettingForProvider(provider)]: model,
+        })
         await refreshProvider()
       } catch { /* best-effort */ }
+      return
     }
+    try {
+      await ipc.settings.set({ aiChatProvider: null })
+      await refreshProvider()
+    } catch { /* best-effort */ }
   }, [activeThreadId, threadSettings.instructions, refreshProvider])
 
   // ── Load gate ──────────────────────────────────────────────────────────────
@@ -453,23 +457,19 @@ export default function AIWorkspace() {
     )
   }
 
-  const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
+  const activeChatProvider = chatProvider(settings)
   const providerMeta = AI_PROVIDER_META[activeChatProvider]
   const modelLabel = providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
-  // D4: when this thread overrides the model, the subline shows THAT model.
-  const overrideActive = Boolean(threadSettings.provider && threadSettings.model)
-  const displayProviderMeta = AI_PROVIDER_META[overrideActive ? threadSettings.provider! : activeChatProvider]
-  const displayModelId = overrideActive ? threadSettings.model! : activeModel
+  const selection = resolveChatSelection({
+    settings,
+    thread: threadSettings,
+    providerAvailability,
+  })
+  const overrideActive = selection.source === 'thread'
+  const displayProviderMeta = AI_PROVIDER_META[selection.provider]
+  const displayModelId = selection.model
   const displayModelLabel = displayProviderMeta.models.find((m) => m.id === displayModelId)?.label ?? displayModelId ?? displayProviderMeta.shortLabel
-  const cliTool = activeChatProvider === 'claude-cli'
-    ? 'claude'
-    : activeChatProvider === 'chatgpt-cli'
-      ? 'chatgpt'
-      : activeChatProvider === 'gemini-cli'
-        ? 'gemini'
-        : activeChatProvider === 'codex-cli'
-          ? 'codex'
-          : null
+  const cliTool = cliToolForProvider(activeChatProvider)
   const isCliProvider = Boolean(cliTool)
   const cliMissing = cliTool ? !cliTools?.[cliTool] : false
   const hasMessages = messages.length > 0
