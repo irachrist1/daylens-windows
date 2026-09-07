@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Copy, Pencil, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
+import { Activity, Copy, Pencil, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import type { AIModelCostCatalog, AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
 import { buildModelSources } from '@shared/aiModelSources'
@@ -32,11 +32,13 @@ import { MessageList } from './MessageList'
 import { AgentQuestionCard } from './AgentQuestionCard'
 import { ModelSelector } from './ModelSelector'
 import { ThreadSettingsPanel } from './ThreadSettingsPanel'
+import { McpActivityPanel } from './McpActivityPanel'
 import { IconChevronDown, IconNewChat, IconSidebar, IconSparkle } from './icons'
 import { useAIChat } from './useAIChat'
 import { ANSWER_TRANSFORMS, type ThreadMessage } from './types'
 
 const SIDEBAR_COLLAPSED_KEY = 'daylens.ai.sidebarCollapsed'
+const MCP_ACTIVITY_OPEN_KEY = 'daylens.ai.mcpActivityOpen'
 
 // Map a chat provider to the settings key holding its chosen model, so picking a
 // model for a brand-new (thread-less) chat updates the right global default.
@@ -116,6 +118,17 @@ export default function AIWorkspace() {
     // FB4: hidden by default — only an explicit "open" choice persists as '0'.
     try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) !== '0' } catch { return true }
   })
+  const [mcpActivityOpen, setMcpActivityOpen] = useState(() => {
+    try { return localStorage.getItem(MCP_ACTIVITY_OPEN_KEY) === '1' } catch { return false }
+  })
+
+  const toggleMcpActivity = useCallback(() => {
+    setMcpActivityOpen((open) => {
+      const next = !open
+      try { localStorage.setItem(MCP_ACTIVITY_OPEN_KEY, next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }, [])
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((collapsed) => {
@@ -624,6 +637,16 @@ export default function AIWorkspace() {
         )}
         <button
           type="button"
+          onClick={toggleMcpActivity}
+          title={mcpActivityOpen ? 'Hide MCP activity' : 'Show MCP activity'}
+          aria-label={mcpActivityOpen ? 'Hide MCP activity' : 'Show MCP activity'}
+          aria-pressed={mcpActivityOpen}
+          style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: mcpActivityOpen ? 'var(--color-surface-high)' : 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >
+          <Activity size={16} strokeWidth={1.8} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
           onClick={onNewChat}
           title="New chat (⌘N)"
           aria-label="New chat"
@@ -815,6 +838,17 @@ export default function AIWorkspace() {
           onSaved={(next) => setThreadSettings(next)}
         />
       )}
+      <div
+        style={{
+          flexShrink: 0,
+          width: mcpActivityOpen ? 280 : 0,
+          overflow: 'hidden',
+          transition: 'width 200ms cubic-bezier(0.22, 0.61, 0.36, 1)',
+        }}
+        aria-hidden={!mcpActivityOpen}
+      >
+        {mcpActivityOpen && <McpActivityPanel />}
+      </div>
     </div>
   )
 }
