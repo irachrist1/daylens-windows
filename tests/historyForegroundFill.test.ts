@@ -245,7 +245,7 @@ test('an unverifiable window mode still yields no live page capture, only the sa
   db.close()
 })
 
-test('an unverifiable Chromium tab persists once non-private history names the same page', () => {
+test('an unverifiable Chromium tab stays unpublished when history names the same page', () => {
   const db = createProductionTestDatabase()
   seedHistoryVisit(db, localMs(9, 12), 30, 'https://www.coursera.org/learn/ml', 'Supervised ML | Coursera')
   const tracker = new ActiveBrowserContextTracker(
@@ -254,14 +254,14 @@ test('an unverifiable Chromium tab persists once non-private history names the s
   )
 
   const sample = tracker.sample(db, snapshot())
-  assert.equal(sample.windowModeUnverified, undefined)
+  assert.equal(sample.windowModeUnverified, true)
   tracker.sample(db, snapshot({ capturedAt: localMs(9, 14) }))
-  assert.equal(tracker.flush(db, localMs(9, 15)), true)
+  assert.equal(tracker.flush(db, localMs(9, 15)), false)
 
   const rows = db.prepare(`
     SELECT domain, source FROM website_visits WHERE source = 'active_browser_context'
   `).all() as { domain: string; source: string }[]
-  assert.deepEqual(rows, [{ domain: 'coursera.org', source: 'active_browser_context' }])
+  assert.deepEqual(rows, [])
   db.close()
 })
 
