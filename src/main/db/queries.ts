@@ -3154,6 +3154,23 @@ const KEY_SEP = String.fromCharCode(0)
 // so a domain's reconciled total and the sum of its pages' reconciled
 // totals can never disagree by construction - they're unions of the same
 // underlying credited intervals, just grouped at different granularity.
+export interface VisiblePresenceInterval {
+  bundleId: string | null
+  appName?: string | null
+  canonicalAppId?: string | null
+  start: number
+  end: number
+}
+
+export interface ReconcileWebsiteVisitOptions {
+  allowUntrackedGaps?: boolean
+  // Full-screen / second-monitor presence for the same browsers. History
+  // fill and stored-duration clip may attach page time here. These windows
+  // never enter the overall-foreground gap calculation — a focused app on
+  // another display still owns the attention budget.
+  visiblePresence?: readonly VisiblePresenceInterval[]
+}
+
 function reconcileWebsiteVisits(
   db: Database.Database,
   fromMs: number,
@@ -3171,7 +3188,7 @@ function reconcileWebsiteVisits(
   // sessions AND the gap allowance, so a browser Daylens never saw as a
   // session still counts while it was demonstrably the only thing running.
   // Defaults to the old coupling, so every existing caller is unchanged.
-  options: { allowUntrackedGaps?: boolean } = {},
+  options: ReconcileWebsiteVisitOptions = {},
 ): ReconciledVisitCredit[] {
   const allowUntrackedGaps = options.allowUntrackedGaps ?? !foregroundSessions
   const whereExtra = browserBundleId ? ' AND browser_bundle_id = ?' : ''
@@ -3220,6 +3237,28 @@ function reconcileWebsiteVisits(
       const byCanonical = foregroundByCanonical.get(session.canonicalAppId)
       if (byCanonical) byCanonical.push(interval)
       else foregroundByCanonical.set(session.canonicalAppId, [interval])
+    }
+  }
+
+  // Second-monitor / full-screen presence joins the per-browser maps only.
+  // allForeground (gap calculation) stays input-focused, so Notion on
+  // monitor 1 still owns the attention budget while Dia is visible on 2.
+  for (const span of options.visiblePresence ?? []) {
+    const interval = { start: span.start, end: span.end }
+    if (interval.end <= interval.start) continue
+    if (span.bundleId) {
+      const byBundle = foregroundByBundle.get(span.bundleId)
+      if (byBundle) byBundle.push(interval)
+      else foregroundByBundle.set(span.bundleId, [interval])
+    }
+    const canonical = span.canonicalAppId
+      ?? ((span.bundleId || span.appName)
+        ? resolveCanonicalApp(span.bundleId ?? '', span.appName ?? '').canonicalAppId
+        : null)
+    if (canonical) {
+      const byCanonical = foregroundByCanonical.get(canonical)
+      if (byCanonical) byCanonical.push(interval)
+      else foregroundByCanonical.set(canonical, [interval])
     }
   }
 
@@ -3416,17 +3455,17 @@ function reconcileWebsiteVisits(
       ? mergeIntervals([...foregroundPieces, ...untracked])
       : foregroundOnly
     // History-corroborated fill (capture spec: page detail attaches to an
-    // unverifiable-mode browser only via its own non-private history, and an
-    // active page interval is clipped to its owning foreground interval). A
+    // unverifiable-mode browser only via its own non-private history). A
     // history row's stored duration is a navigation-gap guess — a browser
     // whose tabs can't be read live (Dia) records ONE row for a two-hour
     // single-page stay, so summing stored durations loses the morning. The
-    // last known page in a browser may instead fill that browser's own
-    // verified foreground time until the next recorded navigation, bounded by
-    // HISTORY_FILL_MAX_MS — or HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS when
-    // a titleless browser's last row is an entertainment host with no live
-    // tab sample. Live active-tab samples still claim their seconds first,
-    // so this only fills time no better evidence owns.
+    // last known page may fill that browser's verified foreground time AND
+    // its secondary-display visible time until the next recorded navigation,
+    // bounded by HISTORY_FILL_MAX_MS — or HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS
+    // when a titleless browser's last row is an entertainment host with no
+    // live tab sample. Live active-tab samples still claim their seconds first.
+    // Visible time never adds to app totals; it only lets the page explain a
+    // span the display stream already proved.
     const ascendingHistory = [...browserVisits].sort((a, b) => a.visit_time - b.visit_time || a.id - b.id)
     const browserIsTitleless = browserGroupIsTitleless(sessionsForRange, browserVisits)
     const corroboratedMediaDomains = new Set<string>()
@@ -3749,7 +3788,7 @@ export function getReconciledWebsiteVisitsForRange(
   // Corrected-read callers pass shared-query sessions so page credit clips to
   // the same foreground ownership their app totals are built from.
   foregroundSessions?: readonly AppSession[],
-  options: { allowUntrackedGaps?: boolean } = {},
+  options: ReconcileWebsiteVisitOptions = {},
 ): ReconciledPageVisit[] {
   return reconcileWebsiteVisits(db, fromMs, toMs, undefined, foregroundSessions, options).map(({ visit, freeIntervals }) => ({
     visit: {
@@ -3789,13 +3828,18 @@ export function getReconciledDomainIntervals(
   toMs: number,
   domainFilter?: (domain: string) => boolean,
   foregroundSessionsForRange?: (fromMs: number, toMs: number) => readonly AppSession[],
+  visiblePresenceForRange?: (fromMs: number, toMs: number) => readonly VisiblePresenceInterval[],
 ): DomainCreditInterval[] {
   const DAY_MS = 24 * 60 * 60 * 1000
   const out: DomainCreditInterval[] = []
   for (let chunkStart = fromMs; chunkStart < toMs; chunkStart += DAY_MS) {
     const chunkEnd = Math.min(chunkStart + DAY_MS, toMs)
     const foreground = foregroundSessionsForRange?.(chunkStart, chunkEnd)
-    for (const { visit, freeIntervals } of reconcileWebsiteVisits(db, chunkStart, chunkEnd, undefined, foreground)) {
+    const visiblePresence = visiblePresenceForRange?.(chunkStart, chunkEnd)
+    for (const { visit, freeIntervals } of reconcileWebsiteVisits(
+      db, chunkStart, chunkEnd, undefined, foreground,
+      visiblePresence && visiblePresence.length > 0 ? { visiblePresence } : {},
+    )) {
       if (!visit.domain) continue
       if (domainFilter && !domainFilter(visit.domain)) continue
       for (const interval of freeIntervals) {
