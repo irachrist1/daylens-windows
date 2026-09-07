@@ -110,9 +110,11 @@ func main() {
     if event.isAllDay { continue }
     let title = (event.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     if title.isEmpty { continue }
-    let parts = calendar.dateComponents([.hour, .minute], from: event.startDate)
+    let clippedStart = max(event.startDate, interval.start)
+    let clippedEnd = min(event.endDate, interval.end)
+    let parts = calendar.dateComponents([.hour, .minute], from: clippedStart)
     guard let hour = parts.hour, let minute = parts.minute else { continue }
-    let duration = Int((event.endDate.timeIntervalSince(event.startDate) / 60.0).rounded())
+    let duration = Int((clippedEnd.timeIntervalSince(clippedStart) / 60.0).rounded())
     if duration < 0 { continue }
     let attendees = event.attendees
     let attendeeCount: Int? = {
