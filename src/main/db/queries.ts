@@ -33,6 +33,7 @@ import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 import { activityCategoryLabel, canonicalAppCategory } from '@shared/activityCategories'
+import { policyForHost } from '@shared/domainPolicy'
 import { REAL_ABSENCE_MIN_MS } from '../lib/absenceGuard'
 import { adoptWebsiteVisitWrite } from '../services/entities/entityAdoption'
 
@@ -101,6 +102,13 @@ const SESSION_OVERLAP_LOOKBACK_MS = 12 * 60 * 60 * 1000
 // (see reconcileWebsiteVisits). Long enough for a whole morning on one course
 // page; anything beyond stays an honest "no page recorded" remainder.
 const HISTORY_FILL_MAX_MS = 4 * 60 * 60 * 1000
+// Titleless browsers (Dia: no window titles, no live tab events) otherwise
+// hand this whole cap to the last history row — often Netflix/YouTube sitting
+// behind hours of work. Entertainment policy hosts get only the same 2-minute
+// window already used to treat a history row as recent enough to be the
+// active tab (browserContext RECENT_HISTORY_LOOKBACK_MS). A live
+// active_browser_context row for that host lifts the restriction.
+const HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS = 2 * 60 * 1000
 
 // Columns hydrated into AppSessionRow / clipRowToRange. Selecting them
 // explicitly (instead of SELECT *) keeps these hot range reads from pulling
@@ -3090,6 +3098,37 @@ interface ReconciledVisitCredit {
   freeIntervals: { start: number; end: number }[]
 }
 
+function sessionMatchesBrowserVisit(session: AppSession, visit: ReconciledVisitRow): boolean {
+  if (visit.browser_bundle_id && session.bundleId === visit.browser_bundle_id) return true
+  if (visit.canonical_browser_id && session.canonicalAppId === visit.canonical_browser_id) return true
+  return false
+}
+
+function browserGroupIsTitleless(
+  sessions: readonly AppSession[],
+  browserVisits: readonly ReconciledVisitRow[],
+): boolean {
+  const matching = sessions.filter((session) =>
+    browserVisits.some((visit) => sessionMatchesBrowserVisit(session, visit)))
+  if (matching.length === 0) return true
+  return matching.every((session) => !session.windowTitle?.trim())
+}
+
+function historyFillCapMs(
+  visit: ReconciledVisitRow,
+  browserIsTitleless: boolean,
+  corroboratedMediaDomains: ReadonlySet<string>,
+): number {
+  if (
+    browserIsTitleless
+    && policyForHost(visit.domain) === 'entertainment'
+    && !corroboratedMediaDomains.has(visit.domain)
+  ) {
+    return HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS
+  }
+  return HISTORY_FILL_MAX_MS
+}
+
 // One key separator used to keep composite Map keys unambiguous even when
 // a domain or browser id happens to contain a space or other punctuation.
 const KEY_SEP = String.fromCharCode(0)
@@ -3166,7 +3205,8 @@ function reconcileWebsiteVisits(
   const foregroundByBundle = new Map<string, { start: number; end: number }[]>()
   const foregroundByCanonical = new Map<string, { start: number; end: number }[]>()
   const allForeground: { start: number; end: number }[] = []
-  for (const session of foregroundSessions ?? getSessionsForRange(db, fromMs, toMs)) {
+  const sessionsForRange = foregroundSessions ?? getSessionsForRange(db, fromMs, toMs)
+  for (const session of sessionsForRange) {
     const interval = {
       start: session.startTime,
       end: session.endTime ?? (session.startTime + session.durationSeconds * 1000),
@@ -3383,16 +3423,25 @@ function reconcileWebsiteVisits(
     // single-page stay, so summing stored durations loses the morning. The
     // last known page in a browser may instead fill that browser's own
     // verified foreground time until the next recorded navigation, bounded by
-    // HISTORY_FILL_MAX_MS. Live active-tab samples still claim their seconds
-    // first, so this only fills time no better evidence owns.
+    // HISTORY_FILL_MAX_MS — or HISTORY_FILL_UNCORROBORATED_MEDIA_MAX_MS when
+    // a titleless browser's last row is an entertainment host with no live
+    // tab sample. Live active-tab samples still claim their seconds first,
+    // so this only fills time no better evidence owns.
     const ascendingHistory = [...browserVisits].sort((a, b) => a.visit_time - b.visit_time || a.id - b.id)
+    const browserIsTitleless = browserGroupIsTitleless(sessionsForRange, browserVisits)
+    const corroboratedMediaDomains = new Set<string>()
+    for (const visit of browserVisits) {
+      if (visit.source === 'active_browser_context' && policyForHost(visit.domain) === 'entertainment') {
+        corroboratedMediaDomains.add(visit.domain)
+      }
+    }
     const historyFillEnd = new Map<number, number>()
     for (let index = 0; index < ascendingHistory.length; index++) {
       const visit = ascendingHistory[index]
       if (visit.source === 'active_browser_context') continue
       const storedEndMs = visit.visit_time + visit.duration_sec * 1000
       const nextStartMs = ascendingHistory[index + 1]?.visit_time ?? Number.POSITIVE_INFINITY
-      const fillEnd = Math.min(nextStartMs, storedEndMs + HISTORY_FILL_MAX_MS)
+      const fillEnd = Math.min(nextStartMs, storedEndMs + historyFillCapMs(visit, browserIsTitleless, corroboratedMediaDomains))
       if (fillEnd > storedEndMs) historyFillEnd.set(visit.id, fillEnd)
     }
     // The observed active tab beats a history record; among equals the later
