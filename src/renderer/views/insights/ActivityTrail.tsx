@@ -13,6 +13,7 @@ import {
   collapseTrail,
   liveTrailRows,
   shortToolChip,
+  showSettledActivity,
   stepsFromToolTrace,
   summarizeAgentTurn,
   formatWorkedDuration,
@@ -162,7 +163,7 @@ const pillStyle: React.CSSProperties = {
 /**
  * The settled trail on a completed answer: a collapsed "Worked for…" line
  * that expands into one-line tool narration and inline tool-status chips.
- * Renders nothing for a greeting that did no visible work.
+ * A recorded packet still shows Sources when the turn left no trail rows.
  */
 export function SettledActivityTrail({
   message,
@@ -181,21 +182,24 @@ export function SettledActivityTrail({
   const steps = stepsFromToolTrace(agent.toolTrace)
   const summary = summarizeAgentTurn(agent)
   const worked = summary?.label ?? ''
-  const hasVisibleWork = steps.length > 0 || (summary?.citationCount ?? 0) > 0
-  if (!hasVisibleWork) return null
+  const citationCount = summary?.citationCount ?? 0
+  const hasVisibleWork = steps.length > 0 || citationCount > 0
+  if (!showSettledActivity({ hasSteps: steps.length > 0, citationCount, canInspect })) return null
   const chips = summary?.toolsConsulted ?? []
   return (
     <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-        <button
-          type="button"
-          onClick={() => setShowSteps((value) => !value)}
-          aria-expanded={showSteps}
-          title={showSteps ? 'Hide the steps this answer took' : 'Show the steps this answer took'}
-          style={{ ...pillStyle, cursor: 'pointer', color: 'var(--color-text-secondary)' }}
-        >
-          {showSteps ? '▾' : '▸'} {worked || 'Worked'}
-        </button>
+        {hasVisibleWork && (
+          <button
+            type="button"
+            onClick={() => setShowSteps((value) => !value)}
+            aria-expanded={showSteps}
+            title={showSteps ? 'Hide the steps this answer took' : 'Show the steps this answer took'}
+            style={{ ...pillStyle, cursor: 'pointer', color: 'var(--color-text-secondary)' }}
+          >
+            {showSteps ? '▾' : '▸'} {worked || 'Worked'}
+          </button>
+        )}
         {showSteps && chips.map((consulted) => (
           <span key={consulted.tool} style={pillStyle}>{shortToolChip(consulted.tool)}</span>
         ))}

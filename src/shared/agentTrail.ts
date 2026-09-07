@@ -239,6 +239,16 @@ const TOOL_CHIP_LABELS: Record<string, string> = {
   forget_memory: 'Forget',
 }
 
+/** Settled trail (or a lone Sources chip) when the turn did visible work
+ *  or a recorded packet can be inspected. */
+export function showSettledActivity(input: {
+  hasSteps: boolean
+  citationCount: number
+  canInspect: boolean
+}): boolean {
+  return input.hasSteps || input.citationCount > 0 || input.canInspect
+}
+
 /** Short inline chip for a consulted tool — a status, not a file path. */
 export function shortToolChip(tool: string): string {
   if (tool.startsWith('mcp_')) return 'Connected source'

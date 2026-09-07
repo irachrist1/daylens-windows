@@ -58,7 +58,7 @@ import {
 
 /** Bump when the assembly rules change; part of every packet and fingerprint,
  *  so two packets are only comparable under the same policy. */
-export const CONTEXT_POLICY_VERSION = 3
+export const CONTEXT_POLICY_VERSION = 4
 
 export type ContextItemKind =
   | 'day_fact'
@@ -485,7 +485,7 @@ const SOCIAL_WORDS = new Set([
 ])
 
 const DAY_FACT_RE =
-  /\b(today|yesterday|tomorrow|this week|last week|this month|last month|\d+\s+days?\s+ago|last\s+\d+\s+days|timeline|how (?:much|long)|what did i (?:do|work)|how was my day|this morning|this afternoon|tonight|hours?\b|spend|spent)\b/i
+  /\b(?:today|yesterday|tomorrow|this week|last week|this month|last month|\d+\s+days?\s+ago|last\s+\d+\s+days|timeline|how (?:much|long)|what did i (?:do|work)|how(?:'s|s)? (?:my |the )?day|how (?:was|did|is|goes|went) (?:my |the )?day|(?:show|tell|recap|summar(?:y|ise|ize)|review|walk)(?: me)?(?: through)? (?:my |the )?day|this morning|this afternoon|tonight|hours?\b|spend|spent)\b/i
 
 /** Greetings and chitchat attach almost nothing. A real question still can. */
 export function questionAttachesRetrieval(question: string): boolean {
@@ -519,14 +519,25 @@ const GENERIC_FILE_BODY_TOKENS = new Set([
   'read', 'reading', 'about',
 ])
 
-function fileMatchesQuestion(basename: string, derived: string, tokens: string[]): boolean {
+function tokenHaystack(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+}
+
+function tokenInHaystack(token: string, haystack: string[]): boolean {
+  return haystack.includes(token)
+}
+
+/** A granted file joins the packet when a question token is a whole word in
+ *  its basename, or a distinctive token is a whole word in the extracted
+ *  text. Substring hits ("art" in "started", "log" in "catalog") do not count. */
+export function fileMatchesQuestion(basename: string, derived: string, tokens: string[]): boolean {
   if (tokens.length === 0) return false
-  const nameHaystack = basename.toLowerCase()
-  if (tokens.some((token) => nameHaystack.includes(token))) return true
+  const nameTokens = tokenHaystack(basename)
+  if (tokens.some((token) => tokenInHaystack(token, nameTokens))) return true
   const distinctive = tokens.filter((token) => !GENERIC_FILE_BODY_TOKENS.has(token))
   if (distinctive.length === 0) return false
-  const body = derived.toLowerCase()
-  return distinctive.some((token) => body.includes(token))
+  const bodyTokens = tokenHaystack(derived)
+  return distinctive.some((token) => tokenInHaystack(token, bodyTokens))
 }
 
 function fmtClock(ms: number): string {

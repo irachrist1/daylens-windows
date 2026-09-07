@@ -11,6 +11,7 @@ import {
   formatWorkedDuration,
   liveTrailRows,
   shortToolChip,
+  showSettledActivity,
   statusForTool,
   stepsFromToolTrace,
   summarizeAgentTurn,
@@ -313,6 +314,13 @@ test('summary label degrades honestly when the turn touched less', () => {
 
   const nothing = summarizeAgentTurn({ toolTrace: [], fileDisclosures: [], citations: [] })
   assert.equal(nothing?.label, '')
+})
+
+test('a recorded packet still shows Sources when the turn left no trail or citations', () => {
+  assert.equal(showSettledActivity({ hasSteps: false, citationCount: 0, canInspect: true }), true)
+  assert.equal(showSettledActivity({ hasSteps: false, citationCount: 0, canInspect: false }), false)
+  assert.equal(showSettledActivity({ hasSteps: true, citationCount: 0, canInspect: false }), true)
+  assert.equal(showSettledActivity({ hasSteps: false, citationCount: 2, canInspect: false }), true)
 })
 
 test('formatWorkedDuration matches the Codex Xm Ys line', () => {
