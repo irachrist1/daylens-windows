@@ -32,7 +32,7 @@ It should say:
 
 It should not lead with “the editor was active,” “the calendar contained,” or “based on the available metadata.”
 
-A short observation such as “Solid session there” is welcome when it is relevant and supported. The agent does not assign productivity scores, diagnose distraction, or turn incomplete observation into a personal judgment.
+A short observation such as “Solid session there” is welcome when it is relevant and supported. The agent may report the live focus score and distraction-profile facts when those numbers are in the evidence. It does not turn incomplete observation into a personal judgment.
 
 When evidence conflicts, it names the conflict naturally: “I found the meeting on your calendar, but no matching device or Granola activity.”
 
@@ -158,6 +158,8 @@ The agent may propose saving a durable fact or preference only when it would cle
 The proposal shows the exact fact and how it will be used. Saving requires confirmation. Silence, continuing the conversation, or accepting an answer is not confirmation.
 
 ## Models
+
+The shipping default is Claude Haiku 4.5 (`claude-haiku-4-5` on desktop, `claude-haiku-4-5-20251001` on the web companion). Settings and the chat picker resolve the same account provider and model. A thread may override that choice for one conversation; otherwise the next answer uses the Settings selection.
 
 People choose their managed model. The model picker shows:
 

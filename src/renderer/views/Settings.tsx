@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { ChevronDown, Search } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
+import { cliToolForProvider } from '@shared/aiProviderState'
 import type {
   AppCategory,
   AppSettings,
@@ -1185,7 +1186,7 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'entities', label: 'Entities', keywords: 'people meetings repositories projects clients files pages apps merge rename alias durable' },
       { id: 'fileAccess', label: 'Agent file access', keywords: 'files folders grant revoke disclosure read permission model indexed observed granola meeting notes terminal commands capability' },
       { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
-      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
+      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals claude desktop claude code cursor' },
     ],
   },
   {
@@ -1417,14 +1418,6 @@ type CLIToolDetection = {
   chatgpt: string | null
   gemini: string | null
   codex: string | null
-}
-
-function cliToolForProvider(provider: string): keyof CLIToolDetection | null {
-  if (provider === 'claude-cli') return 'claude'
-  if (provider === 'chatgpt-cli') return 'chatgpt'
-  if (provider === 'gemini-cli') return 'gemini'
-  if (provider === 'codex-cli') return 'codex'
-  return null
 }
 
 // The provider's display name, or null when we don't have a friendly label —
@@ -2549,6 +2542,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     const next = { ...(settings.enrichmentSources ?? {}), [key]: value }
     if (!await persist({ enrichmentSources: next })) return
     setEnrichmentSources((prev) => prev && ({
+      ...prev,
       mcpServers: prev.mcpServers.map((s) => (`mcp:${s.name}` === key ? { ...s, enabled: value } : s)),
       focusApps: prev.focusApps.map((f) => (`focus:${f.app}` === key ? { ...f, enabled: value } : f)),
     }))
@@ -3465,7 +3459,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             <SuppliedMemorySection reloadToken={suppliedReloadToken} />
 
             {/* DEV-183: the recorded-context browser — every AI exchange's
-                packet, openable into the read-only "What the AI saw" view. */}
+                packet, openable into the read-only sources inspector. */}
             <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
               <ContextPacketSection />
             </div>
@@ -3911,7 +3905,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   step={1}
                   value={settings.distractionAlertThresholdMinutes ?? 10}
                   onChange={(event) => {
-                    const minutes = Math.max(1, Number(event.target.value) || 10)
+                    const minutes = Math.min(60, Math.max(1, Number(event.target.value) || 10))
                     void persist({ distractionAlertThresholdMinutes: minutes })
                     void ipc.distractionAlerter.setThreshold({ minutes })
                   }}
@@ -4119,12 +4113,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'enrichment':
       content = (
-        <SectionPage title="Enrichment sources" description="Optional local sources that make your Wrapped richer: what you shipped, what meetings you had, when you focused. Everything stays on this machine. Git and calendar are read automatically when the tools exist; focus apps and MCP servers stay off until you turn them on.">
+        <SectionPage title="Enrichment sources" description="Optional local sources that make your Wrapped richer: what you shipped, what meetings you had, when you focused. Everything stays on this machine. Git and calendar are read automatically from this computer; focus apps and MCP servers stay off until you turn them on.">
           <div style={{ display: 'grid', gap: 24 }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>Always available</div>
               <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
-                Git commits and calendar events are read automatically when the tools exist on this machine (git, the gh CLI, icalBuddy). Nothing to configure.
+                Git commits are read when git (and optionally the gh CLI) exist on this machine. Calendar events come from this computer's calendars — Apple Calendar on macOS after one permission prompt, Outlook on Windows when it is installed. Nothing to configure.
               </div>
             </div>
             <div>
@@ -4133,7 +4127,14 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Looking for installed servers…</div>
               ) : enrichmentSources.mcpServers.length === 0 ? (
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                  None found in your Claude Desktop config. If you use Notion, Linear, or Jira through MCP, they'll show up here as future wrap sources.
+                  None found. Daylens checked these files:
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {enrichmentSources.mcpConfigFiles.map((file) => (
+                      <li key={`${file.label}:${file.displayPath}`}>
+                        {file.label} (<code style={{ fontSize: 11 }}>{file.displayPath}</code>)
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               ) : (
                 enrichmentSources.mcpServers.map((server, i) => (
@@ -4141,7 +4142,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                     key={server.name}
                     first={i === 0}
                     title={server.name}
-                    description={`Discovered in your Claude Desktop config (${server.transport}). Turning it on marks it as a wrap source; Daylens doesn't read it yet.`}
+                    description={`Discovered in ${server.sourceLabel} (${server.transport}). Turning it on marks it as a wrap source; Daylens doesn't read it yet.`}
                     control={
                       <Toggle
                         checked={server.enabled}

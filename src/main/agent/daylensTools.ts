@@ -332,9 +332,9 @@ export function buildDaylensTools(db: Database.Database) {
     }),
 
     get_app_usage: tool({
-      description: 'Time in one app over a date range: totals, per-day breakdown, sessions. The same numbers the Apps screen shows.',
+      description: 'Time on one app OR website/domain over a date range: totals, per-day breakdown, sessions or visits. The same numbers the Apps screen shows. Use this for "how long on Coursera / YouTube / github.com" as well as "how long in Slack". Sites are not apps — look the name up here, not via session search.',
       inputSchema: z.object({
-        appName: z.string().min(1),
+        appName: z.string().min(1).describe('App or website name, e.g. "Slack", "Coursera", "youtube.com"'),
         startDate: DATE.optional(),
         endDate: DATE.optional(),
       }),

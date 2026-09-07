@@ -10,7 +10,7 @@ export interface AIComposeHandle {
 }
 
 interface AIComposeProps {
-  onSubmit: (text: string) => void
+  onSubmit: (text: string) => boolean
   loading: boolean
   // While loading, the send button becomes Stop and calls this — it aborts
   // the in-flight provider request, not just the spinner.
@@ -20,6 +20,8 @@ interface AIComposeProps {
   // which discards the turn.
   onPause?: () => void
   placeholder?: string
+  initialValue?: string
+  onValueChange?: (text: string) => void
   variant?: 'docked' | 'starter'
 }
 
@@ -67,10 +69,11 @@ function serializeEditor(el: HTMLElement): string {
 }
 
 function AIComposeImpl(
-  { onSubmit, loading, onCancel, onPause, placeholder, variant = 'docked' }: AIComposeProps,
+  { onSubmit, loading, onCancel, onPause, placeholder, initialValue = '', onValueChange, variant = 'docked' }: AIComposeProps,
   ref: ForwardedRef<AIComposeHandle>,
 ) {
   const editorRef = useRef<HTMLDivElement>(null)
+  const initialValueRef = useRef(initialValue)
   const [empty, setEmpty] = useState(true)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [menuIndex, setMenuIndex] = useState(0)
@@ -100,7 +103,10 @@ function AIComposeImpl(
     setValue: setEditorValue,
   }), [setEditorValue])
 
-  useEffect(() => { editorRef.current?.focus() }, [])
+  useEffect(() => {
+    if (initialValueRef.current) setEditorValue(initialValueRef.current)
+    else editorRef.current?.focus()
+  }, [setEditorValue])
 
   const loadEntities = useCallback(() => {
     if (entitiesLoadedRef.current) return
@@ -152,6 +158,7 @@ function AIComposeImpl(
     const isEmpty = serialized.replace(/\u00A0/g, '').trim() === '' && editor.querySelector('.dl-mention') == null
     setEmpty(isEmpty)
     editor.dataset.empty = isEmpty ? 'true' : 'false'
+    onValueChange?.(serialized)
 
     // Detect an active `/` (whole-input) or `@` (token-initial) trigger.
     const selection = window.getSelection()
@@ -184,7 +191,7 @@ function AIComposeImpl(
     }
     setMenu(null)
     triggerRangeRef.current = null
-  }, [loadEntities, menu])
+  }, [loadEntities, menu, onValueChange])
 
   const selectSlash = useCallback((cmd: SlashCommand) => {
     const editor = editorRef.current
@@ -233,14 +240,15 @@ function AIComposeImpl(
     if (!editor) return
     const text = serializeEditor(editor).replace(/\u00A0/g, ' ').trim()
     if (!text || loading) return
-    onSubmit(text)
+    if (!onSubmit(text)) return
     editor.innerHTML = ''
     editor.dataset.empty = 'true'
     setEmpty(true)
+    onValueChange?.('')
     setMenu(null)
     triggerRangeRef.current = null
     editor.focus()
-  }, [loading, onSubmit])
+  }, [loading, onSubmit, onValueChange])
 
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (menu && menuItemCount > 0) {

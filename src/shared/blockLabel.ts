@@ -1,5 +1,6 @@
 import type { AppCategory, ArtifactRef, WorkContextBlock } from './types'
 import { ACTIVITY_CATEGORY_LABELS, activityCategoryLabel } from './activityCategories'
+import { workNameGuardLabelViolation } from './workNameGuards'
 
 // Categories where a browser page artifact is a plausible label source for the
 // whole block. For development/communication/writing/etc. a co-occurring browser
@@ -116,6 +117,7 @@ export function isUsefulLabel(value: string | null | undefined): value is string
   if (!trimmed) return false
   if (GENERIC_LABELS.has(trimmed)) return false
   if (looksLikeRawArtifactLabel(trimmed)) return false
+  if (workNameGuardLabelViolation(trimmed, { storedLabel: true })) return false
   const pipeSegments = trimmed.split(/\s*\|\s*/).filter(Boolean)
   // 3+ pipe segments is almost always raw browser-tab soup
   // ("W2_Reading | Intro to ML | Perusall"). Reject so we fall through to a
@@ -183,7 +185,7 @@ export function userVisibleBlockLabel(block: WorkContextBlock): string {
   )
   if (topArtifact) {
     const naturalized = naturalizeLabel(topArtifact.displayTitle.trim())
-    if (naturalized && !GENERIC_LABELS.has(naturalized) && !looksLikeRawArtifactLabel(naturalized)) return naturalized
+    if (isUsefulLabel(naturalized)) return naturalized
   }
 
   // A bare site name is only an honest label when a page could own the block.

@@ -56,7 +56,12 @@ import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForApp
 import { categoryForDomain } from '@shared/domainCategories'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
-import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import {
+  evaluateLabelVoice,
+  labelVoiceContextForBlock,
+  rawLabelForm,
+  userAuthoredLabel,
+} from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
@@ -1213,25 +1218,6 @@ function isHighlyCoherentCandidate(candidate: CandidateBlock): boolean {
   return true
 }
 
-function splitAndAnalyze(
-  sessions: AppSession[],
-  splitIndex: number,
-  boundedBeforeGap: boolean,
-  boundedAfterGap: boolean,
-): CandidateBlock[] {
-  if (splitIndex <= 0 || splitIndex >= sessions.length) {
-    return [{
-      sessions,
-      formation: 'heuristic',
-      boundedBeforeGap,
-      boundedAfterGap,
-    }]
-  }
-
-  return analyzeSessions(sessions.slice(0, splitIndex), boundedBeforeGap, false)
-    .concat(analyzeSessions(sessions.slice(splitIndex), false, boundedAfterGap))
-}
-
 function hasCodeEvidence(candidate: CandidateBlock): boolean {
   return candidate.sessions.some((session) => {
     if (session.category === 'development') return true
@@ -2279,6 +2265,21 @@ export function compactWindowTitle(title: string): string {
     .find((part) => part.length > 2) ?? title.trim()
 }
 
+/** First window-title segment that may name work. Tool surfaces and command
+ *  lines ("Cursor Agents", "npm run typecheck") stay evidence; the next
+ *  segment ("daylens") can still be the subject. */
+function windowTitleSubject(title: string): string | null {
+  const parts = title
+    .split(/\s[—-]\s/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 2)
+  for (const part of parts) {
+    if (workNameGuardLabelViolation(part, { storedLabel: true })) continue
+    return part
+  }
+  return null
+}
+
 function contentContextForSession(session: AppSession): string {
   const title = usefulWindowTitle(session)
   if (title) return compactWindowTitle(title).toLowerCase()
@@ -2670,7 +2671,7 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
     if (!title) continue
 
     const artifactType = artifactKindForSession(session)
-    const displayTitle = compactWindowTitle(title)
+    const displayTitle = windowTitleSubject(title) ?? compactWindowTitle(title)
     const canonicalAppId = session.canonicalAppId ?? resolveCanonicalApp(session.bundleId, session.appName).canonicalAppId
     const canonicalKey = `${artifactType}:${canonicalAppId ?? session.bundleId}:${displayTitle.toLowerCase()}`
     const existing = grouped.get(canonicalKey)
@@ -3199,97 +3200,184 @@ function buildBlockFromCandidate(
   }
 }
 
-function analyzeSessions(
+type AnalyzeWork =
+  | { kind: 'job'; sessions: AppSession[]; boundedBeforeGap: boolean; boundedAfterGap: boolean }
+  | { kind: 'block'; block: CandidateBlock }
+
+function pushSplitJobs(
+  stack: AnalyzeWork[],
+  sessions: AppSession[],
+  splitIndex: number,
+  boundedBeforeGap: boolean,
+  boundedAfterGap: boolean,
+): void {
+  if (splitIndex <= 0 || splitIndex >= sessions.length) {
+    stack.push({
+      kind: 'block',
+      block: { sessions, formation: 'heuristic', boundedBeforeGap, boundedAfterGap },
+    })
+    return
+  }
+  stack.push({
+    kind: 'job',
+    sessions: sessions.slice(splitIndex),
+    boundedBeforeGap: false,
+    boundedAfterGap,
+  })
+  stack.push({
+    kind: 'job',
+    sessions: sessions.slice(0, splitIndex),
+    boundedBeforeGap,
+    boundedAfterGap: false,
+  })
+}
+
+// Same splits as the old recursive walk, but the call stack is a heap array.
+// A high-volume meeting or topic-shift chain is O(n) deep; recursion overflowed
+// the main process (DEV-487) during morning/evening Timeline reads.
+export function analyzeSessions(
   sessions: AppSession[],
   boundedBeforeGap: boolean,
   boundedAfterGap: boolean,
 ): CandidateBlock[] {
-  if (sessions.length === 0) return []
+  const output: CandidateBlock[] = []
+  const stack: AnalyzeWork[] = [
+    { kind: 'job', sessions, boundedBeforeGap, boundedAfterGap },
+  ]
 
-  const firstMeetingIndex = sessions.findIndex(isStandaloneMeeting)
-  if (firstMeetingIndex >= 0) {
-    const blocks: CandidateBlock[] = []
-    const before = sessions.slice(0, firstMeetingIndex)
-    if (before.length > 0) {
-      blocks.push(...analyzeSessions(before, boundedBeforeGap, false))
+  while (stack.length > 0) {
+    const item = stack.pop()!
+    if (item.kind === 'block') {
+      output.push(item.block)
+      continue
     }
 
-    const meeting = sessions[firstMeetingIndex]
-    blocks.push({
-      sessions: [meeting],
-      formation: 'meeting',
-      boundedBeforeGap: firstMeetingIndex === 0 ? boundedBeforeGap : false,
-      boundedAfterGap: firstMeetingIndex === sessions.length - 1 ? boundedAfterGap : false,
-      forcedLabel: meetingLabel(meeting),
-    })
+    const jobSessions = item.sessions
+    if (jobSessions.length === 0) continue
 
-    const after = sessions.slice(firstMeetingIndex + 1)
-    if (after.length > 0) {
-      blocks.push(...analyzeSessions(after, false, boundedAfterGap))
-    }
-    return blocks
-  }
-
-  const contextSplitIndex = sustainedContextShiftSplitIndex(sessions)
-  if (contextSplitIndex !== null) {
-    return splitAndAnalyze(sessions, contextSplitIndex, boundedBeforeGap, boundedAfterGap)
-  }
-
-  const streak = longSingleAppStreak(sessions)
-  if (streak) {
-    const [startIndex, endIndex] = streak.range
-    const blocks: CandidateBlock[] = []
-    if (startIndex > 0) {
-      blocks.push(...analyzeSessions(sessions.slice(0, startIndex), boundedBeforeGap, false))
-    }
-    // No forced label: a streak is a formation, not a name. Naming the block
-    // after the app that hosted it is the shape label-voice.md rejects, and it
-    // short-circuits the evidence-based naming in `labelForCandidate` — a
-    // 90-minute browsing streak read "Google Chrome" while its own window and
-    // page titles named the subject.
-    blocks.push({
-      sessions: sessions.slice(startIndex, endIndex),
-      formation: 'longSingleApp',
-      boundedBeforeGap: startIndex === 0 ? boundedBeforeGap : false,
-      boundedAfterGap: endIndex === sessions.length ? boundedAfterGap : false,
-    })
-    if (endIndex < sessions.length) {
-      blocks.push(...analyzeSessions(sessions.slice(endIndex), false, boundedAfterGap))
-    }
-    return blocks
-  }
-
-  const effectiveSessions = effectiveSessionsFor(sessions)
-  const distribution = categoryDistributionFor(effectiveSessions)
-  const dominant = dominantCategoryFromDistribution(distribution)
-  const coherence = coherenceScore(distribution)
-  const averageDwell = averageDwellTime(sessions)
-  const runs = categoryRunsFor(effectiveSessions)
-
-  if (coherence < 0.4) {
-    const splitIndex = sustainedDifferentCategorySplitIndex(runs, dominant)
-    if (splitIndex !== null) {
-      return splitAndAnalyze(sessions, splitIndex, boundedBeforeGap, boundedAfterGap)
-    }
-  }
-
-  if (coherence >= 0.4 && coherence <= 0.75) {
-    if (isDeveloperTestingFlow(new Set(Object.keys(distribution) as AppCategory[]), averageDwell)) {
-      return [{ sessions, formation: 'heuristic', boundedBeforeGap, boundedAfterGap }]
+    const firstMeetingIndex = jobSessions.findIndex(isStandaloneMeeting)
+    if (firstMeetingIndex >= 0) {
+      const after = jobSessions.slice(firstMeetingIndex + 1)
+      if (after.length > 0) {
+        stack.push({
+          kind: 'job',
+          sessions: after,
+          boundedBeforeGap: false,
+          boundedAfterGap: item.boundedAfterGap,
+        })
+      }
+      const meeting = jobSessions[firstMeetingIndex]
+      stack.push({
+        kind: 'block',
+        block: {
+          sessions: [meeting],
+          formation: 'meeting',
+          boundedBeforeGap: firstMeetingIndex === 0 ? item.boundedBeforeGap : false,
+          boundedAfterGap: firstMeetingIndex === jobSessions.length - 1 ? item.boundedAfterGap : false,
+          forcedLabel: meetingLabel(meeting),
+        },
+      })
+      const before = jobSessions.slice(0, firstMeetingIndex)
+      if (before.length > 0) {
+        stack.push({
+          kind: 'job',
+          sessions: before,
+          boundedBeforeGap: item.boundedBeforeGap,
+          boundedAfterGap: false,
+        })
+      }
+      continue
     }
 
-    if (averageDwell > SLOW_SWITCH_THRESHOLD_SEC) {
-      const splitIndex = slowSwitchBoundaryIndex(runs)
+    const contextSplitIndex = sustainedContextShiftSplitIndex(jobSessions)
+    if (contextSplitIndex !== null) {
+      pushSplitJobs(stack, jobSessions, contextSplitIndex, item.boundedBeforeGap, item.boundedAfterGap)
+      continue
+    }
+
+    const streak = longSingleAppStreak(jobSessions)
+    if (streak) {
+      const [startIndex, endIndex] = streak.range
+      if (endIndex < jobSessions.length) {
+        stack.push({
+          kind: 'job',
+          sessions: jobSessions.slice(endIndex),
+          boundedBeforeGap: false,
+          boundedAfterGap: item.boundedAfterGap,
+        })
+      }
+      // No forced label: a streak is a formation, not a name. Naming the block
+      // after the app that hosted it is the shape label-voice.md rejects, and it
+      // short-circuits the evidence-based naming in `labelForCandidate` — a
+      // 90-minute browsing streak read "Google Chrome" while its own window and
+      // page titles named the subject.
+      stack.push({
+        kind: 'block',
+        block: {
+          sessions: jobSessions.slice(startIndex, endIndex),
+          formation: 'longSingleApp',
+          boundedBeforeGap: startIndex === 0 ? item.boundedBeforeGap : false,
+          boundedAfterGap: endIndex === jobSessions.length ? item.boundedAfterGap : false,
+        },
+      })
+      if (startIndex > 0) {
+        stack.push({
+          kind: 'job',
+          sessions: jobSessions.slice(0, startIndex),
+          boundedBeforeGap: item.boundedBeforeGap,
+          boundedAfterGap: false,
+        })
+      }
+      continue
+    }
+
+    const effectiveSessions = effectiveSessionsFor(jobSessions)
+    const distribution = categoryDistributionFor(effectiveSessions)
+    const dominant = dominantCategoryFromDistribution(distribution)
+    const coherence = coherenceScore(distribution)
+    const averageDwell = averageDwellTime(jobSessions)
+    const runs = categoryRunsFor(effectiveSessions)
+
+    if (coherence < 0.4) {
+      const splitIndex = sustainedDifferentCategorySplitIndex(runs, dominant)
       if (splitIndex !== null) {
-        return splitAndAnalyze(sessions, splitIndex, boundedBeforeGap, boundedAfterGap)
+        pushSplitJobs(stack, jobSessions, splitIndex, item.boundedBeforeGap, item.boundedAfterGap)
+        continue
       }
     }
+
+    if (coherence >= 0.4 && coherence <= 0.75) {
+      if (isDeveloperTestingFlow(new Set(Object.keys(distribution) as AppCategory[]), averageDwell)) {
+        output.push({
+          sessions: jobSessions,
+          formation: 'heuristic',
+          boundedBeforeGap: item.boundedBeforeGap,
+          boundedAfterGap: item.boundedAfterGap,
+        })
+        continue
+      }
+
+      if (averageDwell > SLOW_SWITCH_THRESHOLD_SEC) {
+        const splitIndex = slowSwitchBoundaryIndex(runs)
+        if (splitIndex !== null) {
+          pushSplitJobs(stack, jobSessions, splitIndex, item.boundedBeforeGap, item.boundedAfterGap)
+          continue
+        }
+      }
+    }
+
+    const formation: FormationReason =
+      coherence > 0.75 ? 'coherent' : coherence < 0.4 ? 'mixed' : 'heuristic'
+
+    output.push({
+      sessions: jobSessions,
+      formation,
+      boundedBeforeGap: item.boundedBeforeGap,
+      boundedAfterGap: item.boundedAfterGap,
+    })
   }
 
-  const formation: FormationReason =
-    coherence > 0.75 ? 'coherent' : coherence < 0.4 ? 'mixed' : 'heuristic'
-
-  return [{ sessions, formation, boundedBeforeGap, boundedAfterGap }]
+  return output
 }
 
 // Categories where the page/topic IS the activity, so a topic change is a real
@@ -4557,6 +4645,7 @@ function usefulDerivedLabel(value: string | null | undefined): string | null {
   if (GENERIC_LABELS.has(natural)) return null
   // §3.5 / invariant 3: never surface a raw file / machine identifier as a name.
   if (looksLikeRawArtifactLabel(natural)) return null
+  if (workNameGuardLabelViolation(natural, { storedLabel: true })) return null
   return natural
 }
 
@@ -4867,6 +4956,10 @@ function finalizedLabelForBlock(
       if (tier !== 'invariants' && finding.rule === 'no-verbatim-window-title') return null
       if (tier === 'interpreted' && finding.rule === 'activity-not-software') return null
     }
+    // Same vocabulary the generation validators and startup repair use: a
+    // compacted tool surface ("Cursor Agents") is not a verbatim window title
+    // and is not the app name, so the voice rules above miss it.
+    if (workNameGuardLabelViolation(label, { storedLabel: true })) return null
     return label
   }
 
@@ -6527,9 +6620,16 @@ function leisureLabelForBlock(block: WorkContextBlock): string {
 }
 
 export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?: string | null): string {
-  // A user rename always wins, verbatim.
-  if (overrideLabel && overrideLabel.trim() && !GENERIC_LABELS.has(overrideLabel.trim())) {
-    return overrideLabel.trim()
+  // User wording is law (AC-VIC-004). Honor `label.override` / `source: 'user'`
+  // here so callers that omit the extra argument (AI context, moment evidence)
+  // keep the chosen name instead of replacing it with a guarded inference.
+  const explicitOverride = overrideLabel?.trim()
+  if (explicitOverride && !GENERIC_LABELS.has(explicitOverride)) {
+    return explicitOverride
+  }
+  const authored = userAuthoredLabel(block)
+  if (authored && !GENERIC_LABELS.has(authored)) {
+    return authored
   }
   if (block.review?.correctedLabel?.trim()) {
     return block.review.correctedLabel.trim()
@@ -6543,9 +6643,9 @@ export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?
 }
 
 function rawWorkLabelForBlock(block: WorkContextBlock): string {
-  const preferred = block.aiLabel
-  if (preferred && preferred.trim() && !GENERIC_LABELS.has(preferred.trim())) {
-    return preferred.trim()
+  const preferred = block.aiLabel?.trim()
+  if (preferred && !GENERIC_LABELS.has(preferred) && !workNameGuardLabelViolation(preferred, { storedLabel: true })) {
+    return preferred
   }
 
   // The finalized label (artifact / workflow / memory / corrected) is the name
@@ -6555,12 +6655,18 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
   // category floor. This is what lets earlier intent name the block instead of
   // the block reading "Development" / "Writing" / "Productivity".
   const current = block.label.current?.trim()
-  if (current && !GENERIC_LABELS.has(current) && current !== 'Untitled block') {
+  if (
+    current
+    && !GENERIC_LABELS.has(current)
+    && current !== 'Untitled block'
+    && !workNameGuardLabelViolation(current, { storedLabel: true })
+  ) {
     return current
   }
 
-  if (block.ruleBasedLabel.trim() && !GENERIC_LABELS.has(block.ruleBasedLabel.trim())) {
-    return block.ruleBasedLabel.trim()
+  const rule = block.ruleBasedLabel.trim()
+  if (rule && !GENERIC_LABELS.has(rule) && !workNameGuardLabelViolation(rule, { storedLabel: true })) {
+    return rule
   }
 
   // Subject-driven fallback: when the deterministic label is only a category
@@ -6569,7 +6675,11 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
   // "subject should drive the label" rule — a browser-hosted productivity block
   // reads "Roadmap board", not "Productivity".
   const intentSubject = inferWorkIntent(block).subject?.trim()
-  if (intentSubject && !GENERIC_LABELS.has(intentSubject)) {
+  if (
+    intentSubject
+    && !GENERIC_LABELS.has(intentSubject)
+    && !workNameGuardLabelViolation(intentSubject, { storedLabel: true })
+  ) {
     return intentSubject
   }
 

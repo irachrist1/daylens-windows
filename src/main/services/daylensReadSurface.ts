@@ -133,15 +133,17 @@ export const DAYLENS_READ_CAPABILITIES: readonly DaylensReadCapability[] = [
     id: 'getAppUsage',
     executor: 'activity',
     description:
-      'Return total usage time and session count for a specific application, optionally filtered by date range. '
-      + 'Also returns a per-day breakdown and recent window titles so you can infer what the user was doing.',
+      'Return total usage time for a specific application or website/domain, optionally filtered by date range. '
+      + 'Also returns a per-day breakdown and recent window titles or page titles. '
+      + 'Use this for domain-time questions (Coursera, YouTube, github.com) as well as apps. '
+      + 'A site name is not an app: this lookup falls through to website time when the name is not an exact app.',
     inputSchema: {
       type: 'object',
       properties: {
         appName: {
           type: 'string',
           description:
-            'App display name to look up (case-insensitive partial match, e.g. "Figma", "VS Code", "Chrome").',
+            'App or website name to look up (case-insensitive, e.g. "Figma", "Coursera", "youtube.com").',
         },
         startDate: { ...DATE_PARAM, description: 'Start of the date range (inclusive).' },
         endDate: { ...DATE_PARAM, description: 'End of the date range (inclusive).' },

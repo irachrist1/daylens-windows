@@ -31,6 +31,8 @@ This changelog explains released and upcoming improvements in language meant for
 
 ### Safer and more predictable AI
 
+- Settings and the chat picker now share one provider and model. Connecting a CLI in Settings no longer leaves the picker claiming it is missing, and a Settings switch is what the next answer uses.
+- New installs default to Claude Haiku 4.5. Existing model choices are left alone.
 - Background AI work has a daily limit to prevent runaway provider costs.
 - Automatic day analysis runs at controlled lifecycle points and falls back to deterministic behavior when a provider is unavailable.
 - AI labels prefer specific evidence and avoid exposing raw filenames or internal-looking artifact names as activity titles.

@@ -9,6 +9,7 @@ import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { executeTool, type DaySummaryResult } from '../src/main/services/aiTools.ts'
 import { getTimelineDayPayload, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { searchAll } from '../src/main/db/queries.ts'
+import { __resetSettings, __setSettings } from './support/settings-stub.mjs'
 
 interface SearchSessionsToolResult {
   hits: Array<{ windowTitle?: string | null }>
@@ -81,6 +82,28 @@ test('the agent day-overview total equals the Timeline payload total exactly', (
   assert.equal(summary.focusSeconds, Math.round(payload.focusSeconds))
   assert.ok(summary.focusSeconds <= summary.totalTrackedSeconds)
   db.close()
+})
+
+test('the agent day summary honors apps marked as real work during onboarding', () => {
+  const db = createProductionTestDatabase()
+  const start = localMs(9)
+  const end = localMs(9, 30)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, capture_source, capture_version
+    ) VALUES ('com.example.Game', 'Game', ?, ?, 1800, 'entertainment', 0, 'Game', 'Game', 'game', 'test', 1)
+  `).run(start, end)
+  __setSettings({ focusApps: ['Game'] })
+
+  try {
+    const summary = executeTool('getDaySummary', { date: TEST_DATE }, db) as DaySummaryResult
+    assert.equal(summary.deepWorkSessionCount, 1)
+    assert.equal(summary.longestStreakSeconds, 1800)
+  } finally {
+    __resetSettings()
+    db.close()
+  }
 })
 
 test('a deleted block changes the agent day-overview and Timeline identically', () => {

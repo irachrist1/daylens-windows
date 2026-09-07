@@ -98,8 +98,11 @@ inferred from content signals, then never the tool.
   OFF by default. The open work is not wiring it — it is turning it on and proving it beats
   the legacy path on the eval, then making that the default. This is still the build that
   moves primary-work naming.
-- **DEV-288 / #110** — labels stored before the name guards still say "Cursor Agents". Guards
-  run on read and do not rewrite the database. Needs a backfill.
+- **DEV-288 / #110** — **the backfill is in place.** `labelGuardRepair` rewrites stored
+  `timeline_blocks` labels that fail today's work-name guards on startup, once per
+  `WORK_NAME_GUARD_VERSION`. The finalize ladder also rejects those labels on read, so a
+  compacted window title (`Cursor Agents — daylens …`) cannot persist as the block name
+  after the stamp. Remaining naming work is DEV-287 (turn the interpretation agent on).
 - **DEV-223 / #21** — Timeline, Apps, chat and exports disagree about the same day.
 
 **Done when:** `npm run eval:days` reports primary work ≥95% and tool-surface clean ≥99%, and
@@ -112,15 +115,15 @@ at a time. Anything that credits more seconds to a domain than the browser was f
 wrong by construction. Netflix once took 1249s inside a block where the browsers held ~800
 foreground seconds.
 
-- **DEV-246 / #68** — "how long was I on Coursera this week" returns the wrong number.
-  `DeterministicFactKind` has no `site_total_time`, so per-site duration is the one fact kind
-  the model is left to guess.
+- **DEV-246 / #68** — "how long was I on Coursera this week" returned the wrong first number
+  because the name was looked up as an app and per-site duration was left to the model.
+  Domain-time questions now resolve through website lookup and a computed `site_total_time`.
 - **DEV-290 / #112** — `HISTORY_FILL_MAX_MS` lets a titleless browser credit up to 4h to its
-  last-visited page, usually Netflix or YouTube. **The ticket's proposed fix is dead:** it
-  says to populate `browser_context_events`, and that table was dropped
-  (`migrations.ts:2071` — "never written to in production, 0 rows, 0 writers anywhere in
-  `src/`"). The bug is real; the fix has to be restated against `HISTORY_FILL_MAX_MS`
-  itself.
+  last-visited page, usually Netflix or YouTube. The original ticket said to populate
+  `browser_context_events`; that table was dropped (`migrations.ts:2071`). The restated
+  fix is: persist Chromium `active_browser_context` when history corroborates an
+  unverifiable-mode tab, and cap uncorroborated entertainment history-fill on titleless
+  browsers at two minutes.
 - **DEV-238 / #60** — half of browser time has no page attached.
 
 **Done when:** no domain's credited seconds exceed its browser's foreground seconds in the same
@@ -183,10 +186,12 @@ Real, required to release, felt by nobody until release day.
   **Shipped.** `services/permissionWatcher.ts` verifies with real reads and
   `getCaptureVerificationState` exposes it. Linear says Done; GitHub #51 is still open and
   should be closed.
-- **DEV-255 / #77** — calendar depends on icalBuddy, a third-party CLI most users will not
-  have. **Urgent in Linear.** It works on the owner's machine by accident. Native EventKit.
-- **DEV-289 / #111** — focus score and distraction alerter are spec-removed but fully live.
-  Needs a decision, not code.
+- **DEV-255 / #77** — calendar on macOS now reads EventKit through `calendar-helper`
+  instead of icalBuddy. Windows still uses Outlook COM; Linux has no store. Needs
+  acceptance on a Mac: events after one Calendar prompt, no CLI installed.
+- ~~**DEV-289 / #111** — focus score and distraction alerter are spec-removed but fully live.~~
+  **Decided 2026-09-07:** revive them in the spec and keep the live code.
+  See [V2 feature dispositions](product/v2.md) and [Focus score and distraction alerts](specs/focus-and-distraction.md).
 - **DEV-207** — the V2 acceptance run. The gate itself; it cannot pass until the five close.
 
 ## Where the code actually is
@@ -196,7 +201,7 @@ per-slide wrap export · screen-context honesty pane · corrupt-database recover
 restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan, fixed.
 
 **Half-built.**
-- `site_total_time` missing from `DeterministicFactKind` — #68
+- ~~`site_total_time` missing from `DeterministicFactKind`~~ — #68; domain-time questions now compute and enforce a site total
 - interpretation-agent runtime behind a flag that logs "not wired yet" — #109
 - Context Inspector: backend fills `ChatAgentResult.evidence`, no UI reads it
 - ~~command palette never reaches `planRetrieval`~~ — **not true**;
@@ -204,7 +209,8 @@ restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan,
 - entity write-through: `adoptAppIdentityWrite` and `adoptArtifactWrite` exported, uncalled
 - screen context captures frames with `noExtractorInstalled`
   (`screenContext.handlers.ts:61`); backlog full at 100 frames, all quarantined — #73
-- `browser_context_events` table exists, nothing writes to it — the proper fix for #112
+- `browser_context_events` was dropped in migration 42 (never written in production). Live
+  page capture is `website_visits` with source `active_browser_context`.
 
 **Not started.** Billing at a real boundary · Windows signing · a model-optional Timeline ·
 the ~1.1s of eager module eval on the paint path.

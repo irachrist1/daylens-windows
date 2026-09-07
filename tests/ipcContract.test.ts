@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url'
 import { IPC } from '../src/shared/types.ts'
 import { ipcRecord } from './support/electron-stub.mjs'
 import { setTestDb } from './support/database-stub.mjs'
+import { __setSettings, getSettings } from './support/settings-stub.mjs'
 import { setupRealWorldDb, REAL_WORLD_DATE, localMs } from './support/realWorldActivityFixture.ts'
 import { registerDbHandlers } from '../src/main/ipc/db.handlers.ts'
 import { registerEntityHandlers } from '../src/main/ipc/entities.handlers.ts'
@@ -105,6 +106,20 @@ test('boot smoke: every handler group registers without throwing', () => {
     assert.doesNotThrow(register, `${name} handlers failed to register`)
   }
   assert.ok(ipcRecord.handlers.size > 40, `expected many registered channels, got ${ipcRecord.handlers.size}`)
+})
+
+test('distraction threshold handler clamps values to the documented range', async () => {
+  registerDistractionAlerterHandlers()
+  const handler = ipcRecord.handlers.get('distraction-alerter:set-threshold')
+  assert.ok(handler)
+
+  await handler({} as never, { minutes: 61 })
+  assert.equal(getSettings().distractionAlertThresholdMinutes, 60)
+
+  await handler({} as never, { minutes: 0 })
+  assert.equal(getSettings().distractionAlertThresholdMinutes, 1)
+
+  __setSettings({ distractionAlertThresholdMinutes: 10 })
 })
 
 test('contract: every channel the renderer invokes has a handler in the main process', () => {

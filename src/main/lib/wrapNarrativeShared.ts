@@ -33,11 +33,11 @@ export const BANNED_PHRASES = [
 
 // Carryover / homework / guilt the wrap must never speak (locked decision +
 // voice.md §2.9). No "pick it up tomorrow", no drift, no focus grades.
+// "distraction" is a live product noun (profile, alerts) and is not banned.
 export const HOMEWORK_GUILT_PATTERNS = [
   /needs?\b[^.]{0,24}\breview\b/i,
   /\bpick (?:it|this|that|them) (?:back )?up\b/i,
   /\bcarry(?:ing)?\b[^.]{0,16}\b(?:forward|over|into (?:tomorrow|next))\b/i,
-  /\bdistraction(?:s)?\b/i,
   /\bfocus(?:ed)?\s+(?:score|percentage|signal)\b/i,
   /\bdrift\b/i,
   /\bproductiv(?:e|ity)\s+score\b/i,
@@ -64,6 +64,8 @@ export const OVERCLAIM_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> =
   { re: /\b(?:probably|must have|likely|no doubt|surely|presumably)\b/i, reason: 'speculates about something the facts do not state' },
   { re: /\bidle\b/i, reason: 'characterizes untracked or quiet time as "idle"; unobserved time is unknown, never idle' },
   { re: /\boff[- ]task\b/i, reason: 'grades time as "off task"' },
+  { re: /\byou (?:got|were|stayed|became|seemed) distracted\b/i, reason: 'judges the person as distracted instead of reporting the observed surface' },
+  { re: /\bdistractions?\b[^.]{0,24}\b(?:derailed|disrupted|ruined|sabotaged|wasted|wrecked)\b|\b(?:derailed|disrupted|ruined|sabotaged|wasted|wrecked)\b[^.]{0,24}\bdistractions?\b/i, reason: 'blames distraction for how the day went instead of reporting the observed surface' },
   { re: /\byou (?:attended|sat (?:in|through)|went to|showed up (?:to|at|for)|joined|hopped on|jumped on|dialed in)\b/i, reason: 'claims attendance the tracked data cannot prove; calendar evidence only supports "your calendar had ..."' },
   // App-open is never proof of consumption: a page or player in the foreground
   // was OPEN, not read or watched. Naming the surface and the time stays legal
@@ -312,7 +314,7 @@ export function wrapLineViolation(value: string, ctx: LineGuardContext, opts?: W
   const guilt = HOMEWORK_GUILT_PATTERNS.find((p) => p.test(value))
   if (guilt) {
     const matched = value.match(guilt)?.[0] ?? ''
-    return `contains banned homework/guilt/grading language ("${matched}"); never mention drift, distraction, carryover, or focus scores, not even to negate them`
+    return `contains banned homework/guilt/grading language ("${matched}"); never mention drift, carryover, or focus scores, not even to negate them`
   }
   const overclaim = findOverclaimViolation(value)
   if (overclaim) return `${overclaim}; state only what the tracked data observed, plainly`

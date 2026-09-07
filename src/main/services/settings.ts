@@ -1,5 +1,6 @@
 // Settings persistence via electron-store
 // electron-store is ESM-only in v10 — dynamic import required
+import { SHIPPING_DEFAULT_ANTHROPIC_MODEL, isCliProvider } from '@shared/aiProviderState'
 import type {
   AIProviderMode,
   AppSettings,
@@ -43,7 +44,7 @@ export const DEFAULTS: AppSettings = {
   firstLaunchDate: 0,
   feedbackPromptShown: false,
   aiProvider: 'anthropic',
-  anthropicModel: 'claude-sonnet-4-6',
+  anthropicModel: SHIPPING_DEFAULT_ANTHROPIC_MODEL,
   openaiModel: 'gpt-5.5',
   googleModel: 'gemini-3.1-flash-lite',
   openrouterModel: 'anthropic/claude-sonnet-4.6',
@@ -91,6 +92,12 @@ export const DEFAULTS: AppSettings = {
 // replacement on read — otherwise every call fails before R1's retry can help.
 // Only confirmed-dead ids belong here; superseded-but-working ids are left
 // alone so we never silently change a user's model (or its cost) without intent.
+function normalizeDistractionAlertThreshold(value: unknown): number {
+  const minutes = Number(value)
+  if (!Number.isFinite(minutes)) return 10
+  return Math.min(60, Math.max(1, Math.round(minutes)))
+}
+
 const DEPRECATED_MODEL_REMAP: Record<string, string> = {
   // gemini-3.1-flash-lite-preview was deprecated and shut down at the provider.
   'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite',
@@ -147,13 +154,13 @@ export function getSettings(): AppSettings {
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
     aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
-    anthropicModel: liveModelId(_store.get('anthropicModel', 'claude-sonnet-4-6') as string),
+    anthropicModel: liveModelId(_store.get('anthropicModel', SHIPPING_DEFAULT_ANTHROPIC_MODEL) as string),
     openaiModel: liveModelId(_store.get('openaiModel', 'gpt-5.5') as string),
     googleModel: liveModelId(_store.get('googleModel', 'gemini-3.1-flash-lite') as string),
     openrouterModel: liveModelId(_store.get('openrouterModel', 'anthropic/claude-sonnet-4.6') as string),
     aiFallbackOrder: (_store.get('aiFallbackOrder', ['anthropic', 'openai', 'google']) as AppSettings['aiFallbackOrder']),
     aiModelStrategy: (_store.get('aiModelStrategy', 'balanced') as AppSettings['aiModelStrategy']),
-    aiChatProvider: (_store.get('aiChatProvider', undefined) as AppSettings['aiChatProvider']),
+    aiChatProvider: (_store.get('aiChatProvider', undefined) as AppSettings['aiChatProvider']) ?? undefined,
     aiBackgroundEnrichment: (_store.get('aiBackgroundEnrichment', false) as boolean),
     aiActiveBlockPreview: (_store.get('aiActiveBlockPreview', false) as boolean),
     aiPromptCachingEnabled: (_store.get('aiPromptCachingEnabled', true) as boolean),
@@ -170,7 +177,7 @@ export function getSettings(): AppSettings {
     weeklyBriefEnabled: (_store.get('weeklyBriefEnabled', true) as boolean),
     activityFreeNotificationText: (_store.get('activityFreeNotificationText', false) as boolean),
     interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', true) as boolean),
-    distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
+    distractionAlertThresholdMinutes: normalizeDistractionAlertThreshold(_store.get('distractionAlertThresholdMinutes', 10)),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', true) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', true) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
@@ -221,6 +228,9 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
   if ('activityColorOverrides' in entries) {
     entries.activityColorOverrides = sanitizeActivityColorOverrides(entries.activityColorOverrides)
   }
+  if ('distractionAlertThresholdMinutes' in entries) {
+    entries.distractionAlertThresholdMinutes = normalizeDistractionAlertThreshold(entries.distractionAlertThresholdMinutes)
+  }
   if ('captureConsent' in entries) {
     entries.captureConsent = normalizeCaptureConsent(entries.captureConsent)
   }
@@ -234,7 +244,7 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
     // electron-store refuses `set(key, undefined)` — an explicit undefined in
     // a partial means "clear this setting" (e.g. screenContextConsentAt on
     // revoke), which is a delete.
-    if (v === undefined) store.delete?.(k)
+    if (v === undefined || (k === 'aiChatProvider' && v === null)) store.delete?.(k)
     else store.set(k, v)
   }
 }
@@ -255,7 +265,7 @@ const KEYTAR_ACCOUNTS: Record<'anthropic' | 'openai' | 'google' | 'openrouter', 
 }
 
 function isCLIProvider(provider: AIProviderMode): boolean {
-  return provider === 'claude-cli' || provider === 'chatgpt-cli' || provider === 'gemini-cli' || provider === 'codex-cli'
+  return isCliProvider(provider)
 }
 
 function keytarAccount(provider: AIProviderMode): string {

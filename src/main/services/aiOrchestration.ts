@@ -4,6 +4,7 @@ import { getDb } from './database'
 import { capture, captureAIGeneration } from './analytics'
 import { estimateUsageCostUsd } from './modelPricing'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
+import { SHIPPING_DEFAULT_ANTHROPIC_MODEL, accountModel } from '@shared/aiProviderState'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { classifyProviderError, friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
 import { getBillingAccess, getManagedAIConfig } from './billing'
@@ -328,9 +329,9 @@ function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | '
 // previously pointed at gemini-3.1-flash-lite-preview, which was shut down
 // and replaced with the GA gemini-3.1-flash-lite / gemini-3.5-flash.
 const ANTHROPIC_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
-  economy: 'claude-haiku-4-5-20251001',   // Fast and cheap — block labels, previews
-  balanced: 'claude-haiku-4-5-20251001',  // Summaries are fine with Haiku
-  quality: 'claude-sonnet-5',             // Chat answers, attribution reasoning
+  economy: SHIPPING_DEFAULT_ANTHROPIC_MODEL,
+  balanced: SHIPPING_DEFAULT_ANTHROPIC_MODEL,
+  quality: 'claude-sonnet-5',
 }
 const OPENAI_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
   economy: 'gpt-5.4-nano',
@@ -354,29 +355,31 @@ export function jobTimeoutMs(jobType: AIJobType): number {
 export function modelForProvider(
   provider: AIProviderMode,
   strategyOrSettings: AIModelStrategy | AppSettings = getSettings(),
-  settings = getSettings(),
+  settings?: AppSettings,
 ): string {
   // Simplified BYOK model: the one model the user picked for a provider is used
   // for every job. The legacy strategy argument is still accepted for call-site
   // compatibility, but it no longer changes the result — the user's chosen model
   // always wins. The per-tier tables remain only as last-resort defaults.
   const resolvedSettings: AppSettings =
-    typeof strategyOrSettings === 'string' ? settings : strategyOrSettings
+    typeof strategyOrSettings === 'string' ? (settings ?? getSettings()) : strategyOrSettings
 
+  const selected = accountModel(resolvedSettings, provider)
+  if (selected) return selected
   switch (provider) {
     case 'openai':
     case 'chatgpt-cli':
     case 'codex-cli':
-      return resolvedSettings.openaiModel || OPENAI_TIER_MODELS.quality
+      return OPENAI_TIER_MODELS.quality
     case 'google':
     case 'gemini-cli':
-      return resolvedSettings.googleModel || GOOGLE_TIER_MODELS.quality
+      return GOOGLE_TIER_MODELS.quality
     case 'openrouter':
-      return resolvedSettings.openrouterModel || 'anthropic/claude-sonnet-4.6'
+      return 'anthropic/claude-sonnet-4.6'
     case 'claude-cli':
     case 'anthropic':
     default:
-      return resolvedSettings.anthropicModel || ANTHROPIC_TIER_MODELS.quality
+      return ANTHROPIC_TIER_MODELS.balanced
   }
 }
 

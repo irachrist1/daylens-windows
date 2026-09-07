@@ -16,6 +16,7 @@ import { Client } from '@modelcontextprotocol/sdk/client'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
+import { mcpActivityLogPath, readMcpActivity } from '../src/shared/mcpActivityLog.ts'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATE = '2026-07-15'
@@ -106,6 +107,17 @@ test('an external client lists the read surface and calls it over stdio', async 
     const pageResult = JSON.parse(textOf(pages as { content: Array<{ type: string; text?: string }> }))
     assert.equal(pageResult.found, true)
     assert.equal(pageResult.pages[0].domain, 'coursera.org')
+
+    const activity = readMcpActivity(mcpActivityLogPath(dbPath))
+    const tools = activity.map((entry) => entry.tool)
+    assert.ok(tools.includes('getDaySummary'))
+    assert.ok(tools.includes('getAppUsage'))
+    assert.ok(tools.includes('listPageVisits'))
+    assert.ok(activity.every((entry) => entry.ok))
+    assert.deepEqual(
+      activity.find((entry) => entry.tool === 'getDaySummary')?.arguments,
+      { date: DATE },
+    )
   } finally {
     await close()
     fs.rmSync(dir, { recursive: true, force: true })
@@ -125,6 +137,12 @@ test('an external client is told why an unavailable capability is unavailable', 
     const denied = await client.callTool({ name: 'getTimeChunks', arguments: { date: DATE, incrementMinutes: 30 } })
     assert.equal((denied as { isError?: boolean }).isError, true)
     assert.match(textOf(denied as { content: Array<{ type: string; text?: string }> }), /not available/)
+
+    const activity = readMcpActivity(mcpActivityLogPath(dbPath))
+    const failed = activity.find((entry) => entry.tool === 'getTimeChunks')
+    assert.ok(failed)
+    assert.equal(failed?.ok, false)
+    assert.match(failed?.error ?? '', /not available/)
   } finally {
     await close()
     fs.rmSync(dir, { recursive: true, force: true })

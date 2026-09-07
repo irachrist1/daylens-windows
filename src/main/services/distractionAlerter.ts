@@ -36,6 +36,12 @@ import { deliverNotification } from './notificationDelivery'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_THRESHOLD_MINUTES = 10
+const MAX_THRESHOLD_MINUTES = 60
+
+function normalizeThresholdMinutes(minutes: number): number {
+  if (!Number.isFinite(minutes)) return DEFAULT_THRESHOLD_MINUTES
+  return Math.min(MAX_THRESHOLD_MINUTES, Math.max(1, Math.round(minutes)))
+}
 
 // Clearly work-type apps — strong signal that the user is in a work state.
 // Browsers are intentionally excluded: Chrome open means nothing on its own.
@@ -122,7 +128,7 @@ function fireAlert(appName: string, minutes: number, offPlan: boolean): void {
 }
 
 export function fireTestDistractionNotification(kind: 'idle-reminder' | 'focus-nudge'): boolean {
-  const minutes = Math.max(1, getSettings().distractionAlertThresholdMinutes ?? DEFAULT_THRESHOLD_MINUTES)
+  const minutes = normalizeThresholdMinutes(getSettings().distractionAlertThresholdMinutes ?? DEFAULT_THRESHOLD_MINUTES)
   if (kind === 'focus-nudge') {
     return deliverNotification({
       title: 'Daylens',
@@ -251,7 +257,7 @@ function checkDistraction(nowMs = Date.now()): void {
 }
 
 async function setDistractionThreshold(minutes: number): Promise<void> {
-  thresholdMinutes = Math.max(1, Math.round(minutes))
+  thresholdMinutes = normalizeThresholdMinutes(minutes)
   await setSettings({ distractionAlertThresholdMinutes: thresholdMinutes })
   if (leisureState && leisureState.consecutiveSeconds < thresholdMinutes * 60) {
     leisureState.hasAlertedForCurrentRun = false
@@ -286,7 +292,7 @@ export function resetDistractionStateOnResume(): void {
 export function startDistractionAlerter(): void {
   if (distractionTimer) return
 
-  thresholdMinutes = Math.max(1, getSettings().distractionAlertThresholdMinutes ?? DEFAULT_THRESHOLD_MINUTES)
+  thresholdMinutes = normalizeThresholdMinutes(getSettings().distractionAlertThresholdMinutes ?? DEFAULT_THRESHOLD_MINUTES)
   workStateAccumulatorSeconds = 0
   lastWorkStateBundleId = null
   lastCheckAtMs = null

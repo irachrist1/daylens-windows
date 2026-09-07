@@ -1,6 +1,7 @@
 import { memo, useState } from 'react'
 import type { AIActionUndo, AIActionWidget, AIMessageAction, AIProviderMode, FocusSession } from '@shared/types'
 import type { AIProviderErrorCode } from '@shared/aiProviderError'
+import { citationDisplayTitle } from '@shared/citationDisplay'
 import { ipc } from '../../lib/ipc'
 import { MarkdownMessage } from './markdown'
 import { MentionText } from './mentions'
@@ -82,13 +83,13 @@ export interface MessageListProps {
   onErrorRetry: (message: ThreadMessage) => void
   onSwitchProvider: (message: ThreadMessage, provider: AIProviderMode) => void
   onTransform: (kind: AnswerTransform) => void
+  providerActionsDisabled?: boolean
   onMessageAction: (messageId: string | number, action: AIMessageAction, options?: { reviewNote?: string }) => void
   onCommitActionWidget: (widget: AIActionWidget) => void
   onUndoActionWidget: (proposalId: string, undo: AIActionUndo) => void
   onDismissActionWidget: (widget: AIActionWidget) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
-  // "What the AI saw" (DEV-183): opens the read-only context-packet inspector
-  // for the exchange behind this assistant message.
+  // Opens the read-only context-packet inspector for this exchange.
   onInspectPacket?: (message: ThreadMessage) => void
   // DEV-200: resume / discard a paused turn's row.
   onResumePaused?: (message: ThreadMessage) => void
@@ -107,21 +108,23 @@ export interface MessageListProps {
 // "Turn into…" — post-answer transforms on the latest answer. Each runs a
 // real model call that rewrites THIS answer's grounded content into the chosen
 // form (see request.transform); the menu is a small hover-light popover.
-function TransformMenu({ onTransform }: { onTransform: (kind: AnswerTransform) => void }) {
+function TransformMenu({ onTransform, disabled = false }: { onTransform: (kind: AnswerTransform) => void; disabled?: boolean }) {
   const [open, setOpen] = useState(false)
+  const menuOpen = open && !disabled
   return (
     <div style={{ position: 'relative', display: 'inline-flex' }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={menuOpen}
         title="Turn this answer into…"
-        style={{ height: 30, padding: '0 10px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: open ? 'var(--color-accent-dim)' : 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+        style={{ height: 30, padding: '0 10px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: menuOpen ? 'var(--color-accent-dim)' : 'transparent', color: 'var(--color-text-secondary)', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1, fontSize: 12, fontWeight: 600 }}
       >
         Turn into…
       </button>
-      {open && (
+      {menuOpen && (
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 19 }} onClick={() => setOpen(false)} />
           <div role="menu" style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 20, minWidth: 180, background: 'var(--color-surface)', border: '1px solid var(--color-border-ghost)', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.16)', padding: 5 }}>
@@ -178,6 +181,7 @@ function MessageListImpl({
   onErrorRetry,
   onSwitchProvider,
   onTransform,
+  providerActionsDisabled = false,
   onMessageAction,
   onCommitActionWidget,
   onUndoActionWidget,
@@ -278,8 +282,8 @@ function MessageListImpl({
                     <button
                       type="button"
                       onClick={() => onResumePaused?.(message)}
-                      disabled={!message.pausedInfo?.checkpointId || !onResumePaused}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: message.pausedInfo?.checkpointId ? 'pointer' : 'default', opacity: message.pausedInfo?.checkpointId ? 1 : 0.6 }}
+                      disabled={providerActionsDisabled || !message.pausedInfo?.checkpointId || !onResumePaused}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: !providerActionsDisabled && message.pausedInfo?.checkpointId ? 'pointer' : 'default', opacity: !providerActionsDisabled && message.pausedInfo?.checkpointId ? 1 : 0.6 }}
                     >
                       Resume
                     </button>
@@ -303,7 +307,8 @@ function MessageListImpl({
                   <button
                     type="button"
                     onClick={() => onErrorRetry(message)}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                    disabled={providerActionsDisabled}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12, fontWeight: 700, cursor: providerActionsDisabled ? 'default' : 'pointer', opacity: providerActionsDisabled ? 0.6 : 1 }}
                   >
                     <IconRetry /> Retry
                   </button>
@@ -318,7 +323,8 @@ function MessageListImpl({
                     <button
                       type="button"
                       onClick={() => onErrorRetry(message)}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}
+                      disabled={providerActionsDisabled}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 700, cursor: providerActionsDisabled ? 'default' : 'pointer', opacity: providerActionsDisabled ? 0.6 : 1 }}
                     >
                       <IconRetry /> Retry
                     </button>
@@ -329,7 +335,8 @@ function MessageListImpl({
                         key={alt.provider}
                         type="button"
                         onClick={() => onSwitchProvider(message, alt.provider)}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}
+                        disabled={providerActionsDisabled}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 700, cursor: providerActionsDisabled ? 'default' : 'pointer', opacity: providerActionsDisabled ? 0.6 : 1 }}
                       >
                         Try on {alt.label}
                       </button>
@@ -436,56 +443,29 @@ function MessageListImpl({
                   )}
 
                   {(message.agent?.citations?.length ?? 0) > 0 && (
-                    // Packet citations (DEV-182): each chip is one recorded
-                    // context-packet item the answer's superscripts point at.
-                    // Clicking a chip opens the full inspector (DEV-183) on
-                    // this exchange's packet.
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
-                      <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>From your day record</span>
+                      <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>Sources</span>
                       {message.agent?.citations?.map((citation) => (
                         <button
                           key={`${message.id}:cite:${citation.marker}`}
                           type="button"
                           onClick={canInspect(message) ? () => onInspectPacket?.(message) : undefined}
-                          title={`${citation.statement}\n${citation.identity}\n${canInspect(message) ? 'Click to see everything the AI was shown' : "Recorded in this answer's context packet"}`}
+                          title={`${citationDisplayTitle(citation)}\n${canInspect(message) ? 'Click to inspect recorded sources' : "Recorded in this answer's context packet"}`}
                           style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-secondary)', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: canInspect(message) ? 'pointer' : 'default' }}
                         >
-                          {citation.marker} · {citation.statement}
+                          {citation.marker} · {citationDisplayTitle(citation)}
                         </button>
                       ))}
                     </div>
                   )}
 
                   {message.agent != null && (
-                    // The settled trail (issue #25) + "What the AI saw"
-                    // (DEV-183): the answer's quiet summary and step list,
-                    // reconstructed from the persisted tool trace, next to
-                    // the recorded context-packet pill. Read-only; works
-                    // with no model configured.
                     <SettledActivityTrail
                       message={message}
                       canInspect={canInspect(message)}
                       onInspect={() => onInspectPacket?.(message)}
                       reducedMotion={reducedMotion}
                     />
-                  )}
-
-                  {(message.agent?.fileDisclosures?.length ?? 0) > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 12 }}>
-                      <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>Files opened</span>
-                      {message.agent?.fileDisclosures?.map((disclosure) => (
-                        // The chip stays human — just the file name. The
-                        // audit detail (path, version, byte range) lives in
-                        // the tooltip and the Settings access log, not inline.
-                        <span
-                          key={`${message.id}:${disclosure.path}:${disclosure.excerptStart}`}
-                          title={`${disclosure.path}\nversion ${disclosure.versionFingerprint}\nbytes ${disclosure.excerptStart}–${disclosure.excerptEnd}\nLogged in Settings → Agent file access`}
-                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', color: 'var(--color-text-secondary)' }}
-                        >
-                          {disclosure.name}
-                        </span>
-                      ))}
-                    </div>
                   )}
 
                   {message.id === latestCompletedAssistantId && message.state === 'complete' && (message.suggestedFollowUps?.length ?? 0) >= 2 && (
@@ -540,11 +520,12 @@ function MessageListImpl({
                         pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'retry')]?.pulseNonce ?? 0}
                         reducedMotion={reducedMotion}
                         onClick={() => onRetry(index, message)}
+                        disabled={providerActionsDisabled}
                       >
                         <IconRetry />
                       </IconActionButton>
                     )}
-                    {message.id === latestCompletedAssistantId && <TransformMenu onTransform={onTransform} />}
+                    {message.id === latestCompletedAssistantId && <TransformMenu onTransform={onTransform} disabled={providerActionsDisabled} />}
                   </div>
                 </>
               )}
