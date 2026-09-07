@@ -92,6 +92,12 @@ export const DEFAULTS: AppSettings = {
 // replacement on read — otherwise every call fails before R1's retry can help.
 // Only confirmed-dead ids belong here; superseded-but-working ids are left
 // alone so we never silently change a user's model (or its cost) without intent.
+function normalizeDistractionAlertThreshold(value: unknown): number {
+  const minutes = Number(value)
+  if (!Number.isFinite(minutes)) return 10
+  return Math.min(60, Math.max(1, Math.round(minutes)))
+}
+
 const DEPRECATED_MODEL_REMAP: Record<string, string> = {
   // gemini-3.1-flash-lite-preview was deprecated and shut down at the provider.
   'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite',
@@ -171,7 +177,7 @@ export function getSettings(): AppSettings {
     weeklyBriefEnabled: (_store.get('weeklyBriefEnabled', true) as boolean),
     activityFreeNotificationText: (_store.get('activityFreeNotificationText', false) as boolean),
     interpretationAgentEnabled: (_store.get('interpretationAgentEnabled', true) as boolean),
-    distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
+    distractionAlertThresholdMinutes: normalizeDistractionAlertThreshold(_store.get('distractionAlertThresholdMinutes', 10)),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', true) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', true) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
@@ -221,6 +227,9 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
   }
   if ('activityColorOverrides' in entries) {
     entries.activityColorOverrides = sanitizeActivityColorOverrides(entries.activityColorOverrides)
+  }
+  if ('distractionAlertThresholdMinutes' in entries) {
+    entries.distractionAlertThresholdMinutes = normalizeDistractionAlertThreshold(entries.distractionAlertThresholdMinutes)
   }
   if ('captureConsent' in entries) {
     entries.captureConsent = normalizeCaptureConsent(entries.captureConsent)

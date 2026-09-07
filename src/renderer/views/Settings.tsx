@@ -3905,7 +3905,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   step={1}
                   value={settings.distractionAlertThresholdMinutes ?? 10}
                   onChange={(event) => {
-                    const minutes = Math.max(1, Number(event.target.value) || 10)
+                    const minutes = Math.min(60, Math.max(1, Number(event.target.value) || 10))
                     void persist({ distractionAlertThresholdMinutes: minutes })
                     void ipc.distractionAlerter.setThreshold({ minutes })
                   }}
