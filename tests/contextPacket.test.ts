@@ -151,13 +151,13 @@ test('a Granola question does not attach unrelated Obsidian files that merely me
     path: '/home/person/Obsidian/personal-essay-7f3a9c.md',
     state: 'model_readable',
   })
-  storeDerivedText(unrelated.id, 'A diary entry about a meeting with friends and some notes.')
+  storeDerivedText(db, unrelated.id, 'A diary entry about a meeting with friends and some notes.')
   const related = addFileAccessGrant(db, {
     scopeKind: 'file',
     path: '/home/person/notes/granola-kickoff.md',
     state: 'model_readable',
   })
-  storeDerivedText(related.id, 'Agenda for the Granola kickoff.')
+  storeDerivedText(db, related.id, 'Agenda for the Granola kickoff.')
 
   const packet = await buildContextPacket(db, {
     purpose: 'answer',
