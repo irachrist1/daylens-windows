@@ -586,3 +586,27 @@ test('a pre-stamped database never rescans (guard-version keying)', async () => 
     'nothing runs until the guard version bumps past the stamp')
   db.close()
 })
+
+test('an artifact-sourced tool-surface label_current is healed without an AI row', async () => {
+  const db = createProductionTestDatabase()
+  seedBlock(db, {
+    id: 'blk_artifact_surface',
+    startHour: 9,
+    endHour: 10,
+    label: 'Cursor Agents',
+    labelSource: 'artifact',
+    evidence: DEV_EVIDENCE,
+  })
+  const result = await runLabelGuardRepair(db)
+  assert.equal(result.status, 'ran')
+  assert.equal(result.healedBlocks, 1)
+  const healed = blockRow(db, 'blk_artifact_surface')
+  assert.notEqual(healed.label_current, 'Cursor Agents')
+  assert.equal(
+    /cursor agents/i.test(healed.label_current),
+    false,
+    `healed label "${healed.label_current}" still names the tool surface`,
+  )
+  assert.notEqual(healed.label_source, 'ai')
+  db.close()
+})

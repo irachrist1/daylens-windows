@@ -40,8 +40,14 @@
  * conjunct (the verb's direct object IS the tool) and a trailing AI-assistant
  * credit ("… with Codex and Gemini") both narrate the instrument instead of
  * the work; real labels from a graded day carried both shapes.
+ *
+ * v6: the finalize ladder and derived-label helpers now reject the same
+ * work-name-guard vocabulary, so a compacted window-title artifact
+ * ("Cursor Agents — daylens timeline" → "Cursor Agents") can no longer
+ * persist as the block name after the v5 stamp. Stored rows written through
+ * that hole re-heal on the next launch.
  */
-export const WORK_NAME_GUARD_VERSION = 5
+export const WORK_NAME_GUARD_VERSION = 6
 
 /** Tool brands that are the INSTRUMENT of the work, never its subject. */
 export const TOOL_BRAND_NAMES = new Set([
