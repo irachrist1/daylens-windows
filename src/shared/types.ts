@@ -2464,11 +2464,12 @@ export interface AppSettings {
    *  without losing the brief itself. */
   activityFreeNotificationText?: boolean
   /** The interpretation-agent live switch (agent-runtime-and-context.md,
-   *  DEV-206): OFF by default. Turning it on routes automatic day analysis
-   *  through the packet-based interpretation agent instead of the direct
-   *  regroup/relabel pipeline — allowed only once the offline fixture eval
-   *  (interpretationEval) passes for the packaged runtime. Until that runtime
-   *  lands, the flag is honored but the direct pipeline still runs (logged). */
+   *  DEV-206 / DEV-287). When true, low-confidence day-analysis relabels run
+   *  through the packet-based interpretation agent. Historical relabels use
+   *  the read-only title, calendar, git, meeting-note, and entity tools.
+   *  Disclosure recording is fail-closed: if the interpret packet cannot be
+   *  stored, Daylens keeps the local label instead of making an unrecorded
+   *  remote call. The direct regroup/relabel pipeline remains the floor. */
   interpretationAgentEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean

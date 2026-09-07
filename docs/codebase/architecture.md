@@ -68,7 +68,7 @@ What makes it "activity, not tabs":
 1. `workBlocks.ts` — heuristic segmentation with boundary reasons.
 2. `workIntent.ts` — role (execution/research/communication/review/…) + subject, ranked artifact > page > workflow > domain, guarded per invariant 4.
 3. `workKind.ts` — work/leisure/personal, distribution-first.
-4. `analyzeDay.ts` — AI regroup + relabel, versioned (`day_analysis_versions`), heuristic fallback with no provider. Carries an `interpretationAgentEnabled` flag whose packet-based runtime is NOT wired yet — that runtime is where the agentic interpretation defined in [agent runtime and context](../specs/agent-runtime-and-context.md) lands.
+4. `analyzeDay.ts` — AI regroup + relabel, versioned (`day_analysis_versions`), heuristic fallback with no provider. When `interpretationAgentEnabled` is on, low-confidence historical relabels run through the packet-based interpretation agent in `interpretationAgent.ts` (`AISdkAgentRuntime` over the read-only title, calendar, git, meeting-note, and entity tools). Live screen capture is not registered for that path. If disclosure recording cannot persist, the local label stands. The direct pipeline stays the floor and the per-block fallback.
 5. `dayWrapScenes.buildDayWrapFacts` — the one reconciled facts object per day (activities, ribbon, story beats, standout, hooks, quality gate).
 6. `wrappedNarrative.ts` (lib + service) — prompt build, validation, repair, fallback, cache keyed by date + facts hash.
 

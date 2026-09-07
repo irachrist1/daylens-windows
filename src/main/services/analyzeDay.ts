@@ -24,7 +24,11 @@ import { buildDaySnapshot } from '../lib/daySnapshot'
 import { appendDayAnalysisVersion } from '../db/dayAnalysisVersions'
 import { evaluateInterpretationRun, interpretationAgentEnabled } from '../lib/interpretationEval'
 import { findRawArtifactLeak } from '../lib/wrapNarrativeShared'
-import { runInterpretationAgentRelabel, type InterpretationAgentInsight } from './interpretationAgent'
+import {
+  isInterpretationContextPacketFailure,
+  runInterpretationAgentRelabel,
+  type InterpretationAgentInsight,
+} from './interpretationAgent'
 import { runExternalSignalBackfill } from './externalSignals'
 import { getSettings } from './settings'
 
@@ -208,13 +212,15 @@ export async function analyzeTimelineDay(
   // hermetic suite never reaches real connectors.
   await runExternalSignalBackfill(dateStr)
 
-  // The interpretation-agent live switch (DEV-206): OFF by default. When on,
-  // the per-block relabel of LOW-CONFIDENCE blocks becomes an agent turn (a
-  // small Tier-1 tool loop, services/interpretationAgent.ts) instead of the
-  // single direct provider call. The deterministic pipeline stays the floor:
-  // any agent failure falls back per block to the exact direct behavior, and
-  // the whole agent pass is gated on evaluateInterpretationRun before one
-  // label persists. Flag off → this function is byte-identical to before.
+  // The interpretation-agent live switch (DEV-206 / DEV-287): when on, the
+  // per-block relabel of LOW-CONFIDENCE blocks becomes a packet-based agent
+  // turn (services/interpretationAgent.ts — same runtime and tiered tools as
+  // chat) instead of the single direct provider call. The deterministic
+  // pipeline stays the floor: any agent failure falls back per block to the
+  // exact direct behavior, except when disclosure recording failed and any
+  // remote fallback must also stay closed. The whole agent pass is gated on
+  // evaluateInterpretationRun before one label persists. Flag off → this
+  // function is byte-identical to the direct pipeline.
   let agentEnabled = false
   try {
     agentEnabled = interpretationAgentEnabled(getSettings())
@@ -417,6 +423,7 @@ export async function analyzeTimelineDay(
   // the whole agent pass and the affected blocks fall back to the direct
   // relabel below, exactly as if the flag were off.
   const agentHandled = new Set<string>()
+  const agentAuditBlocked = new Set<string>()
   if (agentEnabled && relabelTargets.length > 0) {
     const isLowConfidence = (block: WorkContextBlock): boolean =>
       block.confidence === 'low' || block.label.confidence < 0.58
@@ -432,6 +439,15 @@ export async function analyzeTimelineDay(
           )
           agentResults.push({ block, insight })
         } catch (error) {
+          if (isInterpretationContextPacketFailure(error)) {
+            agentAuditBlocked.add(block.id)
+            failures.push('Daylens could not record what it was about to send, so it left this block\'s label alone.')
+            console.warn(
+              `[timeline] interpretation agent skipped for block ${block.id}; disclosure recording is unavailable:`,
+              error.message,
+            )
+            return
+          }
           // Per-block floor: the direct relabel below picks this block up.
           console.warn(
             `[timeline] interpretation agent failed for block ${block.id}; falling back to the direct relabel:`,
@@ -500,7 +516,9 @@ export async function analyzeTimelineDay(
     }
   }
 
-  const directTargets = relabelTargets.filter((block) => !agentHandled.has(block.id))
+  const directTargets = relabelTargets.filter(
+    (block) => !agentHandled.has(block.id) && !agentAuditBlocked.has(block.id),
+  )
   if (directTargets.length > 0) {
     let named = 0
     emitProgress({ stage: 'naming', done: 0, total: directTargets.length })
