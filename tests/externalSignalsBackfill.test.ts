@@ -205,20 +205,24 @@ test('a pre-v68 DB without the scan ledger still backfills, just without the emp
   db.close()
 })
 
-test('real connector chain: missing icalBuddy does NOT ledger, a genuine empty run does', { skip: process.platform !== 'darwin' }, async () => {
+test('real connector chain: missing EventKit helper does NOT ledger, a genuine empty run does', async () => {
   const db = makeDb()
-  // icalBuddy missing → collectCalendarEvents throws → the day stays
-  // collectable: installing icalBuddy later can still enrich it.
+  // Helper missing → collectCalendarEvents throws → the day stays
+  // collectable: granting Calendar later can still enrich it.
   const unavailable = countingDeps(db)
-  unavailable.collectCalendar = (date) => collectCalendarEvents(date, { resolveBinary: () => null })
+  unavailable.collectCalendar = (date) => collectCalendarEvents(date, {
+    platform: 'darwin',
+    resolveHelper: () => null,
+  })
   await ensureExternalSignalsForDate(db, PAST_DATE, { deps: unavailable })
   assert.equal(hasExternalSignalScan(db, PAST_DATE, 'calendar'), false, 'an unchecked day is never remembered as empty')
 
-  // icalBuddy present, ran, printed nothing → a real answer, ledgered.
+  // Helper present, ran, found nothing → a real answer, ledgered.
   const emptyRun = countingDeps(db)
   emptyRun.collectCalendar = (date) => collectCalendarEvents(date, {
-    resolveBinary: () => '/fake/icalBuddy',
-    run: async () => '',
+    platform: 'darwin',
+    resolveHelper: () => '/fake/calendar-helper',
+    run: async () => JSON.stringify({ ok: true, events: [] }),
   })
   await ensureExternalSignalsForDate(db, PAST_DATE, { deps: emptyRun })
   assert.ok(hasExternalSignalScan(db, PAST_DATE, 'calendar'), 'a run that happened and found nothing is remembered')
