@@ -619,11 +619,11 @@ export function useAIChat() {
         responseThreadId: response.threadId,
         navigationVersionAtSend: navigationVersion,
         navigationVersionNow: navigationVersionRef.current,
-      })) {
+      }) && response.threadId != null) {
+        reassignQueuedComposerPrompts(requestThreadId, response.threadId)
         setActiveThreadId(response.threadId)
         setIsNewChatDraft(false)
         rememberedThreadId = response.threadId
-        reassignQueuedComposerPrompts(requestThreadId, response.threadId)
       }
       void refreshThreadList()
     } catch (error) {

@@ -43,6 +43,7 @@ test('a queued prompt stays on its conversation and survives a denied-access Con
   assert.match(workspace, /onValueChange=\{preserveQueuedDraft\}/)
   assert.match(workspace, /return false/)
   assert.match(chatHook, /reassignQueuedComposerPrompts\(requestThreadId, response\.threadId\)/)
+  assert.match(chatHook, /response\.threadId != null/)
   assert.doesNotMatch(workspace, /drainQueuedComposerPrompts/)
   assert.doesNotMatch(workspace, /enqueueComposerPrompt\(text\)/)
 })
