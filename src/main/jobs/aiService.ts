@@ -171,6 +171,7 @@ interface AnswerEnvelope {
     fileDisclosures?: import('@shared/types').AIMessageFileDisclosure[]
     contextPacketId?: string | null
     citations?: import('@shared/types').AIMessageCitation[]
+    durationMs?: number | null
   }
   suggestedFollowUps: FollowUpSuggestion[]
   actions?: AIMessageAction[]
@@ -3820,6 +3821,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       fileDisclosures: agentResult.fileDisclosures,
       contextPacketId: agentResult.contextPacketId,
       citations: agentResult.citations,
+      durationMs: agentResult.durationMs,
     },
   })
   // Bind the recorded packet to the persisted assistant message (DEV-182), so

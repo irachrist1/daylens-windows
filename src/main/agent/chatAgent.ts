@@ -195,6 +195,8 @@ export interface ChatAgentResult {
   /** Verified packet citations in the answer, in display order — every entry
    *  resolves to an item in the recorded packet. */
   citations: PacketCitation[]
+  /** Wall-clock length of the agent turn, for the collapsed "Worked for" line. */
+  durationMs: number
   /** Evidence coverage for this answer's factual claims (REQ-AIA-002). Every
    *  field is derived from THIS exchange only — the turn's packet, its tool
    *  results, and its computed facts — so inspecting it can never surface
@@ -248,6 +250,7 @@ export async function runChatAgentTurn(
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
   deps: ChatAgentDeps,
 ): Promise<ChatAgentResult> {
+  const turnStartedAt = Date.now()
   const now = deps.now ?? new Date()
   const artifacts: AIMessageArtifact[] = []
   const toolTrace: AgentToolTraceEntry[] = []
@@ -718,6 +721,7 @@ export async function runChatAgentTurn(
       groundingRetried,
       contextPacketId: contextPacket && contextPacketRecorded ? contextPacket.id : null,
       citations,
+      durationMs: Math.max(0, Date.now() - turnStartedAt),
       evidence: {
         deterministicFacts,
         deterministicRepairs: enforcement.repairs,

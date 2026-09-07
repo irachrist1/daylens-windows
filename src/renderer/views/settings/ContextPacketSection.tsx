@@ -1,4 +1,4 @@
-// Settings → Memory → "What the AI has seen" (DEV-183): the browser over the
+// Settings → Memory → recorded sources (DEV-183): the browser over the
 // recorded context-packet ledger. Every AI exchange that assembled context is
 // listed — question, when, how much, where it went — and any row opens the
 // same read-only inspector the chat answers use. Works with no model
@@ -41,7 +41,7 @@ export function ContextPacketSection() {
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      <span style={{ fontSize: 13, fontWeight: 650, color: 'var(--color-text-primary)' }}>What the AI has seen</span>
+      <span style={{ fontSize: 13, fontWeight: 650, color: 'var(--color-text-primary)' }}>Recorded sources</span>
       <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
         Every AI answer starts from a recorded context packet — the exact facts, search hits, and file
         excerpts selected for that question, written down before anything leaves this device. Open any

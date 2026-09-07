@@ -54,6 +54,9 @@ import {
   getContextPacketById,
   getContextPacketForMessage,
   listContextPackets,
+  fileMatchesQuestion,
+  questionAttachesDayFacts,
+  questionAttachesRetrieval,
   renderContextPacketForPrompt,
   resolveContextDates,
   CONTEXT_POLICY_VERSION,
@@ -103,6 +106,153 @@ test('resolveContextDates: explicit ISO dates and "yesterday" resolve determinis
   assert.deepEqual(resolveContextDates('what did I do', NOW), ['2026-04-23'])
 })
 
+test('greetings skip retrieval; day dumps need a day question or an explicit range', () => {
+  assert.equal(questionAttachesRetrieval('hi'), false)
+  assert.equal(questionAttachesRetrieval('hello there'), false)
+  assert.equal(questionAttachesRetrieval('thanks'), false)
+  assert.equal(questionAttachesRetrieval('what did we decide in the granola meeting'), true)
+  const today = { startDate: '2026-04-23', endDate: '2026-04-23', dates: ['2026-04-23'], resolution: 'default' as const }
+  const asked = { startDate: '2026-04-22', endDate: '2026-04-22', dates: ['2026-04-22'], resolution: 'explicit' as const }
+  assert.equal(questionAttachesDayFacts('hi', today), false)
+  assert.equal(questionAttachesDayFacts('what did we decide in the granola meeting', today), false)
+  assert.equal(questionAttachesDayFacts('retrieval planner', today), false)
+  assert.equal(questionAttachesDayFacts('what did I do today', today), true)
+  assert.equal(questionAttachesDayFacts('How did my day go?', today), true)
+  assert.equal(questionAttachesDayFacts('show me my day', today), true)
+  assert.equal(questionAttachesDayFacts("how's my day", today), true)
+  assert.equal(questionAttachesDayFacts('retrieval planner', asked), true)
+})
+
+test('file matching requires a whole token, not a substring', () => {
+  assert.equal(fileMatchesQuestion('started-writing.md', 'I started writing.', ['art']), false)
+  assert.equal(fileMatchesQuestion('product-catalog.md', 'a catalog of widgets', ['log']), false)
+  assert.equal(fileMatchesQuestion('runtime-notes.md', 'runtime errors', ['run']), false)
+  assert.equal(fileMatchesQuestion('error-log.md', 'the log from deploy', ['log']), true)
+  assert.equal(fileMatchesQuestion('modern-art.md', 'notes on modern art', ['art']), true)
+  assert.equal(fileMatchesQuestion('granola-kickoff.md', 'Agenda for the Granola kickoff.', ['granola']), true)
+})
+
+test('a greeting attaches almost no context even on a busy day with granted files', async () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Refactoring the retrieval planner', 9, 0, 45)
+  insertSession(db, 'Reading an Obsidian essay about meetings', 14, 0, 30)
+  indexMemoryForDay(db, DATE)
+  const grant = addFileAccessGrant(db, {
+    scopeKind: 'file',
+    path: '/home/person/Obsidian/personal-essay-7f3a9c.md',
+    state: 'model_readable',
+  })
+  storeDerivedText(db, grant.id, 'A long personal journal about meetings, granola breakfasts, and notes from last week.')
+
+  const packet = await buildContextPacket(db, {
+    purpose: 'answer',
+    question: 'hi',
+    now: NOW,
+    destination: DESTINATION,
+  })
+  assert.equal(packet.items.length, 0, 'hi does not dump the day, search hits, or files')
+  assert.deepEqual(packet.gaps, [])
+  assert.deepEqual(packet.conflicts, [])
+  assert.deepEqual(packet.permissions, [])
+  db.close()
+})
+
+test('a Granola question does not attach unrelated Obsidian files that merely mention meetings', async () => {
+  const db = createProductionTestDatabase()
+  const unrelated = addFileAccessGrant(db, {
+    scopeKind: 'file',
+    path: '/home/person/Obsidian/personal-essay-7f3a9c.md',
+    state: 'model_readable',
+  })
+  storeDerivedText(db, unrelated.id, 'A diary entry about a meeting with friends and some notes.')
+  const related = addFileAccessGrant(db, {
+    scopeKind: 'file',
+    path: '/home/person/notes/granola-kickoff.md',
+    state: 'model_readable',
+  })
+  storeDerivedText(db, related.id, 'Agenda for the Granola kickoff.')
+
+  const packet = await buildContextPacket(db, {
+    purpose: 'answer',
+    question: 'what did we decide in the granola meeting',
+    now: NOW,
+    destination: DESTINATION,
+  })
+  const files = packet.items.filter((item) => item.kind === 'file_excerpt')
+  assert.equal(files.length, 1)
+  assert.equal(files[0]?.identity, 'file:/home/person/notes/granola-kickoff.md')
+  db.close()
+})
+
+test('everyday day questions attach today’s timeline facts', async () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Refactoring the retrieval planner', 9, 0, 45)
+  indexMemoryForDay(db, DATE)
+  const dayNow = new Date(2026, 3, 22, 18, 0, 0, 0)
+  for (const question of ['How did my day go?', 'show me my day']) {
+    const packet = await buildContextPacket(db, {
+      purpose: 'answer',
+      question,
+      now: dayNow,
+      destination: DESTINATION,
+    })
+    assert.ok(
+      packet.items.some((item) => item.kind === 'day_fact' || item.kind === 'search_exact'),
+      `"${question}" still receives the day’s facts`,
+    )
+    assert.ok(packet.gaps.length > 0 || packet.items.length > 0)
+  }
+  db.close()
+})
+
+test('short question tokens do not fill the file-excerpt budget with substring hits', async () => {
+  const db = createProductionTestDatabase()
+  const decoys = [
+    ['/home/person/notes/aaa-started.md', 'I started writing this morning.'],
+    ['/home/person/notes/bbb-started.md', 'We started the catalog later.'],
+    ['/home/person/notes/ccc-catalog.md', 'A catalog of runtime notes.'],
+    ['/home/person/notes/ddd-runtime.md', 'runtime setup after we started.'],
+    ['/home/person/notes/eee-started.md', 'started another catalog page.'],
+  ] as const
+  for (const [path, text] of decoys) {
+    const grant = addFileAccessGrant(db, { scopeKind: 'file', path, state: 'model_readable' })
+    storeDerivedText(db, grant.id, text)
+  }
+  const relevant = addFileAccessGrant(db, {
+    scopeKind: 'file',
+    path: '/home/person/notes/fff-art.md',
+    state: 'model_readable',
+  })
+  storeDerivedText(db, relevant.id, 'Notes on the art of retrieval.')
+
+  const packet = await buildContextPacket(db, {
+    purpose: 'answer',
+    question: 'the art log',
+    now: NOW,
+    destination: DESTINATION,
+  })
+  const files = packet.items.filter((item) => item.kind === 'file_excerpt')
+  assert.deepEqual(files.map((item) => item.identity), ['file:/home/person/notes/fff-art.md'])
+  db.close()
+})
+
+test('a day question still attaches timeline facts for the asked day', async () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Refactoring the retrieval planner', 9, 0, 45)
+  indexMemoryForDay(db, DATE)
+  const packet = await buildContextPacket(db, {
+    purpose: 'answer',
+    question: 'what happened on 2026-04-22',
+    now: NOW,
+    destination: DESTINATION,
+  })
+  assert.ok(
+    packet.items.some((item) => item.kind === 'day_fact' || item.kind === 'search_exact'),
+    'a day question still receives the day’s facts',
+  )
+  db.close()
+})
+
 test('the same question against the same day state assembles the same packet (modulo id and timestamp)', async () => {
   const db = createProductionTestDatabase()
   insertSession(db, 'Refactoring the retrieval planner', 9, 0, 45)
@@ -144,9 +294,9 @@ test('the same question against the same day state assembles the same packet (mo
     assert.ok(['standard', 'personal', 'high'].includes(item.sensitivity))
   }
 
-  // Honest absence: the requested day has no focus events, so the packet says
-  // so as a typed gap instead of letting silence read as inactivity.
-  assert.ok(first.gaps.some((gap) => gap.kind === 'no-capture'), 'a signal-free day is a recorded gap')
+  // A search question does not dump today's timeline or its capture gaps.
+  assert.deepEqual(first.gaps, [])
+  assert.ok(!first.items.some((item) => item.kind === 'day_fact'))
 
   // Day state change ⇒ different packet.
   insertSession(db, 'Sketching the retrieval planner ranker', 16, 0, 20)
