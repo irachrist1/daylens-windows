@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { ActiveBrowserContextTracker, type ActiveBrowserWindowSnapshot } from '../src/main/services/browserContext.ts'
+import {
+  ActiveBrowserContextTracker,
+  pickRecentHistoryRow,
+  type ActiveBrowserWindowSnapshot,
+} from '../src/main/services/browserContext.ts'
 
 function createDb(): Database.Database {
   const db = new Database(':memory:')
@@ -191,4 +195,22 @@ test('a browser-page flicker under ten seconds is absorbed instead of becoming a
     ORDER BY visit_time ASC
   `).all()
   assert.deepEqual(rows, [{ domain: 'github.com', duration_sec: 30 }])
+})
+
+test('titleless history fallback refuses to guess the latest row', () => {
+  const rows = [
+    { url: 'https://www.netflix.com/watch/1', title: 'Stranger Things | Netflix' },
+    { url: 'https://www.coursera.org/learn/ml', title: 'Supervised ML | Coursera' },
+  ]
+  assert.equal(pickRecentHistoryRow(rows, null), null)
+  assert.equal(pickRecentHistoryRow(rows, ''), null)
+  assert.equal(
+    pickRecentHistoryRow(rows, 'Supervised ML | Coursera')?.url,
+    'https://www.coursera.org/learn/ml',
+  )
+  assert.equal(
+    pickRecentHistoryRow(rows, 'Inbox — Gmail')?.url,
+    'https://www.netflix.com/watch/1',
+    'a titled window with no token overlap still takes the latest row',
+  )
 })

@@ -214,6 +214,8 @@ The existing `website_visits_pending` approach is not part of the V2 contract be
 - A history visit with no foreground overlap may support retrieval but contributes no active time.
 - An active page interval is clipped to its owning foreground browser interval.
 - A history visit's own recorded duration is a navigation-gap estimate. When reconciling, the last corroborated page in a browser may fill that browser's verified foreground time until the next recorded navigation, bounded by an explicit per-visit cap and never crossing into untracked gaps. A live active-tab observation always outranks this fill. This is what keeps a two-hour single-page stay in a browser without live tab access from collapsing to a thirty-second guess.
+- Entertainment hosts (Netflix, YouTube, and the other `domainPolicy` entertainment sinks) are the exception on a titleless browser: without a live `active_browser_context` sample for that host, history-fill is a two-minute grace, not the ordinary multi-hour cap. Work and course pages keep the long cap. The two-minute window is the same lookback already used to treat a history row as recent enough to be the active tab.
+- Chromium browsers that can read the front tab but cannot verify window mode (Dia) persist that tab as `active_browser_context` only when the browser's own non-private history already names the same page as the latest navigation. The dropped `browser_context_events` table is not part of this path.
 
 ## Idle, pause, and missing time
 
