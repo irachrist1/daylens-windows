@@ -56,7 +56,12 @@ import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForApp
 import { categoryForDomain } from '@shared/domainCategories'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
-import { evaluateLabelVoice, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
+import {
+  evaluateLabelVoice,
+  labelVoiceContextForBlock,
+  rawLabelForm,
+  userAuthoredLabel,
+} from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
@@ -6547,9 +6552,16 @@ function leisureLabelForBlock(block: WorkContextBlock): string {
 }
 
 export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?: string | null): string {
-  // A user rename always wins, verbatim.
-  if (overrideLabel && overrideLabel.trim() && !GENERIC_LABELS.has(overrideLabel.trim())) {
-    return overrideLabel.trim()
+  // User wording is law (AC-VIC-004). Honor `label.override` / `source: 'user'`
+  // here so callers that omit the extra argument (AI context, moment evidence)
+  // keep the chosen name instead of replacing it with a guarded inference.
+  const explicitOverride = overrideLabel?.trim()
+  if (explicitOverride && !GENERIC_LABELS.has(explicitOverride)) {
+    return explicitOverride
+  }
+  const authored = userAuthoredLabel(block)
+  if (authored && !GENERIC_LABELS.has(authored)) {
+    return authored
   }
   if (block.review?.correctedLabel?.trim()) {
     return block.review.correctedLabel.trim()

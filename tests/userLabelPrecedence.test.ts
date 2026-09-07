@@ -7,6 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDaySummaryScaffold } from '../src/main/jobs/aiService.ts'
+import { userVisibleLabelForBlock } from '../src/main/services/workBlocks.ts'
 import { userVisibleBlockLabel } from '../src/shared/blockLabel.ts'
 import { labelCandidateViolation, labelProvenance, userAuthoredLabel } from '../src/shared/labelVoice.ts'
 import type { AppCategory, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
@@ -94,7 +95,36 @@ function makePayload(blocks: WorkContextBlock[]): DayTimelinePayload {
 test('AC-VIC-004.1: a user label that breaks every policy rule survives byte for byte', () => {
   const block = makeBlock({ label: 'Reworking the sync engine', override: UNRULY_USER_LABEL })
   assert.equal(userVisibleBlockLabel(block), UNRULY_USER_LABEL)
+  assert.equal(userVisibleLabelForBlock(block), UNRULY_USER_LABEL)
   assert.equal(userAuthoredLabel(block), UNRULY_USER_LABEL)
+})
+
+test('userVisibleLabelForBlock keeps a stored override without a separate argument', () => {
+  // Finalize stores the chosen name on both `current` and `override`. Context
+  // and moment-evidence callers omit the extra argument; the override must
+  // still beat a passing inferred / AI label that the work-name guard would
+  // otherwise substitute.
+  const block = makeBlock({
+    label: 'Cursor Agents',
+    source: 'user',
+    override: 'Cursor Agents',
+    aiLabel: 'daylens timeline',
+    artifactTitle: 'daylens timeline',
+  })
+  assert.equal(userVisibleLabelForBlock(block), 'Cursor Agents')
+  assert.equal(userVisibleLabelForBlock(block, null), 'Cursor Agents')
+  assert.equal(userVisibleLabelForBlock(block, undefined), 'Cursor Agents')
+})
+
+test('userVisibleLabelForBlock prefers label.override over a passing inferred current', () => {
+  const block = makeBlock({
+    label: 'daylens timeline',
+    source: 'rule',
+    override: 'Cursor Agents',
+    aiLabel: 'daylens timeline',
+  })
+  assert.equal(userAuthoredLabel(block), 'Cursor Agents')
+  assert.equal(userVisibleLabelForBlock(block), 'Cursor Agents')
 })
 
 test('AC-VIC-004.1: the same string is rejected when it arrives as a model candidate', () => {

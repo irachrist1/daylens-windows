@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppCategory } from '../src/shared/types.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
-import { writeAIBlockLabel } from '../src/main/db/queries.ts'
+import { setBlockLabelOverride, writeAIBlockLabel } from '../src/main/db/queries.ts'
+import { userVisibleLabelForBlock } from '../src/main/services/workBlocks.ts'
 import { rawLabelForm } from '../src/shared/labelVoice.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 
@@ -134,6 +135,25 @@ test('a compacted tool-surface window title never becomes the block label', () =
       `persisted label_current "${row.label_current}" still names the tool surface`,
     )
   }
+  db.close()
+})
+
+test('a user override of a guarded name stays visible after rematerialize', () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Cursor Agents — daylens timeline', 9, 90, 'development', {
+    bundleId: 'com.todesktop.230313mzl4w4u92',
+    name: 'Cursor',
+  })
+  const analyzed = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  assert.ok(analyzed.length >= 1)
+  const inferred = userVisibleLabelForBlock(analyzed[0])
+  assert.notEqual(inferred, 'Cursor Agents')
+
+  setBlockLabelOverride(db, analyzed[0].id, 'Cursor Agents')
+  const again = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  const overridden = again.find((block) => block.id === analyzed[0].id) ?? again[0]
+  assert.equal(overridden.label.override, 'Cursor Agents')
+  assert.equal(userVisibleLabelForBlock(overridden), 'Cursor Agents')
   db.close()
 })
 
