@@ -73,6 +73,7 @@ Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](
 | [Agent benchmark](docs/specs/agent-benchmark.md)                         | How every AI surface behaves, sounds, and is graded: queries, judges, hard caps |
 | [Wrapped](docs/specs/wrapped.md)                                         | Day, week, month, and year recaps on shared facts, voice, and evidence          |
 | [Briefs](docs/specs/briefs.md)                                           | Morning, evening, and weekly notifications from the same facts and voice        |
+| [Focus score and distraction alerts](docs/specs/focus-and-distraction.md)| Honest deep-work percentage, distraction alerts, and the wrap/MCP profile       |
 | [Agent runtime and context](docs/specs/agent-runtime-and-context.md)     | Context assembly, file disclosure, scoped tools, and provider runtimes          |
 | Connectors _(removed 2026-07-26)_             | History only — the OAuth connector framework was dropped from the product        |
 | [Privacy, retention, and sync](docs/specs/privacy-retention-and-sync.md) | Local retention, export, model context, encryption, sync, and deletion          |

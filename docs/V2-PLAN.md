@@ -196,8 +196,9 @@ Real, required to release, felt by nobody until release day.
 - **DEV-255 / #77** — calendar on macOS now reads EventKit through `calendar-helper`
   instead of icalBuddy. Windows still uses Outlook COM; Linux has no store. Needs
   acceptance on a Mac: events after one Calendar prompt, no CLI installed.
-- **DEV-289 / #111** — focus score and distraction alerter are spec-removed but fully live.
-  Needs a decision, not code.
+- ~~**DEV-289 / #111** — focus score and distraction alerter are spec-removed but fully live.~~
+  **Decided 2026-09-07:** revive them in the spec and keep the live code.
+  See [V2 feature dispositions](product/v2.md) and [Focus score and distraction alerts](specs/focus-and-distraction.md).
 - **DEV-207** — the V2 acceptance run. The gate itself; it cannot pass until the five close.
 
 ## Where the code actually is

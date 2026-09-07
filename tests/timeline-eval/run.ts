@@ -912,7 +912,7 @@ const WRAP_GUILT_PATTERNS = [
   /\b100%\b/i, // the "100% entertainment" contradiction
   /needs?\b[^.]{0,24}\breview\b/i, // the "needs review" homework closing
   /review in the timeline/i,
-  /\bdistraction(?:s)?\b/i, // guilt framing
+  // "distraction" is a live product noun (profile / alerts); do not treat the word as guilt.
   /books you (?:didn'?t|did not)/i,
   /\blost to\b/i,
   /courses? (?:left )?unstarted/i,

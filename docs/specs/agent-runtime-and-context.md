@@ -189,7 +189,7 @@ An interpretable block can contain:
 
 The agent may say that someone developed a feature, read an article, reviewed a report, attended a meeting, or researched a purchase when the evidence supports that language. It does not convert foreground application time into proof of comprehension, completion, attendance, or outcome.
 
-The day context does not assign productivity, focus, distraction, or quality scores. Short observations such as “Solid session there” are presentation and must remain grounded in the visible shape of the activity rather than a hidden behavioral score.
+The day context may include the live focus-score and distraction-profile facts when those surfaces already computed them. Short observations such as “Solid session there” remain presentation and must stay grounded in the visible shape of the activity, not in a hidden extra grade.
 
 ## File and document access
 

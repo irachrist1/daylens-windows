@@ -61,7 +61,7 @@ async function main(): Promise<void> {
     if (!opts.allowQ && /\?/.test(line)) reasons.push('contains a question mark')
     if (/[—–]/.test(line)) reasons.push('em/en dash')
     if (shared.BANNED_PHRASES.some((p) => line.toLowerCase().includes(p))) reasons.push(`banned phrase: ${shared.BANNED_PHRASES.find((p) => line.toLowerCase().includes(p))}`)
-    if (shared.HOMEWORK_GUILT_PATTERNS.some((p) => p.test(line))) reasons.push(`homework/guilt word (e.g. drift/distraction/focus-score/pick-up/carry-over)`)
+    if (shared.HOMEWORK_GUILT_PATTERNS.some((p) => p.test(line))) reasons.push(`homework/guilt word (e.g. drift/focus-score/pick-up/carry-over)`)
     if (/\b(I'?m not sure|couldn'?t|cannot determine|no data|n\/?a)\b/i.test(line)) reasons.push('uncertainty phrase')
     // Clock grounding: which tokens in the line are not in THIS slide's facts.
     const slideTimes = shared.clockTokensIn(`${spec.kicker} ${spec.factsNote} ${spec.stat?.sublabel ?? ''} ${spec.stat?.value ?? ''}`)

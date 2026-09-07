@@ -20,7 +20,7 @@ The wrap presents, as a sequence of visual scenes:
 - genuinely notable specifics the evidence supports — a shipped feature, a long focused stretch, a new tool, a heavy meeting day
 - honest gaps: days without capture, paused stretches, and periods Daylens cannot explain
 
-A wrap never assigns a productivity score, never judges focus or distraction, and never inflates thin evidence into a story.
+A wrap never assigns a productivity score and never inflates thin evidence into a story. It may name the live distraction profile when those facts are on the table. It does not turn that split, or a focus score, into a judgment of personal worth.
 
 ## One fact system
 
@@ -79,7 +79,7 @@ The gate's reasons are shown in product language. A wrap over partial data says 
 - Corrections, exclusions, and deletion change regenerated wraps everywhere, including exports.
 - A wrap renders fully without a model provider, minus narrative lines.
 - Empty, too-early, partial, and full periods produce the documented experiences.
-- No wrap output judges productivity, focus, or personal worth.
+- No wrap output judges productivity or personal worth. Naming a leisure surface from the distraction profile is allowed; grading the person is not.
 - The rebuilt wrap is reviewed against real days in the running product before Version 2 ships.
 
 ## Implementation starting point

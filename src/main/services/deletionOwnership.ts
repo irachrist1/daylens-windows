@@ -75,7 +75,7 @@ export const DELETION_OWNERSHIP: Record<string, DeletionOwnership> = {
   derived_projection_runs: { kind: 'derived', owner: `${DEVICE_ONLY}; run bookkeeping without content` },
   derived_sessions: { kind: 'derived', owner: TRACKED_ACTIVITY },
   derived_state_versions: { kind: 'derived', owner: `${DEVICE_ONLY}; version bookkeeping without content` },
-  distraction_events: { kind: 'derived', owner: `${TRACKED_ACTIVITY} (legacy feature; removed in V2)` },
+  distraction_events: { kind: 'derived', owner: TRACKED_ACTIVITY },
   entities: { kind: 'derived', owner: ENTITY_LIFECYCLE },
   entity_aliases: { kind: 'derived', owner: ENTITY_LIFECYCLE },
   entity_evidence_refs: { kind: 'derived', owner: ENTITY_LIFECYCLE },

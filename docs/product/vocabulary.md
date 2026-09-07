@@ -30,6 +30,10 @@ This glossary keeps product and engineering language consistent. It describes st
 
 **Surface** is a product interface that consumes Daylens facts. The primary surfaces are Timeline, Apps, and the AI agent. Search, MCP, sync, and the web companion are additional consumers.
 
+**Focus score** is the honest deep-work percentage: time in continuous focused sessions of 25 minutes or more, divided by total active time. It is a measured fact, not a verdict about personal worth.
+
+**Distraction alert** is a notification when leisure interrupts an inferred work state, or when a person leaves the planned apps of an explicit focus session. **Distraction profile** is the day’s leisure-versus-other time split plus the leisure surfaces that appeared.
+
 ## Architecture concepts
 
 **Domain** is a cohesive area of product knowledge with one owner.

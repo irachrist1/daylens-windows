@@ -10,6 +10,8 @@ import {
   deleteHistoryForApp,
   deleteHistoryForSite,
   deleteTrackedActivity,
+  purgeTimelineBlockSpanRows,
+  purgeTrackedEvidenceRows,
 } from '../src/main/services/trackingHistory.ts'
 import { projectDay } from '../src/main/core/projections/chunk2.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
@@ -55,6 +57,48 @@ test('excluding an app removes its app, browser, and native-focus history', () =
     clearTestDb()
     db.close()
   }
+})
+
+test('app deletion removes owned distraction events', () => {
+  const db = createProductionTestDatabase()
+  const triggeredAt = new Date(2026, 5, 18, 10, 10, 0, 0).getTime()
+  db.prepare(`
+    INSERT INTO distraction_events (session_id, app_name, bundle_id, triggered_at)
+    VALUES (NULL, 'Zen', 'app.zen-browser.zen', ?)
+  `).run(triggeredAt)
+  setTestDb(db)
+
+  try {
+    deleteHistoryForApp({ bundleId: 'app.zen-browser.zen', appName: 'Zen' })
+    assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM distraction_events`).get() as { count: number }).count, 0)
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('bounded and block-span purges remove owned distraction events', () => {
+  const db = createProductionTestDatabase()
+  const fromMs = new Date(2026, 5, 18, 10, 0, 0, 0).getTime()
+  const insert = db.prepare(`
+    INSERT INTO distraction_events (session_id, app_name, bundle_id, triggered_at)
+    VALUES (NULL, ?, ?, ?)
+  `)
+  insert.run('Zen', 'app.zen-browser.zen', fromMs + 1_000)
+  insert.run('Other', 'app.other', fromMs + 2_000)
+
+  purgeTrackedEvidenceRows(db, {
+    kind: 'app',
+    bundleId: 'app.zen-browser.zen',
+    appName: 'Zen',
+    fromMs,
+    toMs: fromMs + 60_000,
+  })
+  assert.deepEqual(db.prepare(`SELECT app_name FROM distraction_events`).all(), [{ app_name: 'Other' }])
+
+  purgeTimelineBlockSpanRows(db, { fromMs, toMs: fromMs + 60_000 })
+  assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM distraction_events`).get() as { count: number }).count, 0)
+  db.close()
 })
 
 test('app purge matches bounded escaped identities without deleting unrelated text', () => {

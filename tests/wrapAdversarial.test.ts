@@ -141,6 +141,13 @@ test('adversarial: a 2h 29m stretch never becomes a focus grade', () => {
   assert.ok(wrapLineViolation('Two and a half hours on the engine, one unbroken run.', ctx))
   // A real focus-timer fact stays nameable (the enrichment noun, not a grade).
   assert.equal(findOverclaimViolation('Three focus sessions in Forest, all before lunch.'), null)
+  // The live distraction profile may be named; grading language still dies.
+  assert.equal(
+    wrapLineViolation('YouTube was the main distraction surface, and it sat in the evening where it belonged.', ctx),
+    null,
+  )
+  assert.ok(wrapLineViolation('The afternoon was just drift after the morning engine work.', ctx))
+  assert.ok(wrapLineViolation('Your focus score landed well above the rest of the week.', ctx))
 })
 
 // ─── 6. A plan that was never written ─────────────────────────────────────────
