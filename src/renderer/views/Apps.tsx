@@ -3,7 +3,8 @@ import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { ALL_TIME_DAYS } from '@shared/types'
 import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary } from '@shared/types'
-import { appDetailRangeKey, appNarrativeScopeKey, isThinAppNarrative } from '@shared/appNarrativeContract'
+import { evidenceTitlesFromBreakdown } from '@shared/appDetailAccount'
+import { appDetailRangeKey, appNarrativeScopeKey, isThinAppNarrative, selectVisibleAppNarrative } from '@shared/appNarrativeContract'
 import PeriodNavigator from '../components/PeriodNavigator'
 import { useCompactLayout } from '../hooks/useCompactLayout'
 import { useProjectionResource } from '../hooks/useProjectionResource'
@@ -114,7 +115,17 @@ export default function Apps() {
     && narrativeResource.data.scopeKey === expectedNarrativeScopeKey
     ? narrativeResource.data
     : null
-  const narrative = rawNarrative && !isThinAppNarrative(rawNarrative.summary) ? rawNarrative : null
+  const evidenceTitles = [
+    ...evidenceTitlesFromBreakdown(detail?.activityBreakdown),
+    ...(detail?.topArtifacts ?? []).map((artifact) => artifact.displayTitle),
+    ...(detail?.blockAppearances ?? []).map((block) => block.label),
+  ]
+  const visibleNarrativeSummary = rawNarrative
+    ? selectVisibleAppNarrative(rawNarrative.summary, evidenceTitles)
+    : null
+  const narrative = rawNarrative && visibleNarrativeSummary
+    ? { ...rawNarrative, summary: visibleNarrativeSummary }
+    : null
 
   const [activeGenerationScopes, setActiveGenerationScopes] = useState<Set<string>>(() => new Set())
   const [lastGenerationStatus, setLastGenerationStatus] = useState<Record<string, GenerationStatus>>({})
@@ -142,6 +153,7 @@ export default function Apps() {
       const status: GenerationStatus = !result
         ? { kind: 'no-bundle' }
         : isThinAppNarrative(result.summary)
+          || (evidenceTitles.length > 0 && !selectVisibleAppNarrative(result.summary, evidenceTitles))
           ? { kind: 'thin' }
           : { kind: 'ok' }
       setLastGenerationStatus((previous) => ({ ...previous, [scopeKey]: status }))

@@ -1549,6 +1549,54 @@ export interface WorkflowPattern {
 // the reconciled total without cluttering the list. Default: 10 seconds.
 export const MIN_DOMAIN_ROW_SECONDS = 10
 
+export interface AppActivityItem {
+  id: string
+  displayTitle: string
+  detail: string | null
+  totalSeconds: number
+  visitCount?: number
+  artifactType?: ArtifactRef['artifactType']
+  canonicalAppId?: string | null
+  ownerBundleId?: string | null
+  ownerAppName?: string | null
+  url?: string | null
+  host?: string | null
+  path?: string | null
+  domain?: string | null
+  normalizedUrl?: string | null
+  pageKey?: string | null
+  openTarget: OpenTarget
+}
+
+export interface AppActivityGroup {
+  id: string
+  label: string
+  kind: 'domain' | 'folder' | 'collection'
+  totalSeconds: number
+  itemCount: number
+  visitCount?: number
+  items: AppActivityItem[]
+}
+
+/**
+ * Expandable where-time-went tree for every app. Browsers use domain → page;
+ * native apps use folder/host → file or page. Reconciles:
+ * Σ item.totalSeconds = group.totalSeconds, Σ group.totalSeconds
+ * + everythingElse.totalSeconds = attributedSeconds, and
+ * attributedSeconds + unattributedSeconds = totalSeconds.
+ */
+export interface AppActivityBreakdown {
+  totalSeconds: number
+  attributedSeconds: number
+  unattributedSeconds: number
+  groups: AppActivityGroup[]
+  everythingElse?: {
+    totalSeconds: number
+    groupCount: number
+    itemCount: number
+  }
+}
+
 export interface AppDetailPayload {
   canonicalAppId: string
   displayName: string
@@ -1591,6 +1639,13 @@ export interface AppDetailPayload {
       visitCount: number
     }
   }
+  /**
+   * Comet/Dia-style expandable breakdown for every app, including native
+   * apps that have files, folders, or window titles instead of domains.
+   * Always present when the app has tracked time so the detail view never
+   * goes blank after the header.
+   */
+  activityBreakdown?: AppActivityBreakdown
   blockAppearances: Array<{
     blockId: string
     startTime: number
