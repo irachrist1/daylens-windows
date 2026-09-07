@@ -3,14 +3,34 @@
 // Direct API providers and the managed proxy are supported; CLI providers
 // cannot make structured tool calls, so the chat surface says so honestly
 // instead of silently degrading.
-import { createAnthropic } from '@ai-sdk/anthropic'
-import { createOpenAI } from '@ai-sdk/openai'
-import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { createRequire } from 'node:module'
 import type { LanguageModel } from 'ai'
 import type { AIProviderMode } from '@shared/types'
 import type { ResolvedProviderConfig } from '../services/aiOrchestration'
 import { assertRealDayExternalAccessAllowed } from '../lib/realDayHarness'
+
+
+
+const nodeRequire = createRequire(__filename)
+
+// Each provider factory costs its own require at launch, and none of them is
+// reached until a request picks that provider. Every require below is a
+// literal so the bundler and the packager still see the dependency.
+const createAnthropic: typeof import('@ai-sdk/anthropic').createAnthropic = (...args) => (
+  (nodeRequire('@ai-sdk/anthropic') as typeof import('@ai-sdk/anthropic')).createAnthropic(...args)
+)
+
+const createOpenAI: typeof import('@ai-sdk/openai').createOpenAI = (...args) => (
+  (nodeRequire('@ai-sdk/openai') as typeof import('@ai-sdk/openai')).createOpenAI(...args)
+)
+
+const createGoogleGenerativeAI: typeof import('@ai-sdk/google').createGoogleGenerativeAI = (...args) => (
+  (nodeRequire('@ai-sdk/google') as typeof import('@ai-sdk/google')).createGoogleGenerativeAI(...args)
+)
+
+const createOpenAICompatible: typeof import('@ai-sdk/openai-compatible').createOpenAICompatible = (...args) => (
+  (nodeRequire('@ai-sdk/openai-compatible') as typeof import('@ai-sdk/openai-compatible')).createOpenAICompatible(...args)
+)
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
