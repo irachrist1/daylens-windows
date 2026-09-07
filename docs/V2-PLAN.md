@@ -116,11 +116,11 @@ foreground seconds.
   `DeterministicFactKind` has no `site_total_time`, so per-site duration is the one fact kind
   the model is left to guess.
 - **DEV-290 / #112** — `HISTORY_FILL_MAX_MS` lets a titleless browser credit up to 4h to its
-  last-visited page, usually Netflix or YouTube. **The ticket's proposed fix is dead:** it
-  says to populate `browser_context_events`, and that table was dropped
-  (`migrations.ts:2071` — "never written to in production, 0 rows, 0 writers anywhere in
-  `src/`"). The bug is real; the fix has to be restated against `HISTORY_FILL_MAX_MS`
-  itself.
+  last-visited page, usually Netflix or YouTube. The original ticket said to populate
+  `browser_context_events`; that table was dropped (`migrations.ts:2071`). The restated
+  fix is: persist Chromium `active_browser_context` when history corroborates an
+  unverifiable-mode tab, and cap uncorroborated entertainment history-fill on titleless
+  browsers at two minutes.
 - **DEV-238 / #60** — half of browser time has no page attached.
 
 **Done when:** no domain's credited seconds exceed its browser's foreground seconds in the same
@@ -204,7 +204,8 @@ restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan,
 - entity write-through: `adoptAppIdentityWrite` and `adoptArtifactWrite` exported, uncalled
 - screen context captures frames with `noExtractorInstalled`
   (`screenContext.handlers.ts:61`); backlog full at 100 frames, all quarantined — #73
-- `browser_context_events` table exists, nothing writes to it — the proper fix for #112
+- `browser_context_events` was dropped in migration 42 (never written in production). Live
+  page capture is `website_visits` with source `active_browser_context`.
 
 **Not started.** Billing at a real boundary · Windows signing · a model-optional Timeline ·
 the ~1.1s of eager module eval on the paint path.

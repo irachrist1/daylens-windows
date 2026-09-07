@@ -265,6 +265,64 @@ function titleMatchesWindow(pageTitle: string | null, windowTitle: string | null
   return titleTokens(windowTitle).some((token) => pageTokens.has(token))
 }
 
+export function pickRecentHistoryRow<T extends { title: string | null }>(
+  rows: readonly T[],
+  windowTitle: string | null,
+): T | null {
+  if (rows.length === 0) return null
+  const matched = rows.find((row) => titleMatchesWindow(row.title, windowTitle))
+  if (matched) return matched
+  // A titleless window cannot tell which of the recent visits is active.
+  // Guessing the latest row is how Netflix absorbs hours of Dia work time.
+  if (!windowTitle?.trim()) return null
+  return rows[0] ?? null
+}
+
+function urlsReferToSamePage(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (!left || !right) return false
+  if (left === right) return true
+  const normalizedLeft = normalizeUrlForStorage(left)
+  const normalizedRight = normalizeUrlForStorage(right)
+  if (normalizedLeft && normalizedRight && normalizedLeft === normalizedRight) return true
+  const keyLeft = pageKeyForUrl(left)
+  const keyRight = pageKeyForUrl(right)
+  return Boolean(keyLeft && keyRight && keyLeft === keyRight)
+}
+
+function historyCorroboratesLiveTab(
+  db: BetterSqlite.Database,
+  snapshot: ActiveBrowserWindowSnapshot,
+  tab: ActiveBrowserTab,
+): boolean {
+  if (!tab.url) return false
+  const identity = resolveCanonicalBrowser(snapshot.bundleId)
+  try {
+    const last = db.prepare(`
+      SELECT url, normalized_url, page_key
+      FROM website_visits
+      WHERE source IN ('chrome_history', 'firefox_history', 'webkit_history')
+        AND visit_time <= ?
+        AND (
+          browser_bundle_id = ?
+          OR (? IS NOT NULL AND canonical_browser_id = ?)
+        )
+      ORDER BY visit_time DESC, id DESC
+      LIMIT 1
+    `).get(
+      snapshot.capturedAt,
+      snapshot.bundleId,
+      identity.canonicalBrowserId,
+      identity.canonicalBrowserId,
+    ) as { url: string | null; normalized_url: string | null; page_key: string | null } | undefined
+    if (!last) return false
+    const liveKey = pageKeyForUrl(tab.url)
+    if (liveKey && last.page_key && liveKey === last.page_key) return true
+    return urlsReferToSamePage(tab.url, last.url) || urlsReferToSamePage(tab.url, last.normalized_url)
+  } catch {
+    return false
+  }
+}
+
 function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string | null): ActiveBrowserTab | null {
   const copy = copyHistoryDb(entry.historyPath, 'daylens_active_chromium')
   if (!copy) return null
@@ -281,7 +339,7 @@ function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string
     `).all(msToChromeUs(now - RECENT_HISTORY_LOOKBACK_MS)) as { url: string; title: string | null; visit_time: bigint }[]
     db.close()
 
-    const row = rows.find((candidate) => titleMatchesWindow(candidate.title, windowTitle)) ?? rows[0]
+    const row = pickRecentHistoryRow(rows, windowTitle)
     // History is non-private by definition — treat as mode-verified.
     return row ? { url: row.url, title: row.title ?? null, modeKnown: true } : null
   } catch {
@@ -307,7 +365,7 @@ function recentFirefoxTab(entry: BrowserEntry, now: number, windowTitle: string 
     `).all(BigInt(now - RECENT_HISTORY_LOOKBACK_MS) * 1000n) as { url: string; title: string | null; visit_date: bigint }[]
     db.close()
 
-    const row = rows.find((candidate) => titleMatchesWindow(candidate.title, windowTitle)) ?? rows[0]
+    const row = pickRecentHistoryRow(rows, windowTitle)
     return row ? { url: row.url, title: row.title ?? null, modeKnown: true } : null
   } catch {
     return null
@@ -536,24 +594,30 @@ export class ActiveBrowserContextTracker {
     }
 
     // Unverifiable window mode: keep browser app timing (tracking sessions)
-    // but never accumulate page title/URL for persistence. History ingestion
-    // is the only path that may later attach page detail.
-    if (tab.modeKnown === false) {
-      this.flush(db, snapshot.capturedAt)
-      this.pending = null
-      this.inFlight = null
-      this.lastWindowTitle = snapshot.windowTitle ?? null
-      return {
-        isPrivate: false,
-        ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
-        windowModeUnverified: true,
+    // and persist page detail only when the browser's own non-private history
+    // already recorded this URL as the latest navigation. Private windows
+    // never write history, so an unmatched live URL stays unpublished.
+    let resolvedTab = tab
+    if (resolvedTab.modeKnown === false) {
+      if (historyCorroboratesLiveTab(db, snapshot, resolvedTab)) {
+        resolvedTab = { ...resolvedTab, modeKnown: true }
+      } else {
+        this.flush(db, snapshot.capturedAt)
+        this.pending = null
+        this.inFlight = null
+        this.lastWindowTitle = snapshot.windowTitle ?? null
+        return {
+          isPrivate: false,
+          ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
+          windowModeUnverified: true,
+        }
       }
     }
 
     this.lastWindowTitle = snapshot.windowTitle ?? null
 
-    const normalizedUrl = normalizeUrlForStorage(tab.url)
-    this.observeTab(db, snapshot, tab, normalizedUrl)
+    const normalizedUrl = normalizeUrlForStorage(resolvedTab.url)
+    this.observeTab(db, snapshot, resolvedTab, normalizedUrl)
     return {
       isPrivate: false,
       ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
