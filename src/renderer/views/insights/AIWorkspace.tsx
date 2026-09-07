@@ -16,12 +16,14 @@ import ConnectAI from '../../components/ConnectAI'
 import { ContextPacketInspector } from '../../components/ContextPacketInspector'
 import { consumePendingChatSeedWhenReady } from '../../lib/aiSeed'
 import {
-  drainQueuedComposerPrompts,
   enqueueComposerPrompt,
   hasQueuedComposerPrompts,
   isAiChatVisible,
   isAiProviderPending,
   peekQueuedComposerPrompt,
+  providerProbeFailureKind,
+  readQueuedComposerPrompts,
+  replaceQueuedComposerPrompts,
   takeQueuedComposerPrompt,
 } from '../../lib/aiTabAccess'
 import { AICompose, type AIComposeHandle } from './AICompose'
@@ -269,29 +271,37 @@ export default function AIWorkspace() {
   }, [onNewChat])
 
   // The composer paints before the provider verdict lands. Keep every early
-  // submission across tab remounts, then dispatch them in order once access is
-  // known. handleSend serializes them through its loading guard.
+  // submission with the conversation that owned it, then dispatch once access
+  // is known. handleSend serializes them through its loading guard.
   const flushQueuedPrompt = useCallback(() => {
     if (providerPending || !hasApiKey || loading) return
-    const next = peekQueuedComposerPrompt()
+    const next = peekQueuedComposerPrompt(activeThreadId)
     if (next == null) return
-    if (submitMessage(next)) takeQueuedComposerPrompt()
-  }, [providerPending, hasApiKey, loading, submitMessage])
+    if (submitMessage(next.text)) takeQueuedComposerPrompt(activeThreadId)
+  }, [providerPending, hasApiKey, loading, activeThreadId, submitMessage])
   const onComposerSubmit = useCallback((text: string) => {
-    if (providerPending || hasQueuedComposerPrompts()) {
-      enqueueComposerPrompt(text)
-      return
-    }
-    if (!submitMessage(text)) enqueueComposerPrompt(text)
-  }, [providerPending, submitMessage])
-  useEffect(() => {
     if (hasApiKey === false) {
-      const queued = drainQueuedComposerPrompts()
-      if (queued) composerRef.current?.setValue(queued)
-    } else {
-      flushQueuedPrompt()
+      replaceQueuedComposerPrompts(activeThreadId, text)
+      return false
     }
-  }, [hasApiKey, flushQueuedPrompt])
+    if (hasApiKey !== true || hasQueuedComposerPrompts(activeThreadId)) {
+      enqueueComposerPrompt(text, activeThreadId)
+      return true
+    }
+    if (submitMessage(text)) return true
+    enqueueComposerPrompt(text, activeThreadId)
+    return true
+  }, [hasApiKey, activeThreadId, submitMessage])
+  useEffect(() => {
+    flushQueuedPrompt()
+  }, [flushQueuedPrompt])
+  const [deniedDraft, setDeniedDraft] = useState('')
+  useEffect(() => {
+    setDeniedDraft(hasApiKey === false ? readQueuedComposerPrompts(activeThreadId) : '')
+  }, [hasApiKey, activeThreadId])
+  const preserveQueuedDraft = useCallback((text: string) => {
+    if (hasApiKey === false) replaceQueuedComposerPrompts(activeThreadId, text)
+  }, [hasApiKey, activeThreadId])
 
   // Seed a chat from another view (e.g. Settings → Memory → "Chat about your
   // memory"). Always start a NEW thread, then SEND the seed as its first
@@ -308,7 +318,8 @@ export default function AIWorkspace() {
       if (hasApiKey) {
         submitMessage(prompt)
       } else {
-        composerRef.current?.setValue(prompt)
+        enqueueComposerPrompt(prompt, null)
+        setDeniedDraft(readQueuedComposerPrompts(null))
       }
       composerRef.current?.focus()
     })
@@ -478,7 +489,7 @@ export default function AIWorkspace() {
   // this screen waits for it: the shell, the header and the composer paint on
   // the first frame and the pieces that genuinely need the verdict fill in when
   // it arrives.
-  const providerFailed = providerPending && Boolean(loadError) && !initialLoading
+  const probeFailure = providerProbeFailureKind(loadError, initialLoading, providerPending)
 
   const activeChatProvider = settings ? (settings.aiChatProvider ?? settings.aiProvider) : null
   const providerMeta = activeChatProvider ? AI_PROVIDER_META[activeChatProvider] : null
@@ -625,7 +636,15 @@ export default function AIWorkspace() {
       {/* ── Conversation ──────────────────────────────────────────────────── */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: '28px 24px 24px', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
-          {providerFailed ? (
+          {probeFailure === 'banner' && (
+            <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 8, background: 'var(--color-surface-high)', color: 'var(--color-text-secondary)', fontSize: 12.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span>Couldn't refresh AI settings. {loadError}</span>
+              <button type="button" onClick={() => { void refreshProvider() }} style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>
+                Retry
+              </button>
+            </div>
+          )}
+          {probeFailure === 'blocking' ? (
             <div style={{ margin: 'auto 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
               <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
                 Couldn't load AI settings. {loadError}
@@ -642,6 +661,21 @@ export default function AIWorkspace() {
                 hasSavedAccess={false}
                 onConnected={() => { void refreshProvider() }}
               />
+              {deniedDraft && (
+                <div style={{ width: '100%', maxWidth: 620, margin: '20px auto 0', textAlign: 'left' }}>
+                  <AICompose
+                    key={activeThreadId ?? 'new'}
+                    ref={composerRef}
+                    onSubmit={onComposerSubmit}
+                    onCancel={cancelGeneration}
+                    onPause={pauseGeneration}
+                    loading={loading}
+                    initialValue={deniedDraft}
+                    onValueChange={preserveQueuedDraft}
+                    placeholder="Your message is saved while you connect AI"
+                  />
+                </div>
+              )}
               {isCliProvider && cliMissing && providerMeta && (
                 <div style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)' }}>
                   {providerMeta.label} is selected right now, but it is not installed on this machine yet.
@@ -750,7 +784,7 @@ export default function AIWorkspace() {
       </div>
 
       {/* ── Docked composer ───────────────────────────────────────────────── */}
-      {chatVisible && !providerFailed && (hasMessages || threadLoading) && (
+      {chatVisible && probeFailure !== 'blocking' && (hasMessages || threadLoading) && (
         <div style={{ flexShrink: 0, padding: '12px 24px 20px' }}>
           <div style={{ maxWidth: 760, margin: '0 auto' }}>
             <AICompose ref={composerRef} onSubmit={onComposerSubmit} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} />

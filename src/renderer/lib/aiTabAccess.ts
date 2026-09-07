@@ -7,28 +7,60 @@ export function isAiProviderPending(settings: unknown, hasApiKey: boolean | null
   return settings == null || hasApiKey == null
 }
 
-const queuedComposerPrompts: string[] = []
-
-export function enqueueComposerPrompt(text: string): void {
-  queuedComposerPrompts.push(text)
+/** A failed probe with no remembered snapshot blocks the column; a failure
+ *  after a remount still shows Retry, but keeps the last working chat up. */
+export function providerProbeFailureKind(
+  loadError: string | null,
+  initialLoading: boolean,
+  providerPending: boolean,
+): 'none' | 'blocking' | 'banner' {
+  if (!loadError || initialLoading) return 'none'
+  return providerPending ? 'blocking' : 'banner'
 }
 
-export function peekQueuedComposerPrompt(): string | undefined {
-  return queuedComposerPrompts[0]
+export type QueuedComposerPrompt = {
+  text: string
+  threadId: number | null
 }
 
-export function takeQueuedComposerPrompt(): string | undefined {
-  return queuedComposerPrompts.shift()
+const queuedComposerPrompts: QueuedComposerPrompt[] = []
+
+export function enqueueComposerPrompt(text: string, threadId: number | null): void {
+  queuedComposerPrompts.push({ text, threadId })
 }
 
-export function hasQueuedComposerPrompts(): boolean {
-  return queuedComposerPrompts.length > 0
+export function peekQueuedComposerPrompt(threadId: number | null): QueuedComposerPrompt | undefined {
+  return queuedComposerPrompts.find((prompt) => prompt.threadId === threadId)
 }
 
-export function drainQueuedComposerPrompts(): string {
-  const joined = queuedComposerPrompts.join('\n\n')
-  queuedComposerPrompts.length = 0
-  return joined
+export function takeQueuedComposerPrompt(threadId: number | null): QueuedComposerPrompt | undefined {
+  const index = queuedComposerPrompts.findIndex((prompt) => prompt.threadId === threadId)
+  if (index < 0) return undefined
+  return queuedComposerPrompts.splice(index, 1)[0]
+}
+
+export function hasQueuedComposerPrompts(threadId: number | null): boolean {
+  return queuedComposerPrompts.some((prompt) => prompt.threadId === threadId)
+}
+
+export function readQueuedComposerPrompts(threadId: number | null): string {
+  return queuedComposerPrompts
+    .filter((prompt) => prompt.threadId === threadId)
+    .map((prompt) => prompt.text)
+    .join('\n\n')
+}
+
+export function reassignQueuedComposerPrompts(fromThreadId: number | null, toThreadId: number): void {
+  for (const prompt of queuedComposerPrompts) {
+    if (prompt.threadId === fromThreadId) prompt.threadId = toThreadId
+  }
+}
+
+export function replaceQueuedComposerPrompts(threadId: number | null, text: string): void {
+  for (let index = queuedComposerPrompts.length - 1; index >= 0; index -= 1) {
+    if (queuedComposerPrompts[index]?.threadId === threadId) queuedComposerPrompts.splice(index, 1)
+  }
+  if (text.trim()) enqueueComposerPrompt(text, threadId)
 }
 
 export function resetQueuedComposerPrompts(): void {

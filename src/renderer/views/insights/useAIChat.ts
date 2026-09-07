@@ -17,6 +17,7 @@ import type {
   AgentTurnWaitKind,
 } from '@shared/types'
 import { useProjectionResource } from '../../hooks/useProjectionResource'
+import { reassignQueuedComposerPrompts } from '../../lib/aiTabAccess'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META, getSelectedModel } from '../../lib/aiProvider'
@@ -622,6 +623,7 @@ export function useAIChat() {
         setActiveThreadId(response.threadId)
         setIsNewChatDraft(false)
         rememberedThreadId = response.threadId
+        reassignQueuedComposerPrompts(requestThreadId, response.threadId)
       }
       void refreshThreadList()
     } catch (error) {

@@ -33,3 +33,24 @@ test('the provider verdict survives a remount, so reopening the tab never starts
   assert.match(chatHook, /let lastProviderSnapshot: ProviderSnapshot \| null = null/)
   assert.match(chatHook, /providerResource\.data \?\? lastProviderSnapshot/)
 })
+
+test('a queued prompt stays on its conversation and survives a denied-access Connect AI swap', () => {
+  assert.match(workspace, /enqueueComposerPrompt\(text, activeThreadId\)/)
+  assert.match(workspace, /peekQueuedComposerPrompt\(activeThreadId\)/)
+  assert.match(workspace, /takeQueuedComposerPrompt\(activeThreadId\)/)
+  assert.match(workspace, /deniedDraft/)
+  assert.match(workspace, /initialValue=\{deniedDraft\}/)
+  assert.match(workspace, /onValueChange=\{preserveQueuedDraft\}/)
+  assert.match(workspace, /return false/)
+  assert.match(chatHook, /reassignQueuedComposerPrompts\(requestThreadId, response\.threadId\)/)
+  assert.doesNotMatch(workspace, /drainQueuedComposerPrompts/)
+  assert.doesNotMatch(workspace, /enqueueComposerPrompt\(text\)/)
+})
+
+test('a remounted provider probe failure still shows Retry', () => {
+  assert.match(workspace, /providerProbeFailureKind\(loadError, initialLoading, providerPending\)/)
+  assert.match(workspace, /probeFailure === 'banner'/)
+  assert.match(workspace, /probeFailure === 'blocking'/)
+  assert.match(workspace, /Couldn't refresh AI settings/)
+  assert.doesNotMatch(workspace, /providerPending && loadError && !initialLoading/)
+})
