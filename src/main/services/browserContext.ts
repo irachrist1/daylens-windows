@@ -278,51 +278,6 @@ export function pickRecentHistoryRow<T extends { title: string | null }>(
   return rows[0] ?? null
 }
 
-function urlsReferToSamePage(left: string | null | undefined, right: string | null | undefined): boolean {
-  if (!left || !right) return false
-  if (left === right) return true
-  const normalizedLeft = normalizeUrlForStorage(left)
-  const normalizedRight = normalizeUrlForStorage(right)
-  if (normalizedLeft && normalizedRight && normalizedLeft === normalizedRight) return true
-  const keyLeft = pageKeyForUrl(left)
-  const keyRight = pageKeyForUrl(right)
-  return Boolean(keyLeft && keyRight && keyLeft === keyRight)
-}
-
-function historyCorroboratesLiveTab(
-  db: BetterSqlite.Database,
-  snapshot: ActiveBrowserWindowSnapshot,
-  tab: ActiveBrowserTab,
-): boolean {
-  if (!tab.url) return false
-  const identity = resolveCanonicalBrowser(snapshot.bundleId)
-  try {
-    const last = db.prepare(`
-      SELECT url, normalized_url, page_key
-      FROM website_visits
-      WHERE source IN ('chrome_history', 'firefox_history', 'webkit_history')
-        AND visit_time <= ?
-        AND (
-          browser_bundle_id = ?
-          OR (? IS NOT NULL AND canonical_browser_id = ?)
-        )
-      ORDER BY visit_time DESC, id DESC
-      LIMIT 1
-    `).get(
-      snapshot.capturedAt,
-      snapshot.bundleId,
-      identity.canonicalBrowserId,
-      identity.canonicalBrowserId,
-    ) as { url: string | null; normalized_url: string | null; page_key: string | null } | undefined
-    if (!last) return false
-    const liveKey = pageKeyForUrl(tab.url)
-    if (liveKey && last.page_key && liveKey === last.page_key) return true
-    return urlsReferToSamePage(tab.url, last.url) || urlsReferToSamePage(tab.url, last.normalized_url)
-  } catch {
-    return false
-  }
-}
-
 function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string | null): ActiveBrowserTab | null {
   const copy = copyHistoryDb(entry.historyPath, 'daylens_active_chromium')
   if (!copy) return null
@@ -593,31 +548,24 @@ export class ActiveBrowserContextTracker {
       }
     }
 
-    // Unverifiable window mode: keep browser app timing (tracking sessions)
-    // and persist page detail only when the browser's own non-private history
-    // already recorded this URL as the latest navigation. Private windows
-    // never write history, so an unmatched live URL stays unpublished.
-    let resolvedTab = tab
-    if (resolvedTab.modeKnown === false) {
-      if (historyCorroboratesLiveTab(db, snapshot, resolvedTab)) {
-        resolvedTab = { ...resolvedTab, modeKnown: true }
-      } else {
-        this.flush(db, snapshot.capturedAt)
-        this.pending = null
-        this.inFlight = null
-        this.lastWindowTitle = snapshot.windowTitle ?? null
-        return {
-          isPrivate: false,
-          ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
-          windowModeUnverified: true,
-        }
+    // A history match cannot establish that the current live window is
+    // non-private, because a private tab may revisit an ordinarily visited URL.
+    if (tab.modeKnown === false) {
+      this.flush(db, snapshot.capturedAt)
+      this.pending = null
+      this.inFlight = null
+      this.lastWindowTitle = snapshot.windowTitle ?? null
+      return {
+        isPrivate: false,
+        ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
+        windowModeUnverified: true,
       }
     }
 
     this.lastWindowTitle = snapshot.windowTitle ?? null
 
-    const normalizedUrl = normalizeUrlForStorage(resolvedTab.url)
-    this.observeTab(db, snapshot, resolvedTab, normalizedUrl)
+    const normalizedUrl = normalizeUrlForStorage(tab.url)
+    this.observeTab(db, snapshot, tab, normalizedUrl)
     return {
       isPrivate: false,
       ...passiveSampleFields(passiveHoldForDomain(domain, snapshot)),
