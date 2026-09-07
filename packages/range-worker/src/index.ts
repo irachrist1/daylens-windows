@@ -15,6 +15,11 @@ import { getAppDetailPayload } from '../../../src/main/services/appDetail'
 import { listSuggestedEntityMerges } from '../../../src/main/services/entities/entityRepository'
 import { primeWorkerSettingsOverride } from '../../../src/main/services/settings'
 import type { AppSettings, LiveSession } from '../../../src/shared/types'
+import { installConsoleStdioGuards } from '../../../src/shared/consoleStdio'
+
+// The parent pipes this process's stdio and stops reading it the moment it
+// dies. Logging into that dead pipe must not kill the child too.
+installConsoleStdioGuards()
 
 interface WorkerRequest {
   id: number

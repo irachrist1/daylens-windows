@@ -16,6 +16,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { gateHelperLine } from '../../../src/main/services/captureEventGate'
 import type { TrackingControlsState } from '../../../src/shared/trackingControls'
+import { installConsoleStdioGuards } from '../../../src/shared/consoleStdio'
+
+// The parent pipes this process's stdio and stops reading it the moment it
+// dies. Logging into that dead pipe must not kill the child too.
+installConsoleStdioGuards()
 
 const FLUSH_INTERVAL_MS = 250
 const PRE_CONTROLS_BUFFER_LIMIT = 10_000

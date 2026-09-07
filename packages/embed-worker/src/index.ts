@@ -13,6 +13,11 @@ import {
   loadSemanticEmbedder,
   type SemanticEmbedder,
 } from '../../../src/main/services/semanticEmbedder'
+import { installConsoleStdioGuards } from '../../../src/shared/consoleStdio'
+
+// The parent pipes this process's stdio and stops reading it the moment it
+// dies. Logging into that dead pipe must not kill the child too.
+installConsoleStdioGuards()
 
 interface WorkerRequest {
   id: number

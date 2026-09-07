@@ -1,5 +1,20 @@
+import { installConsoleStdioGuards, isStreamWriteError } from '@shared/consoleStdio'
+
+// Before anything can log: a write to a terminal that has since been closed
+// fails, and Node turns that failure into an uncaught exception. See the
+// module for the mechanism and why it was fatal here.
+installConsoleStdioGuards()
+
+/** Set once the crash dialog has been shown; see the handler below. */
+let fatalDialogShown = false
+
 // ─── Global error handlers — must be first, before any imports' side effects ──
 process.on('uncaughtException', (err) => {
+  // A stdout/stderr write that failed because the terminal or the parent pipe
+  // is gone is not a crash. Nothing is wrong with the app, and it is the one
+  // error whose own report cannot be written — reporting it re-enters this
+  // handler.
+  if (isStreamWriteError(err)) return
   console.error('[fatal] uncaughtException:', err)
   if (process.env.DAYLENS_REAL_DAY_HARNESS !== '1') {
     try {
@@ -32,6 +47,12 @@ process.on('uncaughtException', (err) => {
       a.exit(1)
       return
     }
+    // One dialog per session. showErrorBox is modal and synchronous, so a
+    // fault that repeats re-shows it the instant the user dismisses it — a
+    // wall of dialogs escapable only by force-quitting. Say it once and leave
+    // the app reachable, so the tray's Force Quit is still an option.
+    if (fatalDialogShown) return
+    fatalDialogShown = true
     d.showErrorBox('Daylens crashed', `${err.name}: ${err.message}\n\nPlease restart Daylens.`)
   } catch { /* dialog / app may not be ready */ }
 })
@@ -67,6 +88,7 @@ function recentCrashLoop(): boolean {
 }
 
 process.on('unhandledRejection', (reason) => {
+  if (isStreamWriteError(reason)) return
   console.error('[fatal] unhandledRejection:', reason)
   if (process.env.DAYLENS_REAL_DAY_HARNESS !== '1') {
     try {
@@ -554,6 +576,7 @@ function ensureTray(): void {
       showMainWindow: (route?: string) => showMainWindow(route),
       hideMainWindow: () => hideMainWindow(),
       quitApp: () => { app.quit() },
+      forceQuitApp: () => { isQuitting = true; app.exit(0) },
     })
   }
 }

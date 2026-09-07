@@ -14,6 +14,11 @@ import type { TrackingControlsState } from '../../../src/shared/trackingControls
 import { mcpToolManifest } from './tools'
 import { callDaylensReadTool } from './dispatch'
 import { resolveDefaultDbPath } from './dbPath'
+import { installConsoleStdioGuards } from '../../../src/shared/consoleStdio'
+
+// stderr only: stdout is the JSON-RPC transport, and a transport that has
+// failed should surface rather than be swallowed.
+installConsoleStdioGuards(['stderr'])
 
 const dbPath = process.env.DAYLENS_DB_PATH ?? resolveDefaultDbPath()
 

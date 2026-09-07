@@ -15,6 +15,7 @@ export interface TrayController {
   showMainWindow: (route?: string) => void
   hideMainWindow: () => void
   quitApp: () => void
+  forceQuitApp: () => void
 }
 
 function formatError(error: unknown): string {
@@ -105,6 +106,14 @@ function buildContextMenu(controller: TrayController): Electron.Menu {
       label: 'Quit Daylens',
       accelerator: process.platform === 'darwin' ? 'Cmd+Q' : undefined,
       click: () => controller.quitApp(),
+    },
+    {
+      // The escape hatch for an app that will not quit: a modal that keeps
+      // coming back, a shutdown that never finishes. Skips the graceful path
+      // entirely. Capture is spooled to disk as it arrives, so this costs at
+      // most the current write buffer (≲250 ms), never the day.
+      label: 'Force Quit Daylens',
+      click: () => controller.forceQuitApp(),
     },
   ])
 }
