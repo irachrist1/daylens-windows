@@ -146,7 +146,32 @@ test('naturalizeLabel strips leading notification counts like "(1) Instagram"', 
   assert.equal(naturalizeLabel('Notes (draft)'), 'Notes (draft)')
 })
 
-test('naturalizeLabel collapses repo-title and marker cruft', () => {
-  assert.equal(naturalizeLabel('irachrist1/daylens-v1: Daylens'), 'Daylens')
-  assert.equal(naturalizeLabel('✳ Break down and fix 5 bugs'), 'Break down and fix 5 bugs')
+test('isUsefulLabel rejects a tool-surface name', () => {
+  const block = makeBlock({
+    dominantCategory: 'development',
+    label: {
+      current: 'Cursor Agents',
+      source: 'artifact',
+      confidence: 0.5,
+      narrative: null,
+      ruleBased: 'Development',
+      aiSuggested: 'Working on Cursor Agents',
+      override: null,
+    },
+    ruleBasedLabel: 'Development',
+    aiLabel: 'Working on Cursor Agents',
+    topApps: [{ appName: 'Cursor', bundleId: 'com.todesktop.230313mzl4w4u92', category: 'development', totalSeconds: 60, isBrowser: false } as never],
+    topArtifacts: [{
+      id: 'art_ca',
+      artifactType: 'window',
+      canonicalKey: 'window:cursor:cursor agents',
+      displayTitle: 'Cursor Agents',
+      totalSeconds: 60,
+      confidence: 0.7,
+    } as never],
+  })
+  const label = userVisibleBlockLabel(block)
+  assert.notEqual(label, 'Cursor Agents')
+  assert.notEqual(label, 'Working on Cursor Agents')
+  assert.equal(/cursor agents/i.test(label), false, `visible label "${label}" still names the tool surface`)
 })

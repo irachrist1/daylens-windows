@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { AppCategory } from '../src/shared/types.ts'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
-import { writeAIBlockLabel } from '../src/main/db/queries.ts'
+import { setBlockLabelOverride, writeAIBlockLabel } from '../src/main/db/queries.ts'
+import { userVisibleLabelForBlock } from '../src/main/services/workBlocks.ts'
 import { rawLabelForm } from '../src/shared/labelVoice.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 
@@ -98,6 +99,82 @@ test('a verbatim captured window title never becomes an interpreted label', () =
   for (const block of reread) {
     assert.notEqual(block.label.current, 'Cursor Agents',
       'a captured window title is evidence inside the block, never its verbatim label')
+  }
+  db.close()
+})
+
+// The Aug 11 leak: compactWindowTitle's first segment of
+// "Cursor Agents — daylens timeline" is the tool surface. Artifact naming
+// skips that segment so the project can still name the block; the surface
+// never becomes the label.
+test('a compacted tool-surface window title never becomes the block label', () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Cursor Agents — daylens timeline', 9, 90, 'development', {
+    bundleId: 'com.todesktop.230313mzl4w4u92',
+    name: 'Cursor',
+  })
+  const analyzed = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  assert.ok(analyzed.length >= 1)
+  for (const block of analyzed) {
+    assert.notEqual(block.label.current, 'Cursor Agents')
+    assert.notEqual(block.label.current, 'Working on Cursor Agents')
+    assert.equal(
+      /cursor agents/i.test(block.label.current),
+      false,
+      `label "${block.label.current}" still names the tool surface`,
+    )
+  }
+  const stored = db.prepare(
+    `SELECT label_current FROM timeline_blocks WHERE date = ? AND invalidated_at IS NULL AND is_live = 0`,
+  ).all(TEST_DATE) as Array<{ label_current: string }>
+  assert.ok(stored.length >= 1)
+  for (const row of stored) {
+    assert.equal(
+      /cursor agents/i.test(row.label_current),
+      false,
+      `persisted label_current "${row.label_current}" still names the tool surface`,
+    )
+  }
+  db.close()
+})
+
+test('a user override of a guarded name stays visible after rematerialize', () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'Cursor Agents — daylens timeline', 9, 90, 'development', {
+    bundleId: 'com.todesktop.230313mzl4w4u92',
+    name: 'Cursor',
+  })
+  const analyzed = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  assert.ok(analyzed.length >= 1)
+  const inferred = userVisibleLabelForBlock(analyzed[0])
+  assert.notEqual(inferred, 'Cursor Agents')
+
+  setBlockLabelOverride(db, analyzed[0].id, 'Cursor Agents')
+  const again = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  const overridden = again.find((block) => block.id === analyzed[0].id) ?? again[0]
+  assert.equal(overridden.label.override, 'Cursor Agents')
+  assert.equal(userVisibleLabelForBlock(overridden), 'Cursor Agents')
+  db.close()
+})
+
+test('a stored AI tool-surface label is re-gated on read and never surfaces', () => {
+  const db = createProductionTestDatabase()
+  insertSession(db, 'workBlocks.ts — daylens', 9, 90, 'development', {
+    bundleId: 'com.todesktop.230313mzl4w4u92',
+    name: 'Cursor',
+  })
+  const analyzed = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  assert.ok(analyzed.length >= 1)
+  writeAIBlockLabel(db, { blockId: analyzed[0].id, label: 'Working on Cursor Agents' })
+
+  const reread = materializeTimelineDayProjection(db, TEST_DATE, null).blocks.filter((block) => !block.isLive)
+  for (const block of reread) {
+    assert.notEqual(block.label.current, 'Working on Cursor Agents')
+    assert.equal(
+      /cursor agents/i.test(block.label.current),
+      false,
+      `label "${block.label.current}" still names the tool surface`,
+    )
   }
   db.close()
 })
