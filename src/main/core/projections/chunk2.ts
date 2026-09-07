@@ -12,8 +12,8 @@ import { ownedDayBounds } from '../../lib/dayOwnership'
 import { naturalizeProjectionLabel } from './chunk2Label'
 import {
   countFocusEventsInRange,
-  listFocusEventsInRange,
-  type StoredFocusEvent,
+  listProjectionFocusEventsInRange,
+  type ProjectionFocusEvent,
 } from '../../db/focusEventRepository'
 
 // Bump when segmentation or labeling logic changes. Reprojection rewrites
@@ -86,7 +86,7 @@ export function projectDay(
   }
 
   const [from, to] = ownedDayBounds(db, date)
-  const events = listFocusEventsInRange(db, from, to)
+  const events = listProjectionFocusEventsInRange(db, from, to)
 
   const sessions = foldSessions(events, to)
   const blocks = segmentBlocks(sessions)
@@ -116,13 +116,13 @@ interface OpenSession {
 
 /** Pure session fold over focus_events. Live and historical reads share this. */
 export function projectSessionsFromFocusEvents(
-  events: readonly StoredFocusEvent[],
+  events: readonly ProjectionFocusEvent[],
   rangeEndMs: number,
 ): DerivedSessionRow[] {
   return foldSessions(events, rangeEndMs)
 }
 
-function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): DerivedSessionRow[] {
+function foldSessions(events: readonly ProjectionFocusEvent[], dayEnd: number): DerivedSessionRow[] {
   const out: DerivedSessionRow[] = []
   let open: OpenSession | null = null
   let lastEventTs: number | null = null
@@ -276,7 +276,7 @@ function foldSessions(events: readonly StoredFocusEvent[], dayEnd: number): Deri
  *  event, not the open session's end. */
 function deactivationClosesOpenSession(
   open: OpenSession | null,
-  ev: Pick<StoredFocusEvent, 'app_bundle_id' | 'app_name'>,
+  ev: Pick<ProjectionFocusEvent, 'app_bundle_id' | 'app_name'>,
 ): boolean {
   if (!open) return false
   const bundleComparable = Boolean(ev.app_bundle_id && open.app_bundle_id)
