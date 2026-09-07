@@ -145,11 +145,27 @@ function plistJson(appPath: string): Record<string, unknown> | null {
     )
     const parsed = JSON.parse(raw) as unknown
     plist = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
-  } catch {
-    plist = null
+  } catch (error) {
+    // A plist this bundle simply does not have in a usable form is a stable
+    // answer worth remembering. A read that never finished — plutil timed out,
+    // was killed, or is not on PATH — says nothing about the bundle, and
+    // remembering it would leave a real browser unresolved until the file
+    // changed or the app restarted. Only the former is cached.
+    if (!inspectionFailedTransiently(error)) rememberPlist(key, stamp, null)
+    return null
   }
   rememberPlist(key, stamp, plist)
   return plist
+}
+
+/** True when plutil did not run to completion, so its silence is about the
+ *  run and not about the bundle. A non-zero exit means it read the file and
+ *  rejected it; no exit status at all means it never got that far. */
+function inspectionFailedTransiently(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return true
+  const { status, signal } = error as { status?: number | null; signal?: string | null }
+  if (signal) return true
+  return typeof status !== 'number'
 }
 
 function plistString(plist: Record<string, unknown>, key: string): string | null {

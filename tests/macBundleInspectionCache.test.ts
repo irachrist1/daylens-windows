@@ -42,6 +42,27 @@ function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-bundle-cache-'))
 }
 
+// Shadows the real plutil on PATH so a case can decide how the read behaves.
+// `mode` is re-read on every run, so one shim can fail and then recover.
+function installPlutilShim(root: string): { setMode: (mode: string) => void; restore: () => void } {
+  const binDir = path.join(root, 'bin')
+  fs.mkdirSync(binDir, { recursive: true })
+  const modeFile = path.join(root, 'plutil-mode')
+  fs.writeFileSync(path.join(binDir, 'plutil'), [
+    '#!/bin/sh',
+    `mode=$(cat ${JSON.stringify(modeFile)})`,
+    'if [ "$mode" = "killed" ]; then kill -TERM $$; fi',
+    'if [ "$mode" = "rejected" ]; then exit 1; fi',
+    'exec /usr/bin/plutil "$@"',
+  ].join('\n'), { mode: 0o755 })
+  const previousPath = process.env.PATH
+  process.env.PATH = `${binDir}:${previousPath ?? ''}`
+  return {
+    setMode: (mode: string) => fs.writeFileSync(modeFile, mode),
+    restore: () => { process.env.PATH = previousPath },
+  }
+}
+
 test('a bundle is inspected once, however often it is resolved', darwinOnly, () => {
   const root = tempRoot()
   try {
@@ -126,6 +147,54 @@ test('bundle-id resolution for an executable path shares the same single read', 
       'the capture poll and the browser check must not each pay their own read',
     )
   } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a read that never finished is retried, not remembered as "not a browser"', darwinOnly, () => {
+  const root = tempRoot()
+  const shim = installPlutilShim(root)
+  try {
+    const appPath = writeBundle(root, 'Flaky', browserPlist('com.flaky.browser', 'Flaky'))
+    resetMacBundleInspectionCacheForTest()
+
+    // plutil dies on a signal — a timeout or a kill. That says nothing about
+    // the bundle, so the next lookup must try again.
+    shim.setMode('killed')
+    assert.equal(resolveBrowserApplication({ executablePath: appPath }), null)
+
+    shim.setMode('ok')
+    assert.equal(
+      resolveBrowserApplication({ executablePath: appPath })?.bundleId,
+      'com.flaky.browser',
+      'a transient read failure must not leave a real browser unresolved',
+    )
+  } finally {
+    shim.restore()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a plist plutil read and rejected is remembered, not re-read every lookup', darwinOnly, () => {
+  const root = tempRoot()
+  const shim = installPlutilShim(root)
+  try {
+    const appPath = writeBundle(root, 'Malformed', 'this is not a property list')
+    resetMacBundleInspectionCacheForTest()
+
+    // A non-zero exit means plutil read the file and rejected it. That is a
+    // fact about the bundle, and it does not change until the bundle does.
+    shim.setMode('rejected')
+    assert.equal(resolveBrowserApplication({ executablePath: appPath }), null)
+    const afterFirst = macBundleInspectionCountForTest()
+    assert.ok(afterFirst > 0, 'the first lookup must actually try to read it')
+
+    for (let i = 0; i < 5; i++) {
+      assert.equal(resolveBrowserApplication({ executablePath: appPath }), null)
+    }
+    assert.equal(macBundleInspectionCountForTest(), afterFirst)
+  } finally {
+    shim.restore()
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
