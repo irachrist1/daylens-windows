@@ -102,9 +102,10 @@ test('a verbatim captured window title never becomes an interpreted label', () =
   db.close()
 })
 
-// The Aug 11 leak: compactWindowTitle turns "Cursor Agents — daylens timeline"
-// into the artifact "Cursor Agents", which is not a verbatim window title and
-// not the app name, so the voice rules alone let it persist as the block name.
+// The Aug 11 leak: compactWindowTitle's first segment of
+// "Cursor Agents — daylens timeline" is the tool surface. Artifact naming
+// skips that segment so the project can still name the block; the surface
+// never becomes the label.
 test('a compacted tool-surface window title never becomes the block label', () => {
   const db = createProductionTestDatabase()
   insertSession(db, 'Cursor Agents — daylens timeline', 9, 90, 'development', {

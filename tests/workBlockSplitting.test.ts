@@ -521,7 +521,8 @@ test('terminal-dominant blocks use terminal window titles before browser page ti
 
   const [label] = labelsFor(db)
 
-  assert.match(label, /npm run typecheck|daylens/i)
+  assert.match(label, /daylens/i)
+  assert.doesNotMatch(label, /npm run typecheck/i)
   assert.doesNotMatch(label, /React docs|Google Chrome/i)
   db.close()
 })

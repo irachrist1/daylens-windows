@@ -2279,6 +2279,21 @@ export function compactWindowTitle(title: string): string {
     .find((part) => part.length > 2) ?? title.trim()
 }
 
+/** First window-title segment that may name work. Tool surfaces and command
+ *  lines ("Cursor Agents", "npm run typecheck") stay evidence; the next
+ *  segment ("daylens") can still be the subject. */
+function windowTitleSubject(title: string): string | null {
+  const parts = title
+    .split(/\s[—-]\s/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 2)
+  for (const part of parts) {
+    if (workNameGuardLabelViolation(part, { storedLabel: true })) continue
+    return part
+  }
+  return null
+}
+
 function contentContextForSession(session: AppSession): string {
   const title = usefulWindowTitle(session)
   if (title) return compactWindowTitle(title).toLowerCase()
@@ -2670,7 +2685,7 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
     if (!title) continue
 
     const artifactType = artifactKindForSession(session)
-    const displayTitle = compactWindowTitle(title)
+    const displayTitle = windowTitleSubject(title) ?? compactWindowTitle(title)
     const canonicalAppId = session.canonicalAppId ?? resolveCanonicalApp(session.bundleId, session.appName).canonicalAppId
     const canonicalKey = `${artifactType}:${canonicalAppId ?? session.bundleId}:${displayTitle.toLowerCase()}`
     const existing = grouped.get(canonicalKey)
