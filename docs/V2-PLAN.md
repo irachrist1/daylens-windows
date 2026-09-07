@@ -7,8 +7,40 @@ Everything else was deleted on 2026-09-04 — it was stale, contradicted itself,
 duplicated a tracker. Product behaviour lives in `docs/specs/`; how to build and ship
 lives in `docs/operations/`. Nothing else plans V2.
 
-Kept in sync with Linear project **Daylens V2** and GitHub `spcsorg/daylens`. When they
-disagree, this document is wrong and gets fixed.
+**Linear project Daylens V2 is the backlog.** This document is the plan; it does not
+duplicate the backlog. GitHub Issues exist for people outside the project to report
+things, and get triaged into Linear.
+
+Issue references below are Linear `DEV-nnn`. A bare `#nn` means `spcsorg/daylens`;
+`irachrist1#nn` is the older personal repo, which still holds open PRs — the two
+repositories number their issues independently, so a bare `#nn` is ambiguous unless
+qualified.
+
+---
+
+## On the board
+
+```
+DAYLENS — WHAT WE ARE FIXING
+
+The one test:   npm run eval:days
+   names the work        85%  ->  95%
+   never names a tool    97%  ->  99%
+   honest about gaps     95%  -> 100%
+
+ 1  NAME THE WORK, NOT THE TOOL      <- biggest gap
+ 2  COUNT THE TIME HONESTLY
+ 3  MAKE IT FAST                     <2s launch, <200ms paint
+ 4  THE APPS VIEW MUST BE TRUE
+ 5  CHAT: FAST, AND NEVER CONTRADICTS ITSELF
+
+Cannot ship without:  Windows cert · billing live · calendar off icalBuddy
+
+Done = a stranger opens their day and it reads true.
+```
+
+Everything below is the detail behind those five lines. If the two ever disagree,
+the board is the promise and the detail is what is currently known.
 
 ---
 
@@ -60,10 +92,12 @@ The single biggest gap: 15% of primary work is never named, and tool surfaces st
 labels. `activity-understanding.md` gives the naming ladder — durable entity, then subject
 inferred from content signals, then never the tool.
 
-- **DEV-287 / #109** — `analyzeDay.ts` has an `interpretationAgentEnabled` flag whose runtime
-  logs "not wired yet" and falls back to the legacy pipeline. Day analysis should be an agent
-  turn over the tiered tools in `context-agent.md`, with deterministic heuristics as the floor.
-  This is the build that moves primary-work naming.
+- **DEV-287 / #109** — **the ticket is out of date: the runtime is wired.**
+  `analyzeDay.ts:220` reads `interpretationAgentEnabled(getSettings())` and calls
+  `runInterpretationAgentRelabel`, with a Settings toggle at `Settings.tsx:3197`. It is
+  OFF by default. The open work is not wiring it — it is turning it on and proving it beats
+  the legacy path on the eval, then making that the default. This is still the build that
+  moves primary-work naming.
 - **DEV-288 / #110** — labels stored before the name guards still say "Cursor Agents". Guards
   run on read and do not rewrite the database. Needs a backfill.
 - **DEV-223 / #21** — Timeline, Apps, chat and exports disagree about the same day.
@@ -82,8 +116,11 @@ foreground seconds.
   `DeterministicFactKind` has no `site_total_time`, so per-site duration is the one fact kind
   the model is left to guess.
 - **DEV-290 / #112** — `HISTORY_FILL_MAX_MS` lets a titleless browser credit up to 4h to its
-  last-visited page, usually Netflix or YouTube. `browser_context_events` exists and nothing
-  writes to it; populating it for Chromium browsers is the real fix.
+  last-visited page, usually Netflix or YouTube. **The ticket's proposed fix is dead:** it
+  says to populate `browser_context_events`, and that table was dropped
+  (`migrations.ts:2071` — "never written to in production, 0 rows, 0 writers anywhere in
+  `src/`"). The bug is real; the fix has to be restated against `HISTORY_FILL_MAX_MS`
+  itself.
 - **DEV-238 / #60** — half of browser time has no page attached.
 
 **Done when:** no domain's credited seconds exceed its browser's foreground seconds in the same
@@ -97,7 +134,9 @@ on a real fault. Dev launch went ~12s → ~6.6s. Left from that issue's own chec
 
 - **~1.1s of eager module eval** at Electron ready. The AI SDK and ExcelJS load at top level, on
   the paint path. Lazy-import them.
-- **DEV-261 / #83** — the app freezes for minutes and silently stops recording, leaving no marker.
+- **DEV-261 / #83** — the app freezes for minutes and silently stops recording. Half done:
+  `stallWatchdog.ts:135` captures `main_thread_stalled` to telemetry, but nothing writes a
+  marker the day itself can show, which is what the acceptance below asks for.
 
 Measured 2026-09-04 on the real 1.19GB profile (`npm run bench:surfaces`):
 `getTimelineDayPayload` 111-166ms, `getAllAppsForLabeling` 16-53ms. **The database is not the
@@ -140,8 +179,10 @@ Real, required to release, felt by nobody until release day.
 - **CI lives on `spcsorg`.** Blacksmith is installed on the org, not the personal account.
 - **DEV-487, the morning/evening crash.** Rare, and now self-reporting — the frame goes to
   PostHog. Screenshot it when it fires.
-- **DEV-229 / #51** — the app trusts the accessibility flag instead of verifying capture works.
-  0 of 83 samples carried a window title while the health page read "granted".
+- ~~**DEV-229 / #51** — trusts the accessibility flag instead of verifying capture works.~~
+  **Shipped.** `services/permissionWatcher.ts` verifies with real reads and
+  `getCaptureVerificationState` exposes it. Linear says Done; GitHub #51 is still open and
+  should be closed.
 - **DEV-255 / #77** — calendar depends on icalBuddy, a third-party CLI most users will not
   have. **Urgent in Linear.** It works on the owner's machine by accident. Native EventKit.
 - **DEV-289 / #111** — focus score and distraction alerter are spec-removed but fully live.
@@ -158,7 +199,8 @@ restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan,
 - `site_total_time` missing from `DeterministicFactKind` — #68
 - interpretation-agent runtime behind a flag that logs "not wired yet" — #109
 - Context Inspector: backend fills `ChatAgentResult.evidence`, no UI reads it
-- command palette calls `ipc.search.semantic` and never reaches `planRetrieval`
+- ~~command palette never reaches `planRetrieval`~~ — **not true**;
+  `search.handlers.ts:56` returns `planRetrieval(...)`
 - entity write-through: `adoptAppIdentityWrite` and `adoptArtifactWrite` exported, uncalled
 - screen context captures frames with `noExtractorInstalled`
   (`screenContext.handlers.ts:61`); backlog full at 100 frames, all quarantined — #73
