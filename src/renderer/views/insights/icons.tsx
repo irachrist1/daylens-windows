@@ -168,6 +168,7 @@ export function IconActionButton({
   tone = 'neutral',
   pulseNonce = 0,
   reducedMotion = false,
+  disabled = false,
   onClick,
   children,
 }: {
@@ -178,6 +179,7 @@ export function IconActionButton({
   tone?: 'neutral' | 'positive' | 'negative'
   pulseNonce?: number
   reducedMotion?: boolean
+  disabled?: boolean
   onClick: () => void
   children: ReactNode
 }) {
@@ -202,6 +204,7 @@ export function IconActionButton({
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       onPointerDown={() => setPressed(true)}
       onPointerUp={() => setPressed(false)}
       onPointerLeave={() => setPressed(false)}
@@ -220,6 +223,8 @@ export function IconActionButton({
         color: textColor,
         background,
         borderColor,
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
         transform: reducedMotion ? undefined : pressed ? 'scale(0.92)' : undefined,
         animation: !reducedMotion && pulseName
           ? `${pulseName} 200ms cubic-bezier(0.2, 0.9, 0.2, 1.15)`
