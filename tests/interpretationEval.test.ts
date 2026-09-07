@@ -145,7 +145,24 @@ test('the eval fails a run whose labels leak raw artifacts into prose', async ()
       blockInsight: async () => ({ label: 'feat/notifications-v2', narrative: null }),
     })
 
-    const report = evaluateInterpretationRun({ before, after: result.payload })
+    assert.equal(
+      result.payload.blocks.some((block) => block.label.current === 'feat/notifications-v2'),
+      false,
+      'the finalize ladder never persists a branch name as a label',
+    )
+
+    // The injected interpreter still proposed the leak; the offline eval is
+    // the gate that scores a payload carrying it, the way a future runtime
+    // that bypassed the chooser would be caught before rollout.
+    const leaked = {
+      ...result.payload,
+      blocks: result.payload.blocks.map((block, index) => (
+        index === 0
+          ? { ...block, label: { ...block.label, current: 'feat/notifications-v2' } }
+          : block
+      )),
+    }
+    const report = evaluateInterpretationRun({ before, after: leaked })
     assert.equal(report.pass, false)
     assert.ok(report.violations.some((v) => v.rule === 'label-unusable'),
       `expected a label-unusable violation, got ${JSON.stringify(report.violations)}`)

@@ -14,6 +14,7 @@ import type { TrackingControlsState } from '../../../src/shared/trackingControls
 import { mcpToolManifest } from './tools'
 import { callDaylensReadTool } from './dispatch'
 import { resolveDefaultDbPath } from './dbPath'
+import { mcpActivityLogPath, recordMcpActivity } from '../../../src/shared/mcpActivityLog'
 import { installConsoleStdioGuards } from '../../../src/shared/consoleStdio'
 
 // stderr only: stdout is the JSON-RPC transport, and a transport that has
@@ -30,6 +31,15 @@ if (!fs.existsSync(dbPath)) {
 const db = new Database(dbPath, { readonly: true })
 try { db.pragma('journal_mode = WAL') } catch { /* read-only connection can't change journal mode */ }
 db.pragma('busy_timeout = 5000')
+const activityLogPath = mcpActivityLogPath(dbPath)
+
+function recordCall(name: string, args: unknown, ok: boolean, error?: string): void {
+  try {
+    recordMcpActivity(activityLogPath, { tool: name, arguments: args, ok, error })
+  } catch (err) {
+    console.error('[daylens-mcp] Failed to record activity:', err)
+  }
+}
 
 // The subprocess can't reach the Electron settings store, so the current
 // exclusion set is handed in by env (see mcpServer.ts). Without this the MCP
@@ -88,22 +98,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
+  const toolArgs = (args ?? {}) as Record<string, unknown>
   try {
     const result = await callDaylensReadTool(
       name,
-      (args ?? {}) as Record<string, unknown>,
+      toolArgs,
       db,
       trackingControls,
     )
+    recordCall(name, toolArgs, true)
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
     }
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    recordCall(name, toolArgs, false, message)
     return {
       content: [
         {
           type: 'text' as const,
-          text: `Tool error: ${err instanceof Error ? err.message : String(err)}`,
+          text: `Tool error: ${message}`,
         },
       ],
       isError: true,

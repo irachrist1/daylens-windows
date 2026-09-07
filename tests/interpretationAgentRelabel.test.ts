@@ -6,12 +6,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type Database from 'better-sqlite3'
+import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import { __resetSettings, __setSettings, setApiKey } from './support/settings-stub.mjs'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
+import { shouldReanalyzeBlockWithAI } from '../src/main/services/workBlocks.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
+import { listContextPackets } from '../src/main/services/contextPacket.ts'
 import {
   parseInterpretationAgentInsight,
   runInterpretationAgentRelabel,
@@ -67,31 +70,98 @@ const mockUsage = {
   outputTokens: { total: 20, text: 20, reasoning: 0 },
 }
 
+function response(chunks: unknown[]) {
+  return { stream: simulateReadableStream({ chunks }) }
+}
+
 test('flag off: the agent is never consulted and the direct relabel runs unchanged', async () => {
   const db = createProductionTestDatabase()
   seedLowConfidenceDay(db)
+  __setSettings({ interpretationAgentEnabled: false })
   assert.ok(lowConfidenceBlockCount(db) >= 1, 'seed must produce a low-confidence block')
 
   let agentCalls = 0
   let directCalls = 0
-  const result = await analyzeTimelineDay(db, TEST_DATE, {
-    triggerSource: 'background',
-    regroupPlan: async () => null,
-    blockInsight: async () => {
-      directCalls += 1
-      return { label: 'Reviewing team updates', narrative: 'Steady coordination work.' }
-    },
-    agentBlockInsight: async () => {
-      agentCalls += 1
-      throw new Error('the interpretation agent must not run while the flag is off')
-    },
-  })
+  try {
+    const result = await analyzeTimelineDay(db, TEST_DATE, {
+      triggerSource: 'background',
+      regroupPlan: async () => null,
+      blockInsight: async () => {
+        directCalls += 1
+        return { label: 'Reviewing team updates', narrative: 'Steady coordination work.' }
+      },
+      agentBlockInsight: async () => {
+        agentCalls += 1
+        throw new Error('the interpretation agent must not run while the flag is off')
+      },
+    })
 
-  assert.equal(agentCalls, 0, 'flag off means the agent path is never consulted')
-  assert.ok(directCalls >= 1, 'the direct relabel still names the block')
-  assert.ok(result.relabeled >= 1)
-  assert.ok(persistedLabels(db).includes('Reviewing team updates'))
-  db.close()
+    assert.equal(agentCalls, 0, 'flag off means the agent path is never consulted')
+    assert.ok(directCalls >= 1, 'the direct relabel still names the block')
+    assert.ok(result.relabeled >= 1)
+    assert.ok(persistedLabels(db).includes('Reviewing team updates'))
+    assert.equal(
+      listContextPackets(db, { exchangeKind: 'day_analysis' }).length,
+      0,
+      'flag off never records an interpret packet',
+    )
+  } finally {
+    __resetSettings()
+    db.close()
+  }
+})
+
+test('flag on: packet recording must succeed before the provider is called', async () => {
+  for (const recordingFailure of ['unavailable', 'insert failure'] as const) {
+    const db = createProductionTestDatabase()
+    seedLowConfidenceDay(db)
+    setTestDb(db)
+    __setSettings({ interpretationAgentEnabled: true, aiProvider: 'anthropic', aiChatProvider: 'anthropic' })
+    await setApiKey('anthropic', 'test-key')
+    if (recordingFailure === 'unavailable') {
+      db.exec('DROP TABLE context_packets')
+    } else {
+      db.exec(`
+        CREATE TRIGGER fail_interpret_packet_insert
+        BEFORE INSERT ON context_packets
+        BEGIN
+          SELECT RAISE(ABORT, 'forced packet insert failure');
+        END
+      `)
+    }
+
+    let modelCalls = 0
+    let directCalls = 0
+    const model = new MockLanguageModelV3({
+      doStream: async () => {
+        modelCalls += 1
+        return response([])
+      },
+    })
+    try {
+      await assert.rejects(
+        analyzeTimelineDay(db, TEST_DATE, {
+          triggerSource: 'background',
+          regroupPlan: async () => null,
+          blockInsight: async () => {
+            directCalls += 1
+            return { label: 'Reviewing team updates', narrative: 'Direct path.' }
+          },
+          agentBlockInsight: (block, opts) =>
+            runInterpretationAgentRelabel(db, block, { ...opts, model, allowCollect: false }),
+        }),
+        /could not record what it was about to send/,
+        `${recordingFailure} must surface the blocked manual analysis`,
+      )
+
+      assert.equal(modelCalls, 0, `${recordingFailure} must prevent remote interpretation`)
+      assert.equal(directCalls, 0, `${recordingFailure} keeps the deterministic label instead of making another remote call`)
+    } finally {
+      __resetSettings()
+      clearTestDb()
+      db.close()
+    }
+  }
 })
 
 test('flag on: a valid agent label (after a tool call) lands with source ai and a metered usage row', async () => {
@@ -103,35 +173,44 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
 
   let modelCall = 0
   const model = new MockLanguageModelV3({
-    doGenerate: async () => {
+    doStream: async () => {
       modelCall += 1
       if (modelCall === 1) {
-        return {
-          content: [{
-            type: 'tool-call' as const,
+        return response([
+          { type: 'text-start', id: 'draft-1' },
+          {
+            type: 'text-delta',
+            id: 'draft-1',
+            delta: JSON.stringify({
+              label: 'Drafting an early guess',
+              narrative: 'This draft precedes the tool result.',
+            }),
+          },
+          { type: 'text-end', id: 'draft-1' },
+          {
+            type: 'tool-call',
             toolCallId: 'ctx-1',
             toolName: 'get_window_title_context',
             input: JSON.stringify({ date: TEST_DATE, appName: 'Slack' }),
-          }],
-          finishReason: { unified: 'tool-calls' as const, raw: undefined },
-          usage: mockUsage,
-          warnings: [],
-        }
+          },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage: mockUsage },
+        ] as never[])
       }
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify({
+      return response([
+        { type: 'text-start', id: 'answer-1' },
+        {
+          type: 'text-delta',
+          id: 'answer-1',
+          delta: JSON.stringify({
             label: 'Coordinating a release across tools',
             narrative: 'Short hops between notes, chat, and the terminal around one release effort.',
             confidence: 0.74,
             reasoning: 'Window titles and chat context point at one coordinated effort.',
           }),
-        }],
-        finishReason: { unified: 'stop' as const, raw: undefined },
-        usage: mockUsage,
-        warnings: [],
-      }
+        },
+        { type: 'text-end', id: 'answer-1' },
+        { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: mockUsage },
+      ] as never[])
     },
   })
 
@@ -157,6 +236,15 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
     assert.equal(labeled.label.source, 'ai')
     assert.equal(directCalls, 0, 'the low-confidence block was handled by the agent, not the direct path')
 
+    const packets = listContextPackets(db, { exchangeKind: 'day_analysis', scopeKey: TEST_DATE })
+    assert.ok(packets.length >= 1, 'the turn recorded an interpret-purpose context packet before the model ran')
+    assert.equal(packets[0]?.packet.purpose, 'interpret')
+    const toolNames = new Set(packets[0]?.packet.tools.map((tool) => tool.name))
+    assert.ok(toolNames.has('get_window_title_context'))
+    assert.ok(toolNames.has('get_calendar_events'))
+    assert.ok(toolNames.has('lookup_entity'))
+    assert.ok(!toolNames.has('capture_screen'), 'historical relabel packets do not advertise live screen capture')
+
     // Usage metering: the turn wrote one interpretation_agent row (DEV-228
     // lanes) — the tool loop is never invisible to Usage.
     const usageRows = db.prepare(
@@ -165,6 +253,35 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
     assert.equal(usageRows.length, 1)
     assert.equal(usageRows[0].success, 1)
     assert.ok((usageRows[0].input_tokens ?? 0) > 0)
+  } finally {
+    __resetSettings()
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('a live block may advertise capture_screen; day analysis never sends one', async () => {
+  const db = createProductionTestDatabase()
+  seedLowConfidenceDay(db)
+  setTestDb(db)
+  __setSettings({ interpretationAgentEnabled: true, aiProvider: 'anthropic', aiChatProvider: 'anthropic' })
+  await setApiKey('anthropic', 'test-key')
+  const historical = materializeTimelineDayProjection(db, TEST_DATE, null)
+    .blocks.find((block) => !block.isLive)
+  assert.ok(historical, 'seed must produce a historical block')
+  try {
+    await runInterpretationAgentRelabel(db, { ...historical, isLive: true }, {
+      model: answerModel({
+        label: 'Coordinating a release across tools',
+        narrative: 'Live block names from recorded evidence.',
+        confidence: 0.7,
+      }),
+      allowCollect: false,
+    })
+    const packets = listContextPackets(db, { exchangeKind: 'day_analysis', scopeKey: TEST_DATE })
+    const toolNames = new Set(packets.at(-1)?.packet.tools.map((tool) => tool.name))
+    assert.ok(toolNames.has('capture_screen'), 'a current block may advertise consented live capture')
+    assert.equal(shouldReanalyzeBlockWithAI({ ...historical, isLive: true }), false)
   } finally {
     __resetSettings()
     clearTestDb()
@@ -212,12 +329,12 @@ test('flag on: an invariant-violating agent pass is discarded and the determinis
 // One-shot mock model that answers with the given insight JSON directly.
 function answerModel(insight: Record<string, unknown>): MockLanguageModelV3 {
   return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: 'text' as const, text: JSON.stringify(insight) }],
-      finishReason: { unified: 'stop' as const, raw: undefined },
-      usage: mockUsage,
-      warnings: [],
-    }),
+    doStream: async () => response([
+      { type: 'text-start', id: 'answer-1' },
+      { type: 'text-delta', id: 'answer-1', delta: JSON.stringify(insight) },
+      { type: 'text-end', id: 'answer-1' },
+      { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: mockUsage },
+    ] as never[]),
   })
 }
 

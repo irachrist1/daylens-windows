@@ -24,9 +24,9 @@ test('whitespace-only seeds never trigger a send', () => {
   assert.equal(consumePendingChatSeed(), null)
 })
 
-// The AI tab's consuming effect runs on every render of the access gate:
-// first while settings/hasApiKey are still null (loading gate, no composer),
-// then again once they resolve. The seed must survive the unresolved runs and
+// The AI tab's consuming effect runs on every render: first while
+// settings/hasApiKey are still null (the access verdict has not landed), then
+// again once they resolve. The seed must survive the unresolved runs and
 // be delivered exactly once after resolution. This drives the same function
 // the component effect calls, across the same state sequence a fresh mount
 // produces.

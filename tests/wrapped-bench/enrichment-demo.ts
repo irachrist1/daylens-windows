@@ -24,7 +24,7 @@ async function main(): Promise<void> {
     console.log(`\n=== Wrapped enrichment demo · ${date} ===\n`)
 
     // 1. Collect fresh external signals (git scans repos on disk; calendar via
-    //    icalBuddy). Force so we re-read even if a stale row exists.
+    //    EventKit / Outlook). Force so we re-read even if a stale row exists.
     process.stdout.write('[1] collecting external signals (git + calendar + focus)…\n')
     const fired = await collectExternalSignals(date, { force: true })
     console.log(`    connectors that produced a signal: [${fired.join(', ') || 'none'}]`)

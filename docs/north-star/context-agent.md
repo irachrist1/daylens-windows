@@ -69,13 +69,14 @@ model and outside the renderer.
    tools. "Why was I stuck at 3pm?" → Tier 1 shows a long Xcode block →
    Tier 2 title context is ambiguous → Tier 3 (if the moment is *now*) or
    stored frames (if past) resolve it.
-2. **The interpretation agent** — the currently-unwired
-   `interpretationAgentEnabled` path in `analyzeDay.ts`. Day analysis becomes
-   an agent turn over the same tools: for each low-confidence block it may
-   pull title context, entities, calendar, or (consented) frames before
-   labeling. Deterministic heuristics stay as the always-available fallback
-   and the floor for hermetic tests. This is where "the AI understands
-   activity" and "the agent pulls context" become the same feature.
+2. **The interpretation agent** — the `interpretationAgentEnabled` path in
+   `analyzeDay.ts`. Day analysis becomes an agent turn over the same
+   read-only tools: for each low-confidence historical block it may pull
+   title context, entities, or calendar before labeling. Live screen capture
+   is reserved for a current block and is not registered on this path.
+   Deterministic heuristics stay as the always-available fallback and the
+   floor for hermetic tests. This is where "the AI understands activity" and
+   "the agent pulls context" become the same feature.
 
 Both consumers share the tool registry, the policy gate, and the trail. New
 capabilities (a new probe, a connector, a device) are new tools + a policy

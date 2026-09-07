@@ -42,6 +42,7 @@ import type {
   HistoryExportVerification,
   WrapSlidesExportResult,
   MemoryMirrorSyncResult,
+  McpActivityLog,
   BillingUsageReport,
   SpendGuardrailsReport,
   IntercomIdentity,
@@ -443,6 +444,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.SET_THREAD_SETTINGS, { threadId, settings }),
     openArtifact: (artifactId: number): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
+    getMcpActivity: (): Promise<McpActivityLog> =>
+      ipcRenderer.invoke(IPC.AI.GET_MCP_ACTIVITY),
   },
   search: {
     // The unified boundary: the planner scopes, retrieves, reconciles, and
@@ -695,7 +698,7 @@ const api = {
       ipcRenderer.invoke(IPC.CONTEXT_PACKETS.GET_FOR_MESSAGE, messageId),
     list: (payload: { limit?: number; exchangeKind?: 'chat' | 'day_analysis'; scopeKey?: string } = {}) =>
       ipcRenderer.invoke(IPC.CONTEXT_PACKETS.LIST, payload),
-    // DEV-183: the read-only "What the AI saw" inspection for one exchange —
+    // DEV-183: the read-only sources inspection for one exchange —
     // by packet id, or by the assistant message the packet is bound to.
     inspect: (payload: { packetId?: string | null; messageId?: number | null }): Promise<ContextPacketInspection | null> =>
       ipcRenderer.invoke(IPC.CONTEXT_PACKETS.INSPECT, payload),

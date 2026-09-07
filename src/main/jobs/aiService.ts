@@ -37,7 +37,14 @@ import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { labelCandidateViolation, labelProvenance, labelVoiceContextForBlock, rawLabelForm } from '@shared/labelVoice'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { effectiveBlockKind, partitionDomainsWorkFirst } from '@shared/workKind'
-import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
+import { evidenceTitlesFromBreakdown } from '@shared/appDetailAccount'
+import {
+  appNarrativeScopeKey,
+  isThinAppNarrative,
+  parseSurfaceSummaryResult,
+  selectVisibleAppNarrative,
+  THIN_APP_NARRATIVE_SUMMARY,
+} from '@shared/appNarrativeContract'
 import { INTERPRETATION_DIRECTIVES } from '@shared/activityDescription'
 import { normalizeSummaryVoice, voiceDirective } from '@shared/summaryVoice'
 import { userProfileDirective } from '@shared/userProfile'
@@ -46,6 +53,7 @@ import { shippedRecapVariant, type RecapPromptVariant } from '../ai/recapVariant
 import { claudeCodeChatAvailable, runClaudeCodeChat } from '../agent/claudeCodeChat'
 import { buildAgentSystemPrompt } from '../agent/systemPrompt'
 import { decodeProviderErrorMeta, isHardProviderWall } from '@shared/aiProviderError'
+import { cliToolForProvider, resolveChatSelection } from '@shared/aiProviderState'
 import {
   resolveDayContext,
 } from '../core/query/attributionResolvers'
@@ -171,6 +179,7 @@ interface AnswerEnvelope {
     fileDisclosures?: import('@shared/types').AIMessageFileDisclosure[]
     contextPacketId?: string | null
     citations?: import('@shared/types').AIMessageCitation[]
+    durationMs?: number | null
   }
   suggestedFollowUps: FollowUpSuggestion[]
   actions?: AIMessageAction[]
@@ -1313,29 +1322,6 @@ function localDateKeyForMs(ms: number): string {
 }
 
 
-function parseSurfaceSummaryResult(
-  raw: string,
-  fallbackTitle: string,
-): { title: string; summary: string } | null {
-  const normalized = escapeJsonBlock(raw)
-  if (!normalized) return null
-
-  try {
-    const parsed = JSON.parse(normalized) as { title?: unknown; summary?: unknown }
-    const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : ''
-    if (!summary) return null
-    return {
-      title: typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : fallbackTitle,
-      summary,
-    }
-  } catch {
-    return {
-      title: fallbackTitle,
-      summary: normalized,
-    }
-  }
-}
-
 function localDateBoundsFromString(dateStr: string): [number, number] {
   const [year, month, day] = dateStr.split('-').map(Number)
   const from = new Date(year, month - 1, day).getTime()
@@ -2339,7 +2325,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
   }
 }
 
-const APP_NARRATIVE_CACHE_VERSION = 3
+const APP_NARRATIVE_CACHE_VERSION = 4
 
 function appNarrativeHasStaleMetrics(summary: AISurfaceSummary | null): boolean {
   if (!summary) return false
@@ -2367,6 +2353,8 @@ function appNarrativeSignature(detail: ReturnType<typeof getAppDetailPayload>): 
     canonicalAppId: detail.canonicalAppId,
     rangeKey: detail.rangeKey,
     topArtifacts: detail.topArtifacts.slice(0, 8).map((artifact) => artifact.displayTitle),
+    topGroups: (detail.activityBreakdown?.groups ?? []).slice(0, 8).map((group) => group.label),
+    topItems: (detail.activityBreakdown?.groups ?? []).flatMap((group) => group.items).slice(0, 8).map((item) => item.displayTitle),
     topDomains: (detail.browserActivity?.domains ?? []).slice(0, 8).map((entry) => entry.domain),
     topPages: (detail.browserActivity?.domains ?? []).flatMap((entry) => entry.pages).slice(0, 8).map((page) => page.displayTitle),
     blockAppearances: detail.blockAppearances.slice(0, 8).map((block) => `${block.blockId}:${block.label}:${block.startTime}:${block.endTime}`),
@@ -2424,6 +2412,12 @@ function buildAppNarrativeBundle(
     (p) => p.domain,
   )
   const orderedPages = [...pageGroups.work, ...pageGroups.leisure]
+  const activityGroups = [...(detail.activityBreakdown?.groups ?? [])]
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
+  const activityItems = dedupeByTitle(
+    activityGroups.flatMap((group) => group.items).sort((left, right) => right.totalSeconds - left.totalSeconds),
+    (item) => item.displayTitle,
+  )
 
   // B3: collapse the 24-bucket per-hour distribution into the top whole-hour
   // ranges. The model previously confabulated sub-hour windows like
@@ -2449,6 +2443,8 @@ function buildAppNarrativeBundle(
   const packedArtifacts = take(dedupedArtifacts, evidenceCost)
   const packedDomains = take(orderedDomains, evidenceCost)
   const packedPages = take(orderedPages, evidenceCost)
+  const packedActivityGroups = take(activityGroups, evidenceCost)
+  const packedActivityItems = take(activityItems, evidenceCost)
   const packedBlockAppearances = take(detail.blockAppearances, evidenceCost)
 
   const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
@@ -2492,6 +2488,16 @@ function buildAppNarrativeBundle(
         title: page.displayTitle,
         domain: page.domain,
         duration: formatDuration(page.totalSeconds),
+      })),
+      activityGroups: packedActivityGroups.map((group) => ({
+        label: group.label,
+        kind: group.kind,
+        duration: formatDuration(group.totalSeconds),
+      })),
+      activityItems: packedActivityItems.map((item) => ({
+        title: item.displayTitle,
+        detail: item.detail,
+        duration: formatDuration(item.totalSeconds),
       })),
       blockAppearances: packedBlockAppearances.map((block) => ({
         label: block.label,
@@ -2803,8 +2809,8 @@ async function generateAppNarrative(
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
     ...INTERPRETATION_DIRECTIVES,
     voiceDirective(voice),
-    'Explain what this tool was helping with and which artifacts, pages, or sites appeared there. Lead with the work (the domains and pages listed first); mention leisure only briefly if at all.',
-    'Use only the deterministic evidence below.',
+    'Explain what this tool was helping with and which artifacts, files, pages, or sites appeared there. Lead with the work (the activity groups and items listed first); mention leisure only briefly if at all.',
+    'Use only the deterministic evidence below. Native apps use activityGroups/activityItems the same way browsers use domains and pages — treat both as first-class evidence.',
     'Do not write vanity metrics or generic app summaries.',
     // Citation floor: the summary must name at least two concrete entities
     // from the structured evidence (block labels, artifacts, pages, domains).
@@ -2855,13 +2861,25 @@ async function generateAppNarrative(
       console.warn(`[ai] app_narrative parse-failed for ${scopeKey}; falling back`)
       return fallback
     }
+    const evidenceTitles = [
+      ...evidenceTitlesFromBreakdown(detail.activityBreakdown),
+      ...detail.topArtifacts.map((artifact) => artifact.displayTitle),
+      ...detail.blockAppearances.map((block) => block.label),
+    ]
+    const groundedSummary = isThinAppNarrative(parsed.summary)
+      ? parsed.summary
+      : selectVisibleAppNarrative(parsed.summary, evidenceTitles)
+    if (!groundedSummary) {
+      console.warn(`[ai] app_narrative rejected ungrounded or structured dump for ${scopeKey}`)
+      return fallback
+    }
     const stored = upsertAISurfaceSummary(getDb(), {
       scopeType: 'app_detail',
       scopeKey,
       jobType: 'app_narrative',
       inputSignature,
       title: parsed.title,
-      summary: parsed.summary,
+      summary: groundedSummary,
     })
     invalidateProjectionScope('apps', 'ai:app_narrative', {
       canonicalAppId,
@@ -3555,26 +3573,24 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     : userMessage
 
   const settings = getSettings()
-  // D4: a per-thread override (provider + model, set together from the catalog)
-  // wins for this thread — but only when that provider has a key.
   const threadSettings = getThreadSettings(threadId)
-  let providerOverride: AIProviderMode | null = null
-  let modelOverride: string | null = null
+  const threadAvailability: Partial<Record<AIProviderMode, boolean>> = {}
   if (threadSettings.provider && threadSettings.model) {
-    const overrideHasKey = threadSettings.provider === 'claude-cli'
-      || threadSettings.provider === 'chatgpt-cli'
-      || threadSettings.provider === 'gemini-cli'
-      || threadSettings.provider === 'codex-cli'
-      || Boolean(await getApiKey(threadSettings.provider))
-    if (overrideHasKey) {
-      providerOverride = threadSettings.provider
-      modelOverride = threadSettings.model
-    }
+    const tool = cliToolForProvider(threadSettings.provider)
+    threadAvailability[threadSettings.provider] = tool
+      ? Boolean((await detectCLITools())[tool])
+      : Boolean(await getApiKey(threadSettings.provider))
   }
+  const selection = resolveChatSelection({
+    settings,
+    thread: threadSettings,
+    providerAvailability: threadAvailability,
+  })
+  const providerOverride = selection.source === 'thread' ? selection.provider : null
   const configs = await resolveProviderConfigsForJob('chat_answer', settings, providerOverride)
   let agentConfig = configs[0]
-  if (modelOverride && providerOverride && agentConfig.provider === providerOverride) {
-    agentConfig = { ...agentConfig, model: modelOverride }
+  if (selection.source === 'thread' && agentConfig.provider === selection.provider) {
+    agentConfig = { ...agentConfig, model: selection.model }
   }
 
   // A CLI provider cannot make the structured tool calls this loop needs, but
@@ -3820,6 +3836,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       fileDisclosures: agentResult.fileDisclosures,
       contextPacketId: agentResult.contextPacketId,
       citations: agentResult.citations,
+      durationMs: agentResult.durationMs,
     },
   })
   // Bind the recorded packet to the persisted assistant message (DEV-182), so

@@ -28,25 +28,29 @@ export async function appsForDate(ctx: HarnessContext, date: string, opts: { jso
 
 export async function appDetail(ctx: HarnessContext, appId: string, dateOrDays: string, opts: { json: boolean }): Promise<void> {
   const { getAppDetailProjection } = await import('../src/main/core/query/projections')
+  const { resolveAppDetailAccount } = await import('../src/shared/appDetailAccount')
   const daysOrDate: number | string = /^\d+$/.test(dateOrDays) ? Number(dateOrDays) : dateOrDays
   const detail = getAppDetailProjection(ctx.db, appId, daysOrDate, null)
   emit(detail, opts.json, () => {
     console.log(c('bold', `${detail.displayName} · ${typeof daysOrDate === 'number' ? `last ${daysOrDate}d` : daysOrDate}`))
     console.log(c('dim', `total ${fmtDuration(detail.totalSeconds)} · ${detail.sessionCount} sessions`))
-    if (detail.topArtifacts.length > 0) {
-      console.log(c('bold', '\n  What happened inside:'))
+    const account = resolveAppDetailAccount(detail)
+    console.log(c('bold', '\n  What you did there'))
+    if (account) console.log(`  ${account}`)
+    const breakdown = detail.activityBreakdown
+    if (breakdown) {
+      for (const group of breakdown.groups.slice(0, 12)) {
+        console.log(`  ${fmtDuration(group.totalSeconds).padStart(7)}  ${group.label}`)
+        for (const item of group.items.slice(0, 4)) {
+          console.log(c('gray', `           ${fmtDuration(item.totalSeconds).padStart(7)}  ${item.displayTitle}`))
+        }
+      }
+      if (breakdown.unattributedSeconds > 0) {
+        console.log(c('gray', `  ${fmtDuration(breakdown.unattributedSeconds).padStart(7)}  (no page recorded)`))
+      }
+    } else if (detail.topArtifacts.length > 0) {
       for (const artifact of detail.topArtifacts.slice(0, 15)) {
         console.log(`  ${fmtDuration(artifact.totalSeconds).padStart(7)}  ${artifact.displayTitle}${artifact.subtitle ? c('gray', ` — ${artifact.subtitle}`) : ''}`)
-      }
-    }
-    const browser = detail.browserActivity
-    if (browser) {
-      console.log(c('bold', '\n  Browser time:'))
-      for (const domain of (browser.domains ?? []).slice(0, 12)) {
-        console.log(`  ${fmtDuration(domain.totalSeconds).padStart(7)}  ${domain.domain}`)
-      }
-      if (browser.unattributedSeconds > 0) {
-        console.log(c('gray', `  ${fmtDuration(browser.unattributedSeconds).padStart(7)}  (no page recorded)`))
       }
     }
   })

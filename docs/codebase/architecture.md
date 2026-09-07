@@ -35,7 +35,7 @@ macOS / Windows / Linux signals      consented external signals
 | Range worker | `packages/range-worker` | Apps-view range reads off the main thread |
 | Embed worker | `packages/embed-worker` | MiniLM ONNX inference |
 | Capture relay | `packages/capture-relay` | drains the on-disk focus-event spool |
-| Native helpers | `src/native/capture-helper` (Swift), `windows-capture-helper` (C#) | foreground/title/idle events |
+| Native helpers | `src/native/capture-helper` (Swift), `calendar-helper` (EventKit), `windows-capture-helper` (C#) | foreground/title/idle events; macOS calendar |
 
 The four `packages/*/src/index.ts` entries are referenced by vite configs and fork sites — knip flags them as unused; they are not.
 
@@ -68,7 +68,7 @@ What makes it "activity, not tabs":
 1. `workBlocks.ts` — heuristic segmentation with boundary reasons.
 2. `workIntent.ts` — role (execution/research/communication/review/…) + subject, ranked artifact > page > workflow > domain, guarded per invariant 4.
 3. `workKind.ts` — work/leisure/personal, distribution-first.
-4. `analyzeDay.ts` — AI regroup + relabel, versioned (`day_analysis_versions`), heuristic fallback with no provider. Carries an `interpretationAgentEnabled` flag whose packet-based runtime is NOT wired yet — that runtime is where the agentic interpretation defined in [agent runtime and context](../specs/agent-runtime-and-context.md) lands.
+4. `analyzeDay.ts` — AI regroup + relabel, versioned (`day_analysis_versions`), heuristic fallback with no provider. When `interpretationAgentEnabled` is on, low-confidence historical relabels run through the packet-based interpretation agent in `interpretationAgent.ts` (`AISdkAgentRuntime` over the read-only title, calendar, git, meeting-note, and entity tools). Live screen capture is not registered for that path. If disclosure recording cannot persist, the local label stands. The direct pipeline stays the floor and the per-block fallback.
 5. `dayWrapScenes.buildDayWrapFacts` — the one reconciled facts object per day (activities, ribbon, story beats, standout, hooks, quality gate).
 6. `wrappedNarrative.ts` (lib + service) — prompt build, validation, repair, fallback, cache keyed by date + facts hash.
 
@@ -95,7 +95,7 @@ The desktop AI surface sends a typed request over IPC to the main process. `src/
 - **Tier 2 (cheap, permission-carded):** `read_file`/`list_dir`/`search_files` (deny-by-default grants, disclosure ledger), read-only `git`, `discover_repositories`.
 - **Tier 3 (expensive, consent-gated):** `capture_screen` — one downscaled still of the active display via the screen-context frame source; pixels go to the model as an image part and are never stored; the mandatory `reason` appears in the activity trail. Gated on the Screen context experiment toggle + OS permission; refuses honestly otherwise. (Added 2026-07-26.)
 
-Plus: context packets with an inspector ("what the AI saw"), grounding verification with one corrective retry, clarifying questions, pause/resume checkpoints, previewed/undoable corrections, confirmed-memory proposals, user-configured MCP servers.
+Plus: context packets with a sources inspector, grounding verification with one corrective retry, clarifying questions, pause/resume checkpoints, previewed/undoable corrections, confirmed-memory proposals, user-configured MCP servers.
 
 Agent tools read Daylens data through existing services and queries. A tool should expose a product-level fact or explicit command, not raw tables or a second definition of time and attribution. Provider choice, retries, streaming, cancellation, and rate limits belong to agent infrastructure. Recorded activity remains product data rather than model output. The tier model and its policy gate are specified in [agent runtime and context](../specs/agent-runtime-and-context.md).
 
@@ -107,15 +107,19 @@ The current sync path sends live presence and selected day-level facts. Raw capt
 
 ## MCP
 
-`packages/mcp-server` is a local stdio server bundled and launched by the desktop app when enabled. It opens the database read-only, reuses the same tool executors as the in-app agent, and fails closed on a malformed exclusion environment. It is another consumer of Daylens facts and should not invent a parallel activity model.
+`packages/mcp-server` is a local stdio server bundled and launched by the desktop app when enabled. External clients also spawn it. It opens the database read-only, reuses the same tool executors as the in-app agent, and fails closed on a malformed exclusion environment. It is another consumer of Daylens facts and should not invent a parallel activity model.
+
+Each external tool call is appended to `mcp-activity.jsonl` next to the database (tool name, timestamp, sanitized arguments, success/outcome — not the result). The AI tab reads that sidecar over `ai:get-mcp-activity` and shows a plain feed. Settings → Enrichment sources discovers MCP servers from Claude Desktop, Claude Code (`~/.claude.json`, including project-scoped `mcpServers`), and Cursor (`~/.cursor/mcp.json`).
 
 ## Billing
 
 The desktop can call a configured provider directly with a person’s own key. Managed AI access uses `services/billing`, which tracks entitlements and provider cost without storing prompts, answers, or raw activity. See [Billing operations](../operations/billing.md).
 
+Settings `aiProvider` plus the per-provider model is the account default. Chat follows that unless a thread override is still usable. The shipping default model is Claude Haiku 4.5 (`src/shared/aiProviderState.ts`). Claude CLI can answer chat when installed; other local CLIs are listed in Settings but are not offered as chat sources.
+
 ## Decisions recorded 2026-07-26
 
-- **Connector framework removed.** `src/main/connectors/` (OAuth adapters: Google/Outlook Calendar, GitHub, Linear, Granola + settings UI + IPC) was dropped as a product decision: developer-credential setup, zero real-world connections, DEV-256. Tables and migrations remain; readers of `connector_records` degrade to empty. Calendar/git enrichment continues via `externalSignals.ts` (zero-setup local probes), which is also the intended future home of any reborn integration — as agent-pluggable evidence, not a settings page.
+- **Connector framework removed.** `src/main/connectors/` (OAuth adapters: Google/Outlook Calendar, GitHub, Linear, Granola + settings UI + IPC) was dropped as a product decision: developer-credential setup, zero real-world connections, DEV-256. Tables and migrations remain; readers of `connector_records` degrade to empty. Calendar/git enrichment continues via `externalSignals.ts` (zero-setup local probes: EventKit on macOS, Outlook COM on Windows). OAuth remains fallback-only. See [native calendar research](../research/native-calendar.md).
 - **Old recap stack removed** (`renderer/lib/recap.ts`, `getRecapRange` IPC, recap sync-allowlist keys) — superseded by the wrap deck.
 - **Dead report generators removed** (`reportArtifacts.ts`, `reportFormats.ts`) — live export is `interactionTools` xlsx/csv + `weeklyExport`.
 - **Screen-context capture** (`services/screenContext/`) stays: consent-gated sampler + encrypted store + lifecycle, no shipped extractor yet. It now also serves the agent's Tier-3 live capture. Reconcile marketing copy ("no screenshots, ever") with this before any release that enables it.
@@ -126,7 +130,6 @@ The desktop can call a configured provider directly with a person’s own key. M
 - **Interpretation agent runtime** — flag exists, runtime unwired (see above). Highest-leverage next build.
 - **Block segmentation can bridge untracked gaps** (a lunch inside one "block") and gaps are not yet first-class facts for the narrative — the rules are in [Timeline §Segmentation](../specs/timeline.md) and [Day recap §Gaps](../specs/day-recap-and-analysis.md).
 - **`apps/web` + Convex sync is frozen** pending the encrypted companion replacement (docs/product/v2.md).
-- **Stored AI block labels predating the name guards** still carry tool-y names ("Working on Cursor Agents"); they heal on re-analysis, not retroactively.
 - **Plaintext API key** found in the LEGACY app-data dir (`~/Library/Application Support/Daylens/config.json`, old GRDB-era app): rotate that key and delete the file; the current app keeps keys in the OS secure store.
 
 ## Current architectural risks

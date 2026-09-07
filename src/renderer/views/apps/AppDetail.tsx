@@ -1,4 +1,6 @@
 import type { AISurfaceSummary, AppDetailPayload, AppUsageSummary } from '@shared/types'
+import { activityBreakdownHasRows, evidenceTitlesFromBreakdown, resolveAppDetailAccount } from '@shared/appDetailAccount'
+import { selectVisibleAppNarrative } from '@shared/appNarrativeContract'
 import { activityCategoryLabel } from '@shared/activityCategories'
 import { activityColorForCategory } from '@shared/activityColors'
 import ActivityListCard from '../../components/ActivityListCard'
@@ -6,8 +8,8 @@ import EntityIcon from '../../components/EntityIcon'
 import InlineRevealText from '../../components/InlineRevealText'
 import { formatDisplayAppName } from '../../lib/apps'
 import { formatDuration, localDateStringFromMs } from '../../lib/format'
-import { openArtifact } from '../../lib/openTarget'
-import BrowserActivityBreakdown, { type WebsiteActivityTarget } from './BrowserActivityBreakdown'
+import ActivityBreakdown from './ActivityBreakdown'
+import type { WebsiteActivityTarget } from './BrowserActivityBreakdown'
 
 export type GenerationStatus =
   | { kind: 'ok' }
@@ -60,10 +62,18 @@ export default function AppDetail({
     )
   }
 
-  const filteredAppearances = detail?.blockAppearances ?? []
-  const fileArtifacts = detail?.topArtifacts.filter((artifact) => artifact.artifactType !== 'page') ?? []
-  const rollups = detail?.blockMemoryRollups ?? []
-  const useRollup = rollups.some((row) => row.patternId && row.sessionCount >= 2)
+  const evidenceTitles = [
+    ...evidenceTitlesFromBreakdown(detail?.activityBreakdown),
+    ...(detail?.topArtifacts ?? []).map((artifact) => artifact.displayTitle),
+    ...(detail?.blockAppearances ?? []).map((block) => block.label),
+  ]
+  const generatedAccount = selectVisibleAppNarrative(narrative?.summary, evidenceTitles)
+  const account = detail
+    ? resolveAppDetailAccount(detail, generatedAccount)
+    : null
+  const breakdown = detail?.activityBreakdown
+  const showWhatYouDid = Boolean(account) || activityBreakdownHasRows(breakdown) || (detail != null && detail.totalSeconds > 0)
+  const relatedBlocks = (detail?.blockAppearances ?? []).filter((block) => block.label.trim().length > 0)
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
@@ -106,11 +116,10 @@ export default function AppDetail({
         </div>
         <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
           {appMetricSentence(summary.totalSeconds, summary.sessionCount)}
-          {narrative?.summary ? ` ${narrative.summary}` : ''}
         </p>
         {!narrative && !isGenerating && !generationStatus && (
           <p style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
-            The sites and pages below are computed from your activity. Press Generate for a written recap.
+            The sites, files, and pages below are computed from your activity. Press Generate for a written recap when the evidence can support one.
           </p>
         )}
         {narrativeError && !isGenerating && (
@@ -123,7 +132,7 @@ export default function AppDetail({
           <div aria-live="polite" style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>Generating a stronger app narrative…</div>
         )}
         {!isGenerating && generationStatus?.kind === 'thin' && (
-          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>Daylens has only thin signal for this app right now — try again after more activity.</div>
+          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>Daylens has only thin signal for this app right now — the breakdown below is the accurate account.</div>
         )}
         {!isGenerating && generationStatus?.kind === 'no-bundle' && (
           <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>No recent activity for this app in the selected range.</div>
@@ -150,77 +159,37 @@ export default function AppDetail({
         </div>
       )}
 
-      {detail && (
-        <>
-          {useRollup ? (
-            <ActivityListCard
-              title="What you did there"
-              rows={rollups.slice(0, 10).map((row) => ({
-                id: row.patternId ?? row.sampleBlockIds[0],
-                label: <>
-                  {row.patternLabel}
-                  {row.sessionCount > 1 && <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 500 }}> × {row.sessionCount} sessions</span>}
-                </>,
-                detail: `${formatDuration(row.totalSeconds)}${row.sessionCount === 1 ? ` · ${formatBlockRange(row.earliestStart, row.latestEnd)}` : ''}`,
-                onClick: () => { window.location.hash = `#/timeline?view=day&date=${localDateStringFromMs(row.earliestStart)}` },
-              }))}
-            />
-          ) : (
-            <ActivityListCard
-              title="What you did there"
-              rows={filteredAppearances.slice(0, 10).map((block) => ({
-                id: block.blockId,
-                label: block.label,
-                detail: formatBlockRange(block.startTime, block.endTime),
-                onClick: () => { window.location.hash = `#/timeline?view=day&date=${localDateStringFromMs(block.startTime)}` },
-              }))}
-            />
+      {detail && showWhatYouDid && (
+        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
+          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
+            What you did there
+          </div>
+          {account && (
+            <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '0 0 14px' }}>
+              {account}
+            </p>
           )}
-
-          {fileArtifacts.length > 0 && (
-            <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>Files & documents</div>
-              <div style={{ display: 'grid', gap: 12 }}>
-                {fileArtifacts.slice(0, 8).map((artifact) => (
-                  <button
-                    key={artifact.id}
-                    type="button"
-                    onClick={() => void openArtifact(artifact)}
-                    disabled={artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value}
-                    style={{ display: 'flex', alignItems: 'start', gap: 10, width: '100%', padding: 0, border: 'none', background: 'transparent', textAlign: 'left', cursor: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? 'default' : 'pointer' }}
-                  >
-                    <EntityIcon
-                      artifactType={artifact.artifactType}
-                      canonicalAppId={artifact.canonicalAppId}
-                      ownerBundleId={artifact.ownerBundleId}
-                      ownerAppName={artifact.ownerAppName}
-                      ownerAppInstanceId={artifact.ownerAppInstanceId}
-                      title={artifact.displayTitle}
-                      path={artifact.path}
-                      domain={artifact.host}
-                      url={artifact.url}
-                      size={28}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <InlineRevealText text={artifact.displayTitle} style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }} />
-                      <InlineRevealText text={artifact.subtitle || artifact.host || artifact.path || artifact.artifactType} style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }} />
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>{formatDuration(artifact.totalSeconds)}</div>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {detail.browserActivity && (
-            <BrowserActivityBreakdown
+          {breakdown && (
+            <ActivityBreakdown
               key={`${detail.canonicalAppId}:${detail.rangeKey}`}
-              activity={detail.browserActivity}
+              activity={breakdown}
               deletingActivityKey={deletingActivityKey}
               onDelete={onDeleteWebsiteActivity}
             />
           )}
-        </>
+        </section>
+      )}
+
+      {detail && relatedBlocks.length > 0 && (
+        <ActivityListCard
+          title="Related timeline"
+          rows={relatedBlocks.slice(0, 10).map((block) => ({
+            id: block.blockId,
+            label: block.label,
+            detail: formatBlockRange(block.startTime, block.endTime),
+            onClick: () => { window.location.hash = `#/timeline?view=day&date=${localDateStringFromMs(block.startTime)}` },
+          }))}
+        />
       )}
     </div>
   )

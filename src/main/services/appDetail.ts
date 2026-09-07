@@ -1,6 +1,9 @@
 import type Database from 'better-sqlite3'
 import crypto from 'node:crypto'
 import type {
+  AppActivityBreakdown,
+  AppActivityGroup,
+  AppActivityItem,
   AppCategory,
   AppDetailPayload,
   AppSession,
@@ -9,6 +12,7 @@ import type {
   PageRef,
 } from '@shared/types'
 import { MIN_DOMAIN_ROW_SECONDS } from '@shared/types'
+import { extractDisplayProse } from '@shared/appDetailAccount'
 import { appDetailRangeKey } from '@shared/appNarrativeContract'
 import {
   getBrowserActivityBreakdown,
@@ -58,9 +62,12 @@ function labelForSessionCluster(sessions: AppSession[]): string {
   const lead = sessions.reduce((best, current) => (
     current.durationSeconds > best.durationSeconds ? current : best
   ))
-  const titled = usefulWindowTitle(lead)
-  if (titled) return compactWindowTitle(titled)
   const identity = resolveCanonicalApp(lead.bundleId, lead.appName)
+  const titled = usefulWindowTitle(lead)
+  if (titled) {
+    const prose = extractDisplayProse(compactWindowTitle(titled), identity.displayName)
+    if (prose) return prose
+  }
   return sanitizeBlockLabel(identity.displayName)
     ?? sanitizeBlockLabel(lead.appName)
     ?? prettyCategory(lead.category)
@@ -68,10 +75,6 @@ function labelForSessionCluster(sessions: AppSession[]): string {
 
 function normalizedAppActivityLabel(value: string | null | undefined): string {
   return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
-}
-
-function labelMatchesSelectedApp(label: string, displayName: string): boolean {
-  return normalizedAppActivityLabel(label) === normalizedAppActivityLabel(displayName)
 }
 
 function buildSessionDerivedAppDetailBlocksByDate(
@@ -144,6 +147,204 @@ export function foldTinyDomains<T extends { totalSeconds: number; visitCount: nu
       visitCount: folded.reduce((sum, domain) => sum + domain.visitCount, 0),
     },
   }
+}
+
+function folderGroupLabel(filePath: string): string {
+  const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length < 2) return parts[0] ?? 'Files'
+  return parts[parts.length - 2] ?? 'Files'
+}
+
+function collectionLabelForArtifact(artifactType: ArtifactRef['artifactType']): string {
+  if (artifactType === 'repo' || artifactType === 'project') return 'Projects'
+  if (artifactType === 'window') return 'Pages'
+  return 'Files'
+}
+
+function activityItemFromArtifact(
+  artifact: ArtifactRef,
+  displayTitle: string,
+  canonicalAppId: string,
+): AppActivityItem {
+  const page = artifact as PageRef
+  return {
+    id: artifact.id,
+    displayTitle,
+    detail: extractDisplayProse(artifact.subtitle ?? artifact.host ?? artifact.path ?? null, displayTitle),
+    totalSeconds: artifact.totalSeconds,
+    visitCount: page.visitCount,
+    artifactType: artifact.artifactType,
+    canonicalAppId: artifact.canonicalAppId ?? canonicalAppId,
+    ownerBundleId: artifact.ownerBundleId,
+    ownerAppName: artifact.ownerAppName,
+    url: artifact.url,
+    host: artifact.host,
+    path: artifact.path,
+    domain: page.domain ?? artifact.host ?? null,
+    normalizedUrl: page.normalizedUrl,
+    pageKey: page.pageKey,
+    openTarget: artifact.openTarget,
+  }
+}
+
+function groupActivityItems(
+  items: AppActivityItem[],
+  totalSeconds: number,
+): AppActivityBreakdown {
+  const groupsByKey = new Map<string, AppActivityGroup>()
+  const order: string[] = []
+  let attributedSeconds = 0
+
+  for (const item of items) {
+    if (item.totalSeconds <= 0) continue
+    const domain = item.domain ?? item.host ?? null
+    const group = domain
+      ? { id: `domain:${domain}`, label: domain, kind: 'domain' as const }
+      : item.path
+        ? { id: `folder:${folderGroupLabel(item.path)}`, label: folderGroupLabel(item.path), kind: 'folder' as const }
+        : {
+          id: `collection:${item.artifactType ?? 'document'}`,
+          label: collectionLabelForArtifact(item.artifactType ?? 'document'),
+          kind: 'collection' as const,
+        }
+    const existing = groupsByKey.get(group.id)
+    if (existing) {
+      existing.items.push(item)
+      existing.totalSeconds += item.totalSeconds
+      existing.itemCount += 1
+      existing.visitCount = (existing.visitCount ?? 0) + (item.visitCount ?? 1)
+    } else {
+      groupsByKey.set(group.id, {
+        ...group,
+        totalSeconds: item.totalSeconds,
+        itemCount: 1,
+        visitCount: item.visitCount ?? 1,
+        items: [item],
+      })
+      order.push(group.id)
+    }
+    attributedSeconds += item.totalSeconds
+  }
+
+  const rawGroups = order.map((key) => {
+    const group = groupsByKey.get(key)!
+    group.items.sort((left, right) => right.totalSeconds - left.totalSeconds)
+    return group
+  }).sort((left, right) => right.totalSeconds - left.totalSeconds)
+
+  const { rows, everythingElse } = foldTinyDomains(rawGroups.map((group) => ({
+    ...group,
+    visitCount: group.visitCount ?? group.itemCount,
+  })))
+  const foldedSeconds = everythingElse?.totalSeconds ?? 0
+  const visibleAttributed = attributedSeconds - foldedSeconds
+
+  return {
+    totalSeconds,
+    attributedSeconds: visibleAttributed + foldedSeconds,
+    unattributedSeconds: Math.max(0, totalSeconds - attributedSeconds),
+    groups: rows,
+    ...(everythingElse
+      ? {
+        everythingElse: {
+          totalSeconds: everythingElse.totalSeconds,
+          groupCount: everythingElse.domainCount,
+          itemCount: everythingElse.visitCount,
+        },
+      }
+      : {}),
+  }
+}
+
+function activityBreakdownFromBrowser(
+  activity: NonNullable<AppDetailPayload['browserActivity']>,
+  displayName: string,
+): AppActivityBreakdown {
+  const groups: AppActivityGroup[] = []
+  let droppedSeconds = 0
+  for (const domain of activity.domains) {
+    const items: AppActivityItem[] = []
+    let keptSeconds = 0
+    for (const page of domain.pages) {
+      const title = extractDisplayProse(page.displayTitle, displayName)
+      if (!title) {
+        droppedSeconds += page.totalSeconds
+        continue
+      }
+      items.push(activityItemFromArtifact({ ...page, displayTitle: title }, title, page.canonicalAppId ?? ''))
+      keptSeconds += page.totalSeconds
+    }
+    const domainLabel = extractDisplayProse(domain.domain) ?? domain.domain
+    if (keptSeconds <= 0 && items.length === 0) {
+      droppedSeconds += domain.totalSeconds
+      continue
+    }
+    groups.push({
+      id: `domain:${domain.domain}`,
+      label: domainLabel,
+      kind: 'domain',
+      totalSeconds: keptSeconds,
+      itemCount: items.length,
+      visitCount: domain.visitCount,
+      items,
+    })
+  }
+  return {
+    totalSeconds: activity.totalSeconds,
+    attributedSeconds: Math.max(0, activity.attributedSeconds - droppedSeconds),
+    unattributedSeconds: activity.unattributedSeconds + droppedSeconds,
+    groups,
+    ...(activity.everythingElse
+      ? {
+        everythingElse: {
+          totalSeconds: activity.everythingElse.totalSeconds,
+          groupCount: activity.everythingElse.domainCount,
+          itemCount: activity.everythingElse.visitCount,
+        },
+      }
+      : {}),
+  }
+}
+
+function collectNativeActivityItems(
+  artifacts: ArtifactRef[],
+  sessions: AppSession[],
+  displayName: string,
+  canonicalAppId: string,
+): AppActivityItem[] {
+  const items: AppActivityItem[] = []
+  const artifactTitles = new Set<string>()
+  for (const artifact of artifacts) {
+    const title = extractDisplayProse(artifact.displayTitle, displayName)
+    if (!title) continue
+    artifactTitles.add(title.toLowerCase())
+    items.push(activityItemFromArtifact({ ...artifact, displayTitle: title }, title, canonicalAppId))
+  }
+  const titleSeconds = new Map<string, { title: string; seconds: number }>()
+  for (const session of sessions) {
+    const raw = usefulWindowTitle(session) ?? session.windowTitle
+    const title = raw ? extractDisplayProse(compactWindowTitle(raw), displayName) : null
+    if (!title) continue
+    const key = title.toLowerCase()
+    if (artifactTitles.has(key)) continue
+    const current = titleSeconds.get(key)
+    if (current) current.seconds += session.durationSeconds
+    else titleSeconds.set(key, { title, seconds: session.durationSeconds })
+  }
+  for (const { title, seconds } of titleSeconds.values()) {
+    if (seconds <= 0) continue
+    items.push({
+      id: `window:${normalizedAppActivityLabel(title)}`,
+      displayTitle: title,
+      detail: null,
+      totalSeconds: seconds,
+      visitCount: 1,
+      artifactType: 'window',
+      canonicalAppId,
+      openTarget: { kind: 'unsupported', value: null },
+    })
+  }
+  return items
 }
 
 /** Builds the Apps projection. Timeline formation remains in workBlocks; this
@@ -227,7 +428,7 @@ export function getAppDetailPayload(
       else artifactTotals.set(artifact.id, { ...artifact })
     }
   }
-  const topArtifacts = Array.from(artifactTotals.values()).sort((a, b) => b.totalSeconds - a.totalSeconds).slice(0, 8)
+  const ownedArtifacts = Array.from(artifactTotals.values()).sort((a, b) => b.totalSeconds - a.totalSeconds)
 
   const timeOfDayDistribution = Array.from({ length: 24 }, (_, hour) => ({ hour, totalSeconds: 0 }))
   for (const session of sessions) timeOfDayDistribution[new Date(session.startTime).getHours()].totalSeconds += session.durationSeconds
@@ -236,6 +437,13 @@ export function getAppDetailPayload(
   const displayName = sampleSession
     ? resolveCanonicalApp(sampleSession.bundleId, sampleSession.appName).displayName
     : resolveCanonicalApp(canonicalAppId, canonicalAppId).displayName
+  const topArtifacts = ownedArtifacts
+    .map((artifact) => {
+      const displayTitle = extractDisplayProse(artifact.displayTitle, displayName)
+      return displayTitle ? { ...artifact, displayTitle } : null
+    })
+    .filter((artifact): artifact is ArtifactRef => artifact !== null)
+    .slice(0, 8)
   // Appearances come from the same corrected block facts the Timeline shows
   // (invariant 7 / apps.md invariant 13): persisted blocks carry the user's
   // renames and category corrections, and a deleted block never appears. The
@@ -243,14 +451,17 @@ export function getAppDetailPayload(
   // yet (today/live) — the fallback already applied in blocksByDate above.
   const rawAppearances = [...relatedBlocks]
     .sort((a, b) => b.startTime - a.startTime)
-    .map((block) => ({
-      blockId: block.id,
-      startTime: block.startTime,
-      endTime: block.endTime,
-      label: sanitizeBlockLabel(block.label.current) ?? prettyCategory(block.dominantCategory),
-      dominantCategory: block.dominantCategory,
-    }))
-    .filter((block) => !labelMatchesSelectedApp(block.label, displayName))
+    .flatMap((block) => {
+      const label = extractDisplayProse(sanitizeBlockLabel(block.label.current), displayName)
+      if (!label) return []
+      return [{
+        blockId: block.id,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        label,
+        dominantCategory: block.dominantCategory,
+      }]
+    })
   const mergedByLabel = new Map<string, typeof rawAppearances[number]>()
   for (const appearance of rawAppearances) {
     const key = appearance.label.toLowerCase()
@@ -263,7 +474,12 @@ export function getAppDetailPayload(
     }
   }
   const blockAppearances = Array.from(mergedByLabel.values()).sort((a, b) => b.startTime - a.startTime).slice(0, 12)
-  const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)
+  const blockMemoryRollups = (memoryRollupsForBlocks(db, blockAppearances) ?? [])
+    .map((row) => ({
+      ...row,
+      patternLabel: extractDisplayProse(row.patternLabel, displayName) ?? row.patternLabel,
+    }))
+    .filter((row) => Boolean(extractDisplayProse(row.patternLabel, displayName)))
 
   // Aggregate the sessions already fetched above — allSessions is exactly
   // what getCorrectedAppSummariesForRange would re-derive, and re-running the
@@ -292,7 +508,10 @@ export function getAppDetailPayload(
         totalSeconds: domain.totalSeconds,
         visitCount: domain.visitCount,
         pages: domain.pages.map((page) => {
-          const normalizedTitle = normalizeWebsiteTitleForDisplay(page.domain, page.title)
+          const normalizedTitle = extractDisplayProse(
+            normalizeWebsiteTitleForDisplay(page.domain, page.title),
+            displayName,
+          )
           const displayTitle = normalizedTitle ?? websiteDisplayLabel(page.domain)
           const canonicalKey = page.normalizedUrl ?? page.pageKey ?? page.url ?? `domain:${page.domain}`
           return {
@@ -321,6 +540,24 @@ export function getAppDetailPayload(
     }
   }
 
+  let activityBreakdown: AppActivityBreakdown | undefined
+  if (browserActivity) {
+    activityBreakdown = activityBreakdownFromBrowser(browserActivity, displayName)
+  } else if (totalSeconds > 0) {
+    activityBreakdown = groupActivityItems(
+      collectNativeActivityItems(ownedArtifacts, sessions, displayName, canonicalAppId),
+      totalSeconds,
+    )
+  }
+  if (!activityBreakdown && totalSeconds > 0) {
+    activityBreakdown = {
+      totalSeconds,
+      attributedSeconds: 0,
+      unattributedSeconds: totalSeconds,
+      groups: [],
+    }
+  }
+
   return {
     canonicalAppId,
     displayName,
@@ -328,6 +565,7 @@ export function getAppDetailPayload(
     sessionCount,
     topArtifacts,
     browserActivity,
+    activityBreakdown,
     blockAppearances,
     blockMemoryRollups,
     timeOfDayDistribution,

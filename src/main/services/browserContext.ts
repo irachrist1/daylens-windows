@@ -265,6 +265,19 @@ function titleMatchesWindow(pageTitle: string | null, windowTitle: string | null
   return titleTokens(windowTitle).some((token) => pageTokens.has(token))
 }
 
+export function pickRecentHistoryRow<T extends { title: string | null }>(
+  rows: readonly T[],
+  windowTitle: string | null,
+): T | null {
+  if (rows.length === 0) return null
+  const matched = rows.find((row) => titleMatchesWindow(row.title, windowTitle))
+  if (matched) return matched
+  // A titleless window cannot tell which of the recent visits is active.
+  // Guessing the latest row is how Netflix absorbs hours of Dia work time.
+  if (!windowTitle?.trim()) return null
+  return rows[0] ?? null
+}
+
 function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string | null): ActiveBrowserTab | null {
   const copy = copyHistoryDb(entry.historyPath, 'daylens_active_chromium')
   if (!copy) return null
@@ -281,7 +294,7 @@ function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string
     `).all(msToChromeUs(now - RECENT_HISTORY_LOOKBACK_MS)) as { url: string; title: string | null; visit_time: bigint }[]
     db.close()
 
-    const row = rows.find((candidate) => titleMatchesWindow(candidate.title, windowTitle)) ?? rows[0]
+    const row = pickRecentHistoryRow(rows, windowTitle)
     // History is non-private by definition — treat as mode-verified.
     return row ? { url: row.url, title: row.title ?? null, modeKnown: true } : null
   } catch {
@@ -307,7 +320,7 @@ function recentFirefoxTab(entry: BrowserEntry, now: number, windowTitle: string 
     `).all(BigInt(now - RECENT_HISTORY_LOOKBACK_MS) * 1000n) as { url: string; title: string | null; visit_date: bigint }[]
     db.close()
 
-    const row = rows.find((candidate) => titleMatchesWindow(candidate.title, windowTitle)) ?? rows[0]
+    const row = pickRecentHistoryRow(rows, windowTitle)
     return row ? { url: row.url, title: row.title ?? null, modeKnown: true } : null
   } catch {
     return null
@@ -535,9 +548,8 @@ export class ActiveBrowserContextTracker {
       }
     }
 
-    // Unverifiable window mode: keep browser app timing (tracking sessions)
-    // but never accumulate page title/URL for persistence. History ingestion
-    // is the only path that may later attach page detail.
+    // A history match cannot establish that the current live window is
+    // non-private, because a private tab may revisit an ordinarily visited URL.
     if (tab.modeKnown === false) {
       this.flush(db, snapshot.capturedAt)
       this.pending = null

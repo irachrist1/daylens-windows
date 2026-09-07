@@ -18,7 +18,7 @@ import type { CalendarEventSignal, EventType } from '@shared/types'
 
 export interface EventTypeInferenceOptions {
   /** Best-effort "this repeats" signal from the calendar source, when known.
-   *  No current connector (icalBuddy, Outlook COM) surfaces this cheaply, so
+   *  No current connector (EventKit, Outlook COM) surfaces this cheaply, so
    *  it is always undefined/null in production today — accepted here so a
    *  future connector can feed it without changing this function's shape.
    *  null/undefined means "unknown", never treated as "does not recur". */
