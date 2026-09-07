@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { ANALYTICS_EVENT, classifyAIOutputIntent } from '@shared/analytics'
 import { transformKindFromLabel, transformLabel } from '@shared/answerTransforms'
+import {
+  CLI_PROVIDERS,
+  accountModel,
+  buildCliProviderAvailability,
+  chatProvider,
+} from '@shared/aiProviderState'
 import type {
   AIActionUndo,
   AIActionWidget,
@@ -17,9 +23,10 @@ import type {
   AgentTurnWaitKind,
 } from '@shared/types'
 import { useProjectionResource } from '../../hooks/useProjectionResource'
+import { reassignQueuedComposerPrompts } from '../../lib/aiTabAccess'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
-import { AI_PROVIDER_META, getSelectedModel } from '../../lib/aiProvider'
+import { AI_PROVIDER_META } from '../../lib/aiProvider'
 import { sanitizeIpcError } from '../../lib/ipcError'
 import { sanitizeForRender } from '../../../shared/aiSanitize'
 import { clearStreamingSnapshot, setStreamingSnapshot } from './streamingStore'
@@ -52,7 +59,7 @@ import {
 
 // Providers we can offer as a one-tap switch on a hard wall. CLI providers are
 // only surfaced when actually detected on the machine (see the load probe).
-const SWITCHABLE_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'chatgpt-cli', 'gemini-cli', 'codex-cli']
+const SWITCHABLE_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', ...CLI_PROVIDERS]
 const API_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter']
 
 // The thread list includes archived threads (the sidebar shows an Archive
@@ -67,6 +74,20 @@ function firstActiveThreadId(rows: AIThreadSummary[]): number | null {
 // `undefined` = never set this session (first open → adopt most recent);
 // `null` = you were on a new chat (stay empty).
 let rememberedThreadId: number | null | undefined = undefined
+
+type ProviderSnapshot = {
+  settings: AppSettings
+  cliTools: { claude: string | null; chatgpt: string | null; gemini: string | null; codex: string | null }
+  hasProviderAccess: boolean
+  providerAvailability: Partial<Record<AIProviderMode, boolean>>
+  activeFocusSession: FocusSession | null
+  billingAccess: BillingAccessSnapshot
+}
+
+// The provider probe re-runs on every mount. Its slowest leg is a billing
+// network fetch (15s abort). Remember the last verdict so a tab switch does
+// not drop the view back to "provider unknown" for as long as that call takes.
+let lastProviderSnapshot: ProviderSnapshot | null = null
 
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
@@ -89,18 +110,6 @@ export type TurnPhaseState = {
 // A turn that never resolves must still leave "Thinking" — convert a stuck
 // pending row into a retryable error after this ceiling.
 const SEND_TIMEOUT_MS = 90_000
-
-function isCliProvider(provider: string | undefined | null): boolean {
-  return provider === 'claude-cli' || provider === 'chatgpt-cli' || provider === 'gemini-cli' || provider === 'codex-cli'
-}
-
-function cliToolForProvider(provider: AIProviderMode): 'claude' | 'chatgpt' | 'gemini' | 'codex' | null {
-  if (provider === 'claude-cli') return 'claude'
-  if (provider === 'chatgpt-cli') return 'chatgpt'
-  if (provider === 'gemini-cli') return 'gemini'
-  if (provider === 'codex-cli') return 'codex'
-  return null
-}
 
 export function useAIChat() {
   const location = useLocation()
@@ -151,46 +160,30 @@ export function useAIChat() {
   // Provider + environment load. Deliberately NOT keyed on activeThreadId and
   // deliberately free of the today-timeline rebuild + recap range the old tab
   // pulled on mount — those are the expensive projections the perf map flags.
-  // CLI detection (which spawns child processes) only runs when a CLI provider
-  // is actually selected.
-  const providerResource = useProjectionResource<{
-    settings: AppSettings
-    cliTools: { claude: string | null; chatgpt: string | null; gemini: string | null; codex: string | null }
-    hasProviderAccess: boolean
-    // Per-provider key/tool availability, so the error card can offer a
-    // concrete one-tap switch on a hard wall.
-    providerAvailability: Partial<Record<AIProviderMode, boolean>>
-    activeFocusSession: FocusSession | null
-    billingAccess: BillingAccessSnapshot
-  }>({
+  // CLI detection always runs so Settings and the picker share one probe.
+  // The main process caches the result after the first lookup.
+  const providerResource = useProjectionResource<ProviderSnapshot>({
     scope: 'insights',
     load: async () => {
       const currentSettings = await ipc.settings.get()
-      const chatProvider = currentSettings.aiChatProvider ?? currentSettings.aiProvider
+      const resolvedChatProvider = chatProvider(currentSettings)
       const providersToCheck = Array.from(new Set([
-        chatProvider,
+        resolvedChatProvider,
+        currentSettings.aiProvider,
         ...(currentSettings.aiFallbackOrder ?? []),
       ]))
-      const needsCliDetection = providersToCheck.some(isCliProvider)
 
-      // Probe every API provider's key once (cheap keytar reads) so we know
-      // which alternates we can offer; CLI detection still only runs when a CLI
-      // provider is actually in play (it spawns child processes).
       const [cliToolsResult, apiKeyResults, activeFocusSession, billingAccess] = await Promise.all([
-        needsCliDetection
-          ? ipc.ai.detectCliTools().catch(() => ({ claude: null, chatgpt: null, gemini: null, codex: null }))
-          : Promise.resolve({ claude: null, chatgpt: null, gemini: null, codex: null }),
+        ipc.ai.detectCliTools().catch(() => ({ claude: null, chatgpt: null, gemini: null, codex: null })),
         Promise.all(API_PROVIDERS.map((provider) => ipc.settings.hasApiKey(provider).catch(() => false))),
         ipc.focus.getActive().catch(() => null),
         ipc.billing.getAccess(),
       ])
 
-      const providerAvailability: Partial<Record<AIProviderMode, boolean>> = {}
-      API_PROVIDERS.forEach((provider, index) => { providerAvailability[provider] = apiKeyResults[index] })
-      for (const provider of SWITCHABLE_PROVIDERS) {
-        const tool = cliToolForProvider(provider)
-        if (tool) providerAvailability[provider] = !!cliToolsResult[tool]
+      const providerAvailability: Partial<Record<AIProviderMode, boolean>> = {
+        ...buildCliProviderAvailability(cliToolsResult),
       }
+      API_PROVIDERS.forEach((provider, index) => { providerAvailability[provider] = apiKeyResults[index] })
 
       const providerAccess = billingAccess.canUseAI
         || providersToCheck.some((provider) => providerAvailability[provider] ?? false)
@@ -207,29 +200,28 @@ export function useAIChat() {
     dependencies: [],
   })
 
-  const settings = providerResource.data?.settings ?? null
-  const cliTools = providerResource.data?.cliTools ?? null
-  const hasApiKey = providerResource.data ? providerResource.data.hasProviderAccess : null
-  const activeFocusSession = providerResource.data?.activeFocusSession ?? null
-  const billingAccess = providerResource.data?.billingAccess ?? null
+  const providerData = providerResource.data ?? lastProviderSnapshot
+  useEffect(() => {
+    if (providerResource.data) lastProviderSnapshot = providerResource.data
+  }, [providerResource.data])
+
+  const settings = providerData?.settings ?? null
+  const cliTools = providerData?.cliTools ?? null
+  const hasApiKey = providerData ? providerData.hasProviderAccess : null
+  const activeFocusSession = providerData?.activeFocusSession ?? null
+  const billingAccess = providerData?.billingAccess ?? null
   // `refresh` is stable across renders (useProjectionResource memoizes it), so
   // handlers can depend on it without churning their own identity each render.
   const refreshProvider = providerResource.refresh
 
-  const activeProvider = settings ? (settings.aiChatProvider ?? settings.aiProvider) : null
+  const activeProvider = settings ? chatProvider(settings) : null
   const activeModel = settings && activeProvider
-    ? getSelectedModel({
-        aiProvider: activeProvider,
-        anthropicModel: settings.anthropicModel,
-        openaiModel: settings.openaiModel,
-        googleModel: settings.googleModel,
-        openrouterModel: settings.openrouterModel,
-      })
+    ? accountModel(settings, activeProvider)
     : null
 
   // Other configured providers we can offer as a one-tap switch when the
   // selected one hits a hard wall (quota/credit/auth). Never auto-routed.
-  const providerAvailability = providerResource.data?.providerAvailability ?? {}
+  const providerAvailability = providerData?.providerAvailability ?? {}
   const alternateProviders = useMemo<AltProvider[]>(() => {
     if (!activeProvider) return []
     return SWITCHABLE_PROVIDERS
@@ -608,7 +600,8 @@ export function useAIChat() {
         responseThreadId: response.threadId,
         navigationVersionAtSend: navigationVersion,
         navigationVersionNow: navigationVersionRef.current,
-      })) {
+      }) && response.threadId != null) {
+        reassignQueuedComposerPrompts(requestThreadId, response.threadId)
         setActiveThreadId(response.threadId)
         setIsNewChatDraft(false)
         rememberedThreadId = response.threadId
@@ -677,7 +670,11 @@ export function useAIChat() {
   // trigger should be `loading`, not a fresh callback identity each render.
   const handleSendRef = useRef(handleSend)
   handleSendRef.current = handleSend
-  const submitMessage = useCallback((text: string) => { void handleSendRef.current(text) }, [])
+  const submitMessage = useCallback((text: string) => {
+    if (loadingRef.current) return false
+    void handleSendRef.current(text)
+    return true
+  }, [])
 
   // Stop aborts the in-flight provider request in the main process
   // (ai:cancel-message → AbortController → SDK abort) and flips the pending
@@ -1068,8 +1065,9 @@ export function useAIChat() {
     agentQuestion,
     turnPhase,
     latestCompletedAssistantId,
-    // resource status (for the load gate + ConnectAI refresh)
-    initialLoading: providerResource.loading && !providerResource.data,
+    // resource status (for the error card + ConnectAI refresh). A remembered
+    // verdict counts as data, so remounts are not treated as a first load.
+    initialLoading: providerResource.loading && !providerData,
     loadError: providerResource.error,
     refreshProvider,
     // actions

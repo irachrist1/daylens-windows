@@ -29,6 +29,14 @@ const mac = {
   artifactName: 'Daylens-${version}-${arch}.${ext}',
   hardenedRuntime: true,
   gatekeeperAssess: false,
+  // EventKit attributes the Calendar prompt to Daylens.app (Electron does not
+  // disclaim child helpers). These strings must live on the parent bundle.
+  extendInfo: {
+    NSCalendarsUsageDescription:
+      'Daylens reads meetings already on this Mac so they can sit beside the day as scheduled context. It does not create or change events.',
+    NSCalendarsFullAccessUsageDescription:
+      'Daylens reads meetings already on this Mac so they can sit beside the day as scheduled context. It does not create or change events.',
+  },
   // Hardened-runtime exceptions Electron needs (V8 JIT / wasm). Explicit files
   // instead of electron-builder's bundled defaults so signed builds are
   // deterministic and reviewable.

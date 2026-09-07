@@ -23,9 +23,17 @@ import type Database from 'better-sqlite3'
 import type { AppSession, AppUsageSummary } from '@shared/types'
 import type { ResolvedContextTimeRange } from '../services/contextPacket'
 import { queryCorrectedActivityFactsForDay } from '../core/query/activityFactsQuery'
-import { aggregateAppSummaries, getCorrectedWebsiteSummariesForRange } from '../services/activityFacts'
+import {
+  aggregateAppSummaries,
+  getCorrectedPageFactsForRange,
+  getCorrectedWebsiteSummariesForRange,
+  hasMaterialPageCoverageShortfall,
+  browserPageCoverageNoteText,
+} from '../services/activityFacts'
 import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
 import { ownedDayBounds } from '../lib/dayOwnership'
+import { namedUsageSubject, siteMatchesLookup } from '../lib/usageLookup'
+import { websiteDisplayLabel } from '../lib/appIdentity'
 import { renderDuration, scanDurations } from './factClaims'
 
 /** Widest span the enforcer will compute over. Matches the page-visit tool's
@@ -41,6 +49,7 @@ export type DeterministicFactKind =
   | 'total_tracked_time'
   | 'focus_time'
   | 'app_total_time'
+  | 'site_total_time'
   | 'app_count'
   | 'site_count'
 
@@ -71,6 +80,8 @@ export interface DeterministicFactRequest {
   dates: string[]
   /** Set only for app_total_time. */
   appNeedle?: string
+  /** Set only for site_total_time. */
+  siteNeedle?: string
 }
 
 // ─── Detection ───────────────────────────────────────────────────────────────
@@ -94,6 +105,22 @@ const SITE_COUNT_SUBJECT = /\b(?:sites?|websites?|domains?)\b/i
 // "how many hours" is a duration question wearing a count's clothes.
 const COUNT_OF_TIME = /\bhow many (?:hours|minutes|mins|seconds)\b/i
 
+function normalizeSiteDomain(domain: string): string {
+  return domain.toLowerCase().replace(/^www\./, '')
+}
+
+export function siteLabelsFromDomains(domains: readonly string[]): string[] {
+  const labels = new Set<string>()
+  for (const domain of domains) {
+    const host = normalizeSiteDomain(domain)
+    if (host.length < 3) continue
+    labels.add(host)
+    const first = host.split('.')[0]
+    if (first && first.length >= 3) labels.add(first)
+  }
+  return [...labels]
+}
+
 /**
  * Which single duration fact and which single count fact (if any) this
  * question asks for. `appNames` is the corrected app roster for the scope, so
@@ -104,6 +131,7 @@ export function detectDeterministicFactRequests(
   question: string,
   timeRange: Pick<ResolvedContextTimeRange, 'dates'>,
   appNames: readonly string[] = [],
+  siteDomains: readonly string[] = [],
 ): DeterministicFactRequest[] {
   const dates = [...new Set(timeRange.dates ?? [])].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort()
   if (dates.length === 0 || dates.length > MAX_RANGE_DAYS) return []
@@ -111,13 +139,11 @@ export function detectDeterministicFactRequests(
   const requests: DeterministicFactRequest[] = []
 
   if (asksDuration(question)) {
-    // Longest name first so "Google Chrome" wins over a bare "Chrome" entry.
-    const named = [...appNames]
-      .filter((name) => name.trim().length >= 3)
-      .sort((left, right) => right.length - left.length)
-      .find((name) => new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i').test(question))
-    if (named) {
-      requests.push({ kind: 'app_total_time', dimension: 'duration', dates, appNeedle: named })
+    const named = namedUsageSubject(question, appNames, siteDomains)
+    if (named?.kind === 'site') {
+      requests.push({ kind: 'site_total_time', dimension: 'duration', dates, siteNeedle: named.domain })
+    } else if (named?.kind === 'app') {
+      requests.push({ kind: 'app_total_time', dimension: 'duration', dates, appNeedle: named.name })
     } else if (FOCUS_SUBJECT.test(question)) {
       requests.push({ kind: 'focus_time', dimension: 'duration', dates })
     } else {
@@ -133,17 +159,22 @@ export function detectDeterministicFactRequests(
   return requests
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 // ─── Computation ─────────────────────────────────────────────────────────────
+
+interface ScopeSiteSummary {
+  domain: string
+  totalSeconds: number
+  visitCount: number
+}
 
 interface ScopeFacts {
   sessions: AppSession[]
   totalSeconds: number
   focusSeconds: number
   appSummaries: AppUsageSummary[]
+  siteSummaries: ScopeSiteSummary[]
+  siteBrowserIds: Map<string, Set<string>>
+  coverageNotesByBrowser: Map<string, string[]>
   siteCount: number
 }
 
@@ -162,20 +193,68 @@ function readScope(db: Database.Database, dates: readonly string[], nowMs: numbe
   }
   const appSummaries = aggregateAppSummaries(sessions, getStoredCanonicalAppLinks(db))
 
-  const domains = new Set<string>()
+  const siteByDomain = new Map<string, ScopeSiteSummary>()
+  const siteBrowserIds = new Map<string, Set<string>>()
+  const coverageNotesByBrowser = new Map<string, string[]>()
   for (const date of dates) {
-    const [fromMs, toMs] = ownedDayBounds(db, date)
+    // Timeline and Apps assign a sealed late-night sitting to the day it
+    // started. Calendar midnight would split that sitting and make chat
+    // site totals disagree with the product UI.
+    const [fromMs, toMs] = ownedDayBounds(db, date, { nowMs })
     for (const summary of getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)) {
-      if (summary.totalSeconds > 0) domains.add(summary.domain.toLowerCase())
+      if (summary.totalSeconds <= 0) continue
+      const domain = normalizeSiteDomain(summary.domain)
+      const existing = siteByDomain.get(domain)
+      siteByDomain.set(domain, existing
+        ? {
+            domain,
+            totalSeconds: existing.totalSeconds + summary.totalSeconds,
+            visitCount: existing.visitCount + summary.visitCount,
+          }
+        : { domain, totalSeconds: summary.totalSeconds, visitCount: summary.visitCount })
+      const browserId = summary.canonicalBrowserId ?? summary.browserBundleId
+      if (browserId) {
+        const browserIds = siteBrowserIds.get(domain) ?? new Set<string>()
+        browserIds.add(browserId)
+        siteBrowserIds.set(domain, browserIds)
+      }
+    }
+    for (const entry of getCorrectedPageFactsForRange(db, fromMs, toMs).coverage) {
+      if (!hasMaterialPageCoverageShortfall(entry)) continue
+      const notes = coverageNotesByBrowser.get(entry.canonicalBrowserId) ?? []
+      notes.push(browserPageCoverageNoteText(entry))
+      coverageNotesByBrowser.set(entry.canonicalBrowserId, notes)
     }
   }
 
-  return { sessions, totalSeconds, focusSeconds, appSummaries, siteCount: domains.size }
+  for (const [browserId, notes] of coverageNotesByBrowser) {
+    coverageNotesByBrowser.set(browserId, [...new Set(notes)])
+  }
+
+  return {
+    sessions,
+    totalSeconds,
+    focusSeconds,
+    appSummaries,
+    siteSummaries: [...siteByDomain.values()],
+    siteBrowserIds,
+    coverageNotesByBrowser,
+    siteCount: siteByDomain.size,
+  }
 }
 
 function scopeLabel(dates: readonly string[]): string {
   if (dates.length === 1) return dates[0]
   return `${dates[0]} to ${dates[dates.length - 1]}`
+}
+
+function coverageForSite(scope: ScopeFacts, matching: readonly ScopeSiteSummary[]): string {
+  const notes = matching.flatMap((summary) => (
+    [...(scope.siteBrowserIds.get(normalizeSiteDomain(summary.domain)) ?? [])]
+      .flatMap((browserId) => scope.coverageNotesByBrowser.get(browserId) ?? [])
+  ))
+  const unique = [...new Set(notes)]
+  return unique.length > 0 ? ` ${unique.join(' ')}` : ''
 }
 
 /**
@@ -235,6 +314,7 @@ export function deterministicFactsForQuestion(
     question,
     { dates },
     scope.appSummaries.map((entry) => entry.appName),
+    scope.siteSummaries.map((entry) => entry.domain),
   )
   return factsFromScope(scope, requests, dates)
 }
@@ -260,8 +340,8 @@ function factsFromScope(
           subject: `tracked activity on ${label}`,
           identity: `facts:day:${scopeId}:total`,
           statement: scope.totalSeconds > 0
-            ? `Tracked activity for ${label} totals ${renderDuration(scope.totalSeconds)} (${scope.totalSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`
-            : `No tracked activity was captured for ${label} (0 seconds), from the corrected activity facts the Timeline and Apps views read.`,
+            ? `Tracked activity for ${label} totals ${renderDuration(scope.totalSeconds)}, from the corrected activity facts the Timeline and Apps views read.`
+            : `No tracked activity was captured for ${label} (0), from the corrected activity facts the Timeline and Apps views read.`,
         })
         break
       }
@@ -275,8 +355,8 @@ function factsFromScope(
           subject: `focused time on ${label}`,
           identity: `facts:day:${scopeId}:focus`,
           statement: scope.focusSeconds > 0
-            ? `Focused time for ${label} totals ${renderDuration(scope.focusSeconds)} (${scope.focusSeconds} seconds), from the corrected activity facts the Timeline and Apps views read.`
-            : `No focused time was captured for ${label} (0 seconds), from the corrected activity facts the Timeline and Apps views read.`,
+            ? `Focused time for ${label} totals ${renderDuration(scope.focusSeconds)}, from the corrected activity facts the Timeline and Apps views read.`
+            : `No focused time was captured for ${label} (0), from the corrected activity facts the Timeline and Apps views read.`,
         })
         break
       }
@@ -294,8 +374,34 @@ function factsFromScope(
           subject: `${summary.appName} on ${label}`,
           identity: `facts:app:${scopeId}:${summary.canonicalAppId ?? summary.bundleId}`,
           statement: summary.totalSeconds > 0
-            ? `${summary.appName} totals ${renderDuration(summary.totalSeconds)} (${summary.totalSeconds} seconds) for ${label}, from the corrected activity facts the Apps view reads.`
-            : `No ${summary.appName} time was captured for ${label} (0 seconds), from the corrected activity facts the Apps view reads.`,
+            ? `${summary.appName} totals ${renderDuration(summary.totalSeconds)} for ${label}, from the corrected activity facts the Apps view reads.`
+            : `No ${summary.appName} time was captured for ${label} (0), from the corrected activity facts the Apps view reads.`,
+        })
+        break
+      }
+      case 'site_total_time': {
+        const needle = request.siteNeedle ?? ''
+        const matching = scope.siteSummaries.filter((entry) => siteMatchesLookup(entry.domain, needle))
+        const totalSeconds = matching.reduce((sum, entry) => sum + entry.totalSeconds, 0)
+        const shortest = matching.reduce<ScopeSiteSummary | null>(
+          (best, entry) => !best || entry.domain.length < best.domain.length ? entry : best,
+          null,
+        )
+        if (!shortest) break
+        const subjectDomain = shortest.domain
+        const siteLabel = websiteDisplayLabel(subjectDomain)
+        const coverage = coverageForSite(scope, matching)
+        facts.push({
+          id: `site_total_time:${scopeId}:${subjectDomain}`,
+          kind: request.kind,
+          dimension: 'duration',
+          value: totalSeconds,
+          rendered: renderDuration(totalSeconds),
+          subject: `${siteLabel} on ${label}`,
+          identity: `facts:site:${scopeId}:${subjectDomain}`,
+          statement: totalSeconds > 0
+            ? `${siteLabel} totals ${renderDuration(totalSeconds)} for ${label}, from the same reconciled website facts the Apps view reads.${coverage}`
+            : `No ${siteLabel} page time was captured for ${label} (0).${coverage || ' If a browser was in front or visible on another display, that time is still on the day — just not attributed to this site yet.'}`,
         })
         break
       }
@@ -416,6 +522,9 @@ export function enforceDeterministicFacts(
     if (!target) continue
 
     current = `${current.slice(0, target.start)}${fact.rendered}${current.slice(target.end)}`
+    // Drop a leftover raw-seconds restatement of the same wrong figure
+    // ("10 minutes (608 seconds)"). Hours and minutes stay; seconds energy does not.
+    current = current.replace(/\s*\(\s*\d[\d,]*\s*seconds?\s*\)/gi, '')
     repairs.push({ factId: fact.id, kind: fact.kind, claimed: target.text, corrected: fact.rendered })
   }
 
@@ -488,6 +597,7 @@ export function renderDeterministicFactsForAgent(facts: readonly DeterministicFa
     'COMPUTED FACTS (authoritative).',
     'These are calculated from the same corrected activity facts the Timeline and Apps screens display.',
     'State each of these figures exactly as written here. Do not recalculate, re-round, or restate them from tool output.',
+    'Never write raw seconds (no "608 seconds"). Use the rendered hours and minutes.',
     '',
     ...facts.map((fact) => `- ${fact.subject}: ${fact.rendered}`),
   ].join('\n')

@@ -469,7 +469,7 @@ test('an empty exchange inspects honestly: every group empty, zero items, record
   const db = createProductionTestDatabase()
   const packet = await buildContextPacket(db, {
     purpose: 'answer',
-    question: 'anything at all',
+    question: 'what did I do',
     now: NOW,
     destination: DESTINATION,
   })

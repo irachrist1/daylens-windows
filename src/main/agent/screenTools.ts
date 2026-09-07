@@ -24,7 +24,12 @@ const REFUSAL = {
 const pendingFrames = new Map<string, string>()
 let captureCounter = 0
 
-export function buildScreenTools() {
+export function buildScreenTools(options?: {
+  /** Extra authorization boundary checked before consent. Historical
+   *  interpretation must pass a predicate that is true only while the
+   *  supplied block is still current. */
+  isAuthorized?: () => boolean
+}) {
   return {
     capture_screen: tool({
       description: 'Look at the user\'s live screen: one downscaled still of the active display, never stored. EXPENSIVE and privacy-sensitive, use only after the activity database and file tools cannot answer, and only for questions about what is on screen RIGHT NOW. The reason you give is shown to the user.',
@@ -32,6 +37,12 @@ export function buildScreenTools() {
         reason: z.string().min(12).describe('Why the database and file tools cannot answer this — shown verbatim to the user.'),
       }),
       execute: async () => {
+        if (options?.isAuthorized && !options.isAuthorized()) {
+          return {
+            captured: false as const,
+            reason: 'Live screen capture is only available for the current activity, not a historical block.',
+          }
+        }
         const settings = getSettings()
         if (!settings.screenContextExperimentEnabled || settings.screenContextPaused) {
           return REFUSAL

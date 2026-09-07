@@ -53,6 +53,34 @@ test('a build without a billing service has no managed source at all', () => {
   }
 })
 
+test('chat sources never call an installed non-Claude CLI "not installed"', () => {
+  const sources = buildModelSources({
+    providerAvailability: { 'claude-cli': true, 'chatgpt-cli': true, 'codex-cli': true, 'gemini-cli': true },
+    billing: null,
+    purpose: 'chat',
+  })
+  const byId = new Map(sources.map((source) => [source.id, source]))
+
+  assert.equal(byId.get('subscription:claude-cli')?.available, true)
+  assert.equal(byId.get('subscription:claude-cli')?.unavailableReason, null)
+
+  const codex = byId.get('subscription:codex-cli')!
+  assert.equal(codex.available, false)
+  assert.match(codex.unavailableReason ?? '', /cannot run chat/i)
+  assert.doesNotMatch(codex.unavailableReason ?? '', /not installed/i)
+})
+
+test('chat sources still say not installed when the Claude CLI is missing', () => {
+  const sources = buildModelSources({
+    providerAvailability: {},
+    billing: null,
+    purpose: 'chat',
+  })
+  const claude = sources.find((source) => source.id === 'subscription:claude-cli')!
+  assert.equal(claude.available, false)
+  assert.match(claude.unavailableReason ?? '', /not installed/i)
+})
+
 test('the BYO seam: subscription sources are ordinary descriptors the picker renders generically', () => {
   const sources = buildModelSources({
     providerAvailability: { 'claude-cli': true, 'chatgpt-cli': true, 'codex-cli': true, 'gemini-cli': true },

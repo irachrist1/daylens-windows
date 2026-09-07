@@ -1058,7 +1058,7 @@ export interface AIMessageCitation {
 }
 
 // ─── Context packet inspection (DEV-183) ─────────────────────────────────────
-// The renderer-facing shape of "what the AI saw" for one exchange: the
+// The renderer-facing shape of the sources inspector for one exchange: the
 // recorded packet re-read from the local ledger, grouped per kind, with each
 // item checked against the evidence that backs it today. Read-only — the
 // inspector shows the record, it never edits it.
@@ -1170,6 +1170,8 @@ export interface AIThreadMessageMetadata {
     contextPacketId?: string | null
     /** Verified packet citations in the answer, in display order. */
     citations?: AIMessageCitation[]
+    /** Wall-clock length of the agent turn, for the collapsed "Worked for" line. */
+    durationMs?: number | null
   }
   answerKind?: AIAnswerKind | null
   suggestedFollowUps?: FollowUpSuggestion[]
@@ -1549,6 +1551,54 @@ export interface WorkflowPattern {
 // the reconciled total without cluttering the list. Default: 10 seconds.
 export const MIN_DOMAIN_ROW_SECONDS = 10
 
+export interface AppActivityItem {
+  id: string
+  displayTitle: string
+  detail: string | null
+  totalSeconds: number
+  visitCount?: number
+  artifactType?: ArtifactRef['artifactType']
+  canonicalAppId?: string | null
+  ownerBundleId?: string | null
+  ownerAppName?: string | null
+  url?: string | null
+  host?: string | null
+  path?: string | null
+  domain?: string | null
+  normalizedUrl?: string | null
+  pageKey?: string | null
+  openTarget: OpenTarget
+}
+
+export interface AppActivityGroup {
+  id: string
+  label: string
+  kind: 'domain' | 'folder' | 'collection'
+  totalSeconds: number
+  itemCount: number
+  visitCount?: number
+  items: AppActivityItem[]
+}
+
+/**
+ * Expandable where-time-went tree for every app. Browsers use domain → page;
+ * native apps use folder/host → file or page. Reconciles:
+ * Σ item.totalSeconds = group.totalSeconds, Σ group.totalSeconds
+ * + everythingElse.totalSeconds = attributedSeconds, and
+ * attributedSeconds + unattributedSeconds = totalSeconds.
+ */
+export interface AppActivityBreakdown {
+  totalSeconds: number
+  attributedSeconds: number
+  unattributedSeconds: number
+  groups: AppActivityGroup[]
+  everythingElse?: {
+    totalSeconds: number
+    groupCount: number
+    itemCount: number
+  }
+}
+
 export interface AppDetailPayload {
   canonicalAppId: string
   displayName: string
@@ -1591,6 +1641,13 @@ export interface AppDetailPayload {
       visitCount: number
     }
   }
+  /**
+   * Comet/Dia-style expandable breakdown for every app, including native
+   * apps that have files, folders, or window titles instead of domains.
+   * Always present when the app has tracked time so the detail view never
+   * goes blank after the header.
+   */
+  activityBreakdown?: AppActivityBreakdown
   blockAppearances: Array<{
     blockId: string
     startTime: number
@@ -2051,13 +2108,36 @@ export interface DayEnrichment {
   } | null
 }
 
+export type McpDiscoverySource = 'claude-desktop' | 'claude-code' | 'cursor'
+
 /** Discovered optional enrichment sources shown in Settings: MCP servers from
- *  the Claude Desktop config and focus tools on this machine. Discovery
- *  only — nothing is called until the user enables it AND the enrichment is
- *  actually wired up. */
+ *  Claude Desktop, Claude Code, and Cursor configs, plus focus tools on this
+ *  machine. Discovery only — nothing is called until the user enables it AND
+ *  the enrichment is actually wired up. */
 export interface EnrichmentSourcesState {
-  mcpServers: Array<{ name: string; transport: 'stdio' | 'http' | 'unknown'; enabled: boolean }>
+  mcpServers: Array<{
+    name: string
+    transport: 'stdio' | 'http' | 'unknown'
+    enabled: boolean
+    source: McpDiscoverySource
+    sourceLabel: string
+  }>
   focusApps: Array<{ app: string; installed: boolean; enabled: boolean }>
+  /** Config files this scan looked at, so an empty state can name them. */
+  mcpConfigFiles: Array<{ label: string; displayPath: string }>
+}
+
+/** One external MCP tool call recorded next to the database. */
+export interface McpActivityEntry {
+  tool: string
+  timestamp: string
+  arguments: unknown
+  ok: boolean
+  error?: string
+}
+
+export interface McpActivityLog {
+  entries: McpActivityEntry[]
 }
 
 // ─── Wrap pre-flight ────────────────────────────────────────────────────────
@@ -2354,7 +2434,7 @@ export interface AppSettings {
   // The only per-surface provider override left: an explicit, user-chosen
   // provider for the AI chat tab. Every other surface follows `aiProvider`
   // (invariant #12). When unset, chat follows `aiProvider` too.
-  aiChatProvider?: AIProviderMode
+  aiChatProvider?: AIProviderMode | null
   aiBackgroundEnrichment?: boolean
   aiActiveBlockPreview?: boolean
   aiPromptCachingEnabled?: boolean
@@ -2384,11 +2464,12 @@ export interface AppSettings {
    *  without losing the brief itself. */
   activityFreeNotificationText?: boolean
   /** The interpretation-agent live switch (agent-runtime-and-context.md,
-   *  DEV-206): OFF by default. Turning it on routes automatic day analysis
-   *  through the packet-based interpretation agent instead of the direct
-   *  regroup/relabel pipeline — allowed only once the offline fixture eval
-   *  (interpretationEval) passes for the packaged runtime. Until that runtime
-   *  lands, the flag is honored but the direct pipeline still runs (logged). */
+   *  DEV-206 / DEV-287). When true, low-confidence day-analysis relabels run
+   *  through the packet-based interpretation agent. Historical relabels use
+   *  the read-only title, calendar, git, meeting-note, and entity tools.
+   *  Disclosure recording is fail-closed: if the interpret packet cannot be
+   *  stored, Daylens keeps the local label instead of making an unrecorded
+   *  remote call. The direct regroup/relabel pipeline remains the floor. */
   interpretationAgentEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
@@ -3074,6 +3155,7 @@ export const IPC = {
     GET_THREAD_SETTINGS: 'ai:get-thread-settings',
     SET_THREAD_SETTINGS: 'ai:set-thread-settings',
     OPEN_ARTIFACT: 'ai:open-artifact',
+    GET_MCP_ACTIVITY: 'ai:get-mcp-activity',
   },
   SETTINGS: {
     GET: 'settings:get',
@@ -3221,7 +3303,7 @@ export const IPC = {
     GET: 'context-packets:get',
     GET_FOR_MESSAGE: 'context-packets:get-for-message',
     LIST: 'context-packets:list',
-    // DEV-183: the assembled read-only inspection behind "What the AI saw" —
+    // DEV-183: the assembled read-only inspection behind Sources for this answer —
     // the recorded packet grouped per kind, with omissions in plain language
     // and each item checked against the evidence backing it today.
     INSPECT: 'context-packets:inspect',

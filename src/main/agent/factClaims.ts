@@ -31,6 +31,7 @@ const NUM = String.raw`\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nin
 // Longest alternative first so "hours" cannot be consumed as "hour" + stray "s".
 const HOURS = String.raw`(?:hours|hour|hrs|hr|h)`
 const MINUTES = String.raw`(?:minutes|minute|mins|min|m)`
+const SECONDS = String.raw`(?:seconds|second|secs|sec|s)`
 
 // The unit must not run on into another word: "3 h" is three hours, "3 happy"
 // is not, and "3 m" is three minutes while "3 metres" is not. A plain \b would
@@ -42,7 +43,9 @@ const UNIT_END = String.raw`(?![a-z])`
 const DURATION_RE = new RegExp(
   String.raw`\b(${NUM})\s*${HOURS}${UNIT_END}(?:\s*(?:and\s+)?(${NUM})\s*${MINUTES}${UNIT_END})?`
   + '|'
-  + String.raw`\b(${NUM})\s*${MINUTES}${UNIT_END}`,
+  + String.raw`\b(${NUM})\s*${MINUTES}${UNIT_END}`
+  + '|'
+  + String.raw`\b(${NUM})\s*${SECONDS}${UNIT_END}`,
   'gi',
 )
 
@@ -67,9 +70,11 @@ export function scanDurations(text: string): DurationMatch[] {
     const hours = numeric(match[1])
     const minutesWithHours = numeric(match[2])
     const bareMinutes = numeric(match[3])
+    const bareSeconds = numeric(match[4])
     let seconds: number | null = null
     if (hours != null) seconds = Math.round(hours * 3600 + (minutesWithHours ?? 0) * 60)
     else if (bareMinutes != null) seconds = Math.round(bareMinutes * 60)
+    else if (bareSeconds != null) seconds = Math.round(bareSeconds)
     if (seconds == null) continue
     matches.push({
       start: match.index,

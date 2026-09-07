@@ -91,7 +91,7 @@ test('the workbook on disk carries the same totals on both sheets', async () => 
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-week-'))
   const filename = weeklyExportFilename(data.weekStart)
-  assert.equal(filename, 'daylens-week-2026-07-13.xlsx')
+  assert.equal(filename, 'Daylens-week-2026-07-13-to-19.xlsx')
   const filePath = path.join(dir, filename)
   await writeWeeklyWorkbook(data, filePath)
 
@@ -101,6 +101,8 @@ test('the workbook on disk carries the same totals on both sheets', async () => 
   const summary = workbook.getWorksheet('Week summary')
   assert.ok(summary)
   assert.equal(summary.getRow(1).getCell(1).value, 'Day')
+  assert.equal(summary.getRow(1).getCell(6).value, 'Project/client')
+  assert.equal(summary.getRow(1).getCell(7).value, 'Notes')
   // Header + 7 day rows + totals row.
   assert.equal(summary.actualRowCount, 9)
   const totalsRow = summary.getRow(9)

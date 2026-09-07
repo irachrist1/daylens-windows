@@ -58,7 +58,7 @@ import {
 
 /** Bump when the assembly rules change; part of every packet and fingerprint,
  *  so two packets are only comparable under the same policy. */
-export const CONTEXT_POLICY_VERSION = 2
+export const CONTEXT_POLICY_VERSION = 4
 
 export type ContextItemKind =
   | 'day_fact'
@@ -475,6 +475,71 @@ function questionTokens(question: string): string[] {
   ]
 }
 
+const SOCIAL_WORDS = new Set([
+  'hi', 'hey', 'hello', 'thanks', 'thank', 'thx', 'ok', 'okay', 'yes', 'no',
+  'sure', 'cool', 'great', 'please', 'sorry', 'yo', 'sup', 'gm', 'cheers',
+  'bye', 'goodbye', 'good', 'morning', 'afternoon', 'evening', 'how', 'are',
+  'you', 'your', 'im', 'i', 'it', 'its', 'going', 'whats', 'up', 'there',
+  'fine', 'well', 'yeah', 'yup', 'nah', 'wow', 'nice', 'awesome', 'lol',
+  'haha', 'really', 'just', 'so', 'much', 'here',
+])
+
+const DAY_FACT_RE =
+  /\b(?:today|yesterday|tomorrow|this week|last week|this month|last month|\d+\s+days?\s+ago|last\s+\d+\s+days|timeline|how (?:much|long)|what did i (?:do|work)|how(?:'s|s)? (?:my |the )?day|how (?:was|did|is|goes|went) (?:my |the )?day|(?:show|tell|recap|summar(?:y|ise|ize)|review|walk)(?: me)?(?: through)? (?:my |the )?day|this morning|this afternoon|tonight|hours?\b|spend|spent)\b/i
+
+/** Greetings and chitchat attach almost nothing. A real question still can. */
+export function questionAttachesRetrieval(question: string): boolean {
+  const tokens = question
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .map((token) => token.replace(/'/g, ''))
+    .filter(Boolean)
+  if (tokens.length === 0) return false
+  if (tokens.every((token) => token.length < 3 || SOCIAL_WORDS.has(token))) return false
+  return true
+}
+
+/** Today's timeline dump belongs on day questions, not on every message. */
+export function questionAttachesDayFacts(
+  question: string,
+  timeRange: ResolvedContextTimeRange,
+): boolean {
+  if (!questionAttachesRetrieval(question)) return false
+  if (timeRange.resolution !== 'default') return true
+  return DAY_FACT_RE.test(question)
+}
+
+const GENERIC_FILE_BODY_TOKENS = new Set([
+  'meeting', 'meetings', 'notes', 'note', 'work', 'working', 'document',
+  'documents', 'file', 'files', 'today', 'yesterday', 'project', 'projects',
+  'draft', 'article', 'articles', 'page', 'pages', 'time', 'day', 'week',
+  'personal', 'daily', 'journal', 'vault', 'transcript', 'transcripts',
+  'call', 'calls', 'chat', 'discussion', 'update', 'updates', 'plan',
+  'planning', 'task', 'tasks', 'todo', 'idea', 'ideas', 'write', 'writing',
+  'read', 'reading', 'about',
+])
+
+function tokenHaystack(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+}
+
+function tokenInHaystack(token: string, haystack: string[]): boolean {
+  return haystack.includes(token)
+}
+
+/** A granted file joins the packet when a question token is a whole word in
+ *  its basename, or a distinctive token is a whole word in the extracted
+ *  text. Substring hits ("art" in "started", "log" in "catalog") do not count. */
+export function fileMatchesQuestion(basename: string, derived: string, tokens: string[]): boolean {
+  if (tokens.length === 0) return false
+  const nameTokens = tokenHaystack(basename)
+  if (tokens.some((token) => tokenInHaystack(token, nameTokens))) return true
+  const distinctive = tokens.filter((token) => !GENERIC_FILE_BODY_TOKENS.has(token))
+  if (distinctive.length === 0) return false
+  const bodyTokens = tokenHaystack(derived)
+  return distinctive.some((token) => tokenInHaystack(token, bodyTokens))
+}
+
 function fmtClock(ms: number): string {
   const value = new Date(ms)
   return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`
@@ -887,15 +952,17 @@ function fileExcerptItems(
     if (tokens.length === 0) return { items, omittedHighSensitivity }
     // Only unrevoked model_readable grants may disclose content, and only when
     // the grant already carries locally extracted text — the packet never
-    // reads a file the person did not make model-readable.
+    // reads a file the person did not make model-readable. A file joins the
+    // packet when its name matches the question, or a distinctive (not generic)
+    // token appears in the extracted text — not because "meeting" appears in
+    // an unrelated Obsidian note.
     const grants = listFileAccessGrants(db)
       .filter((grant) => grant.state === 'model_readable' && grant.derived_text)
       .sort((a, b) => a.path.localeCompare(b.path))
     for (const grant of grants) {
       if (items.length >= MAX_FILE_EXCERPTS) break
       const derived = grant.derived_text ?? ''
-      const haystack = `${path.basename(grant.path)} ${derived}`.toLowerCase()
-      if (!tokens.some((token) => haystack.includes(token))) continue
+      if (!fileMatchesQuestion(path.basename(grant.path), derived, tokens)) continue
       const sensitivity = classifyFileSensitivity(grant.path)
       // High-sensitivity content requires the explicit flag on the covering
       // grant (spec §File and document access) — same rule as the read tools.
@@ -1168,14 +1235,18 @@ export async function buildContextPacket(
   const dates = timeRange.dates
   const contextBudget = resolveContextBudget(input.contextBudget, dates.length)
   const explicitScope = timeRange.resolution !== 'default'
+  const attachRetrieval = questionAttachesRetrieval(question)
+  const attachDayFacts = questionAttachesDayFacts(question, timeRange)
 
   // Keep the queried days' projections current so retrieval reads the same
   // corrected facts Timeline shows (cheap fingerprint check when unchanged).
-  for (const date of dates) {
-    try {
-      ensureDayMemoryIndexed(db, date)
-    } catch (error) {
-      console.warn('[contextPacket] day index refresh failed', date, error)
+  if (attachDayFacts) {
+    for (const date of dates) {
+      try {
+        ensureDayMemoryIndexed(db, date)
+      } catch (error) {
+        console.warn('[contextPacket] day index refresh failed', date, error)
+      }
     }
   }
 
@@ -1187,24 +1258,40 @@ export async function buildContextPacket(
     ? { ...input.filters, startDate: dates[0], endDate: dates[dates.length - 1] }
     : { ...input.filters }
 
-  const dayResults = dates.map((date) => dayFactItems(db, date, input.dayPayloads?.[date]))
-  const dayFacts = [
-    ...dayResults.flatMap((result) => result.items),
-    ...dates.flatMap((date) => connectedActivityDayItems(db, date)),
-  ]
-  const conflicts = [
-    ...dayResults.flatMap((result) => result.conflicts),
-    ...dates.flatMap((date) => pageCoverageConflicts(db, date)),
-  ].sort((a, b) => a.identity.localeCompare(b.identity))
-  const gaps = dates.flatMap((date) => dayGaps(db, date))
-  const permissions = consultedPermissions(db)
-  const corrected = correctedFactItems(db, question)
-  const { items: entities, entityIds } = entityItems(db, question)
-  const exact = exactSearchItems(db, question, searchScope)
+  const dayResults = attachDayFacts
+    ? dates.map((date) => dayFactItems(db, date, input.dayPayloads?.[date]))
+    : []
+  const dayFacts = attachDayFacts
+    ? [
+        ...dayResults.flatMap((result) => result.items),
+        ...dates.flatMap((date) => connectedActivityDayItems(db, date)),
+      ]
+    : []
+  const conflicts = attachDayFacts
+    ? [
+        ...dayResults.flatMap((result) => result.conflicts),
+        ...dates.flatMap((date) => pageCoverageConflicts(db, date)),
+      ].sort((a, b) => a.identity.localeCompare(b.identity))
+    : []
+  const gaps = attachDayFacts ? dates.flatMap((date) => dayGaps(db, date)) : []
+  const permissions = attachRetrieval ? consultedPermissions(db) : []
+  const corrected = attachRetrieval ? correctedFactItems(db, question) : []
+  const { items: entities, entityIds } = attachRetrieval
+    ? entityItems(db, question)
+    : { items: [] as ContextPacketItem[], entityIds: [] as string[] }
+  const exact = attachRetrieval
+    ? exactSearchItems(db, question, searchScope)
+    : { items: [] as ContextPacketItem[], omittedHighSensitivity: 0 }
   const exactIdentities = new Set(exact.items.map((item) => item.identity))
-  const semantic = await semanticSearchItems(db, question, searchScope, exactIdentities)
-  const files = fileExcerptItems(db, question, contextBudget.maxFileExcerptChars)
-  const transcripts = granolaTranscriptItems(db, question, dates, contextBudget.maxFileExcerptChars)
+  const semantic = attachRetrieval
+    ? await semanticSearchItems(db, question, searchScope, exactIdentities)
+    : []
+  const files = attachRetrieval
+    ? fileExcerptItems(db, question, contextBudget.maxFileExcerptChars)
+    : { items: [] as ContextPacketItem[], omittedHighSensitivity: 0 }
+  const transcripts = attachRetrieval
+    ? granolaTranscriptItems(db, question, dates, contextBudget.maxFileExcerptChars)
+    : []
 
   // One identity appears once: a connected day fact and an exact-search hit
   // can both name the same memory record, and a citation must resolve to a

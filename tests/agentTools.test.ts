@@ -508,7 +508,7 @@ test('export_week_excel computes the workbook itself and registers the artifact'
 
   assert.equal(result.found, true)
   assert.equal(result.weekStart, '2026-06-08')
-  assert.equal(result.filename, 'daylens-week-2026-06-08.xlsx')
+  assert.equal(result.filename, 'Daylens-week-2026-06-08-to-14.xlsx')
   assert.ok(result.totalSeconds > 0, 'the tool must return computed totals, not blanks')
   assert.ok(fs.existsSync(result.savedTo))
   const workbook = new ExcelJS.Workbook()

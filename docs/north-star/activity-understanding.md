@@ -25,7 +25,9 @@ Rules, in order:
    all domains ≤ the browser app's foreground seconds in that interval.
    Overlapping duplicate rows (chrome_history emits several per second) merge
    by union before any sum. `reconcileWebsiteVisits` exists for this; every
-   consumer must go through it — no raw `SUM(duration_sec)` anywhere.
+   consumer must go through it — no raw `SUM(duration_sec)` anywhere. A
+   titleless browser's uncorroborated entertainment history (Netflix/YouTube
+   on Dia) fills at most two minutes of foreground, not hours of work dwell.
 3. **Media domains are ambience unless they own the foreground.** A media
    domain (domainPolicy `entertainment`) gets *activity* status only when the
    browser was foregrounded on it for a sustained run (its page title in the

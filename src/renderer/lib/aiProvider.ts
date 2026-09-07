@@ -1,3 +1,4 @@
+import { SHIPPING_DEFAULT_ANTHROPIC_MODEL, accountModel } from '@shared/aiProviderState'
 import type { AIProvider, AIProviderMode } from '@shared/types'
 
 export interface AIModelOption {
@@ -35,7 +36,7 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
     docsUrl: 'https://console.anthropic.com/settings/keys',
     keyPlaceholder: 'sk-ant-…',
     helperText: 'Use your Claude API key.',
-    defaultModel: 'claude-opus-4-8',
+    defaultModel: SHIPPING_DEFAULT_ANTHROPIC_MODEL,
     models: [
       {
         id: 'claude-opus-4-8',
@@ -139,7 +140,7 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
     docsUrl: 'https://docs.anthropic.com',
     keyPlaceholder: '',
     helperText: 'Uses the locally installed Claude CLI instead of an API key.',
-    defaultModel: 'claude-opus-4-8',
+    defaultModel: SHIPPING_DEFAULT_ANTHROPIC_MODEL,
     models: [
       {
         id: 'claude-opus-4-8',
@@ -155,6 +156,11 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
         id: 'claude-sonnet-4-6',
         label: 'Claude Sonnet 4.6',
         description: 'Balanced local Claude CLI option.',
+      },
+      {
+        id: 'claude-haiku-4-5',
+        label: 'Claude Haiku 4.5',
+        description: 'Fastest current Claude option through the local Claude CLI.',
       },
     ],
   },
@@ -285,20 +291,5 @@ export function getSelectedModel(settings: {
   googleModel: string
   openrouterModel: string
 }): string {
-  switch (settings.aiProvider) {
-    case 'openai':
-    case 'codex-cli':
-    case 'chatgpt-cli':
-      return settings.openaiModel
-    case 'google':
-    case 'gemini-cli':
-      return settings.googleModel
-    case 'openrouter':
-      return settings.openrouterModel
-    case 'claude-cli':
-      return settings.anthropicModel
-    case 'anthropic':
-    default:
-      return settings.anthropicModel
-  }
+  return accountModel(settings, settings.aiProvider)
 }

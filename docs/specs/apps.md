@@ -67,9 +67,9 @@ The browser detail view groups its owned time by:
 - related Timeline block
 - browser profile when requested
 
-Website duration is clipped to foreground browser intervals. Browser history with no foreground overlap may support retrieval but contributes no active time.
+Website duration is clipped to the browser's input-focused intervals and to that same browser's full-screen / second-monitor visible spans. Visible page time is presence, not another application total — it does not add to the browser's foreground figure. Browser history with no foreground overlap and no visible presence for that browser may support retrieval but contributes no active time.
 
-Page and website totals cannot sum to more than the browser’s total for the same range. Unattributed browser time is shown explicitly as browser time without verified page context.
+Page and website totals cannot sum to more than the browser's combined in-front plus second-display-visible time for the same range. Unattributed browser time is shown explicitly as browser time without verified page context. When Daylens has the browser on a second display but almost no page, it says so — it does not pretend the 10-minute history row was the morning.
 
 ## Application detail
 
@@ -99,7 +99,7 @@ Projects and clients remain reusable filters and entity links rather than top-le
 
 ### Day
 
-Shows applications and their activity for one local calendar day, matching Timeline exactly.
+Shows applications and their activity for one local day — the same owned-day window Timeline uses, so a sitting that crosses midnight stays on the day that started it.
 
 ### Week
 

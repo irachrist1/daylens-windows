@@ -73,7 +73,7 @@ The interpretation agent receives a bounded group of evidence and proposes under
 
 Its output is stored as versioned inference with source evidence, confidence, interpretation-policy version, model and runtime version, and creation time. It never overwrites the evidence that produced it. Reprocessing the same evidence may replace an automated inference but cannot override a person’s correction.
 
-In the current codebase this is the not-yet-wired `interpretationAgentEnabled` path in `analyzeDay.ts`. When wired, day analysis becomes an agent turn over the same tools as the chat agent: for each low-confidence block it may pull title context, entities, calendar, or (consented) frames before labeling. Deterministic heuristics stay as the always-available fallback and the floor for hermetic tests. This is where "the AI understands activity" and "the agent pulls context" become the same feature.
+In the current codebase this is the `interpretationAgentEnabled` path in `analyzeDay.ts`. When the flag is on, day analysis becomes an agent turn over the same read-only tools as the chat agent: for each low-confidence historical block it may pull title context, entities, or calendar before labeling. Live screen capture stays off this path — `shouldReanalyzeBlockWithAI` never sends a current block, and the tool is not registered unless the block is still live. Context-packet recording is fail-closed: if the disclosure record cannot be stored, Daylens keeps the local label. Deterministic heuristics stay as the always-available fallback and the floor for hermetic tests. This is where "the AI understands activity" and "the agent pulls context" become the same feature.
 
 ### Question-answering agent
 
@@ -164,7 +164,7 @@ For a full-day question, the initial packet may include:
 - the sequence of corrected Timeline blocks
 - resolved meetings and whether evidence supports that they occurred
 - project, client, person, repository, file, page, and application relationships
-- deterministic durations and meaningful transitions
+- deterministic durations and meaningful transitions, including per-site totals from the same reconciled website ledger and owned-day bounds Apps and Timeline read (not a history-row guess, not a calendar-midnight split, and not raw seconds)
 - significant connected events such as a pull request, issue change, or meeting note
 - capture gaps, exclusions that affect completeness, and material source conflicts
 

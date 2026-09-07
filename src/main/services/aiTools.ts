@@ -45,6 +45,13 @@ import { sanitizeToolResult } from '@shared/aiSanitize'
 import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
 import { trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
 import { getSettings } from './settings'
+import {
+  appMatchesExactly,
+  appMatchesLoosely,
+  normalizeUsageLookup,
+  resolveUsageLookupKind,
+  siteMatchesLookup,
+} from '../lib/usageLookup'
 
 // ---------------------------------------------------------------------------
 // TypeScript parameter interfaces
@@ -198,6 +205,7 @@ export interface DaySummaryResult {
   _evidence: {
     topApps: AppUsageStat[]
     topWebsiteDomains: { domain: string; totalSeconds: number }[]
+    secondaryDisplay: { appName: string | null; seconds: number; presence: 'visible' }[]
     deepWorkSessionCount: number
     longestStreakSeconds: number
   }
@@ -207,6 +215,7 @@ export interface DaySummaryResult {
   topApps: AppUsageStat[]
   /** @deprecated — present for back-compat. Use `_evidence.topWebsiteDomains`. */
   topWebsiteDomains: { domain: string; totalSeconds: number }[]
+  secondaryDisplay: { appName: string | null; seconds: number; presence: 'visible' }[]
   /** @deprecated — present for back-compat. Use `_evidence.deepWorkSessionCount`. */
   deepWorkSessionCount: number
   /** @deprecated — present for back-compat. Use `_evidence.longestStreakSeconds`. */
@@ -228,10 +237,8 @@ export interface GetAppUsageResult {
   endDate: string
   dailyBreakdown: AppUsageDailyBreakdown[]
   recentWindowTitles: string[]  // up to 10 most recent distinct window titles
-  /** True when the answer came from website_visits (a site, e.g. youtube.com)
-   *  rather than app sessions. Site time sums every visit, which includes a tab
-   *  left open/playing in the background while other work was in the foreground —
-   *  so the phrase step discloses that rather than implying pure active watching. */
+  /** True when the answer came from reconciled website facts (a site, e.g. coursera.org)
+   *  rather than app sessions. Same ledger the Apps view totals. */
   fromWebsiteVisits?: boolean
   /** Present when the matched app is a browser whose page-level detail covers
    *  materially less time than the app itself — the answer must quote it
@@ -406,43 +413,6 @@ function toDateStr(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function normalizeAppLookupValue(value: string | null | undefined): string {
-  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
-}
-
-function appLookupCandidates(app: { appName: string; bundleId: string; canonicalAppId?: string | null }): string[] {
-  const pathTail = (value: string | null | undefined): string | null => {
-    if (!value) return null
-    return value.split(/[\\/]/).filter(Boolean).pop() ?? value
-  }
-  return [
-    app.appName,
-    app.bundleId,
-    app.canonicalAppId ?? null,
-    pathTail(app.bundleId),
-    pathTail(app.canonicalAppId ?? null),
-  ].filter((value): value is string => !!value)
-}
-
-function appMatchesExactly(
-  app: { appName: string; bundleId: string; canonicalAppId?: string | null },
-  lookup: string,
-): boolean {
-  return appLookupCandidates(app).some((value) => normalizeAppLookupValue(value) === lookup)
-}
-
-function appMatchesLoosely(
-  app: { appName: string; bundleId: string; canonicalAppId?: string | null },
-  lookup: string,
-): boolean {
-  return appLookupCandidates(app).some((value) => {
-    const normalized = normalizeAppLookupValue(value)
-    if (!normalized) return false
-    if (normalized.includes(lookup)) return true
-    return normalized.length >= 4 && lookup.includes(normalized)
-  })
-}
-
 // Per-domain time + visit counts from website_visits, the same table the ⌘K
 // search and the Apps "sites under a browser" view read. Matches a site lookup
 // ("youtube", "youtube.com") against tracked domains and their subdomains, so
@@ -462,18 +432,11 @@ function aggregateSiteUsage(
   fromMs: number,
   toMs: number,
 ): SiteUsageAgg | null {
-  const needle = normalizeAppLookupValue(lookupRaw)
+  const needle = normalizeUsageLookup(lookupRaw)
   if (!needle || needle.length < 3) return null
 
   const matchedDomains = listDistinctVisitDomains(db, fromMs, toMs)
-    .filter((domain) => {
-      const dn = normalizeAppLookupValue(domain)
-      if (!dn) return false
-      if (dn === needle) return true
-      if (needle.length >= 4 && dn.includes(needle)) return true
-      if (dn.length >= 4 && needle.includes(dn)) return true
-      return false
-    })
+    .filter((domain) => siteMatchesLookup(domain, lookupRaw))
   if (matchedDomains.length === 0) return null
 
   // Visit COUNT stays a raw navigation count, but the TIME is reconciled:
@@ -910,6 +873,13 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     }
   })
   const topWebsiteDomains = websites.slice(0, 5).map((w) => ({ domain: w.domain, totalSeconds: w.totalSeconds }))
+  const secondaryDisplay = (livePayload.secondaryDisplay ?? [])
+    .map((span) => ({
+      appName: span.appName,
+      seconds: Math.max(0, Math.round((span.endTime - span.startTime) / 1000)),
+      presence: 'visible' as const,
+    }))
+    .filter((span) => span.seconds > 0)
 
   return {
     date: params.date,
@@ -919,6 +889,7 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     _evidence: {
       topApps,
       topWebsiteDomains,
+      secondaryDisplay,
       deepWorkSessionCount: focusScore.deepWorkSessionCount,
       longestStreakSeconds: focusScore.longestStreakSeconds,
     },
@@ -927,6 +898,7 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     timelineBlockLabels: [...seenLabels].slice(0, 20),
     topApps,
     topWebsiteDomains,
+    secondaryDisplay,
     deepWorkSessionCount: focusScore.deepWorkSessionCount,
     longestStreakSeconds: focusScore.longestStreakSeconds,
   }
@@ -937,7 +909,27 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
   const fromMs = params.startDate ? localDayBounds(params.startDate)[0] : now - 365 * 86_400_000
   const toMs = params.endDate ? localDayBounds(params.endDate)[1] : now
   const allSummaries = getAppSummariesForRange(db, fromMs, toMs)
-  const lookup = normalizeAppLookupValue(params.appName)
+  const lookup = normalizeUsageLookup(params.appName)
+  const site = lookup ? aggregateSiteUsage(db, params.appName, fromMs, toMs) : null
+  const lookupKind = resolveUsageLookupKind({
+    lookup: params.appName,
+    apps: allSummaries,
+    siteDomains: site ? [site.domain] : [],
+  })
+  if (lookupKind === 'site' && site) {
+    return {
+      appName: site.domain,
+      bundleId: '',
+      totalSeconds: site.totalSeconds,
+      sessionCount: site.visitCount,
+      startDate: params.startDate ?? toDateStr(fromMs),
+      endDate: params.endDate ?? toDateStr(toMs),
+      dailyBreakdown: site.dailyBreakdown,
+      recentWindowTitles: site.titles,
+      fromWebsiteVisits: true,
+    }
+  }
+
   const exactMatches = lookup
     ? allSummaries.filter((app) => appMatchesExactly(app, lookup))
     : []
@@ -949,26 +941,6 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
   const totalSeconds = matched.reduce((s, a) => s + a.totalSeconds, 0)
   const sessionCount = matched.reduce((s, a) => s + (a.sessionCount ?? 0), 0)
   const bundleId = matched[0]?.bundleId ?? ''
-
-  // Sites aren't apps. "how long on youtube.com" is a website question, and there
-  // is no app called youtube.com — so when nothing matched as an app, answer from
-  // the website_visits table (the same per-domain data the ⌘K search reads).
-  if (totalSeconds <= 0) {
-    const site = aggregateSiteUsage(db, params.appName, fromMs, toMs)
-    if (site) {
-      return {
-        appName: site.domain,
-        bundleId: '',
-        totalSeconds: site.totalSeconds,
-        sessionCount: site.visitCount,
-        startDate: params.startDate ?? toDateStr(fromMs),
-        endDate: params.endDate ?? toDateStr(toMs),
-        dailyBreakdown: site.dailyBreakdown,
-        recentWindowTitles: site.titles,
-        fromWebsiteVisits: true,
-      }
-    }
-  }
 
   // B4: daily breakdown must come from getAppSummariesForRange (the canonical
   // source) so per-day numbers agree with the Apps rail and detail header.

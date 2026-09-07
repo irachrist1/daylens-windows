@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { ActiveBrowserContextTracker, type ActiveBrowserWindowSnapshot } from '../src/main/services/browserContext.ts'
+import {
+  ActiveBrowserContextTracker,
+  pickRecentHistoryRow,
+  type ActiveBrowserWindowSnapshot,
+} from '../src/main/services/browserContext.ts'
 
 function createDb(): Database.Database {
   const db = new Database(':memory:')
@@ -191,4 +195,66 @@ test('a browser-page flicker under ten seconds is absorbed instead of becoming a
     ORDER BY visit_time ASC
   `).all()
   assert.deepEqual(rows, [{ domain: 'github.com', duration_sec: 30 }])
+})
+
+test('mode-unverified live tab stays private despite matching ordinary history', () => {
+  const db = createDb()
+  const at = 1_800_000_000_000
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, browser_bundle_id,
+      canonical_browser_id, normalized_url, page_key, source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'netflix.com',
+    'Netflix',
+    'https://www.netflix.com/watch/81234567',
+    at - 1_000,
+    (at - 1_000) * 1_000,
+    '/System/Applications/Safari.app/Contents/MacOS/Safari',
+    'safari',
+    'https://www.netflix.com/watch/81234567',
+    'netflix.com/watch/81234567',
+    'webkit_history',
+  )
+  const tracker = new ActiveBrowserContextTracker(
+    () => ({
+      url: 'https://www.netflix.com/watch/81234567',
+      title: 'Netflix',
+      modeKnown: false,
+    }),
+    () => true,
+  )
+
+  assert.deepEqual(tracker.sample(db, snapshot({ capturedAt: at })), {
+    isPrivate: false,
+    passivePresence: true,
+    passiveHold: 'media',
+    windowModeUnverified: true,
+  })
+  assert.equal(tracker.flush(db, at + 15_000), false)
+  const activeVisitCount = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM website_visits
+    WHERE source = 'active_browser_context'
+  `).get() as { count: number }
+  assert.equal(activeVisitCount.count, 0)
+})
+
+test('titleless history fallback refuses to guess the latest row', () => {
+  const rows = [
+    { url: 'https://www.netflix.com/watch/1', title: 'Stranger Things | Netflix' },
+    { url: 'https://www.coursera.org/learn/ml', title: 'Supervised ML | Coursera' },
+  ]
+  assert.equal(pickRecentHistoryRow(rows, null), null)
+  assert.equal(pickRecentHistoryRow(rows, ''), null)
+  assert.equal(
+    pickRecentHistoryRow(rows, 'Supervised ML | Coursera')?.url,
+    'https://www.coursera.org/learn/ml',
+  )
+  assert.equal(
+    pickRecentHistoryRow(rows, 'Inbox — Gmail')?.url,
+    'https://www.netflix.com/watch/1',
+    'a titled window with no token overlap still takes the latest row',
+  )
 })

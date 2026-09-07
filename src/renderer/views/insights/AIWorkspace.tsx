@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Copy, Pencil, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
+import { Activity, Copy, Pencil, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
-import type { AIModelCostCatalog, AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
 import { buildModelSources } from '@shared/aiModelSources'
+import {
+  chatProvider,
+  cliToolForProvider,
+  modelSettingForProvider,
+  resolveChatSelection,
+} from '@shared/aiProviderState'
+import type { AIModelCostCatalog, AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META } from '../../lib/aiProvider'
@@ -15,30 +21,31 @@ import {
 import ConnectAI from '../../components/ConnectAI'
 import { ContextPacketInspector } from '../../components/ContextPacketInspector'
 import { consumePendingChatSeedWhenReady } from '../../lib/aiSeed'
+import {
+  enqueueComposerPrompt,
+  hasQueuedComposerPrompts,
+  isAiChatVisible,
+  isAiProviderPending,
+  peekQueuedComposerPrompt,
+  providerProbeFailureKind,
+  readQueuedComposerPrompts,
+  replaceQueuedComposerPrompts,
+  takeQueuedComposerPrompt,
+} from '../../lib/aiTabAccess'
 import { AICompose, type AIComposeHandle } from './AICompose'
 import { ConversationSidebar } from './ConversationSidebar'
 import { MessageList } from './MessageList'
 import { AgentQuestionCard } from './AgentQuestionCard'
 import { ModelSelector } from './ModelSelector'
 import { ThreadSettingsPanel } from './ThreadSettingsPanel'
+import { McpActivityPanel } from './McpActivityPanel'
 import { IconChevronDown, IconNewChat, IconSidebar, IconSparkle } from './icons'
 import { useAIChat } from './useAIChat'
 import { ANSWER_TRANSFORMS, type ThreadMessage } from './types'
 
 const SIDEBAR_COLLAPSED_KEY = 'daylens.ai.sidebarCollapsed'
+const MCP_ACTIVITY_OPEN_KEY = 'daylens.ai.mcpActivityOpen'
 
-// Map a chat provider to the settings key holding its chosen model, so picking a
-// model for a brand-new (thread-less) chat updates the right global default.
-const PROVIDER_MODEL_KEY: Record<AIProviderMode, 'anthropicModel' | 'openaiModel' | 'googleModel' | 'openrouterModel'> = {
-  anthropic: 'anthropicModel',
-  'claude-cli': 'anthropicModel',
-  openai: 'openaiModel',
-  'chatgpt-cli': 'openaiModel',
-  'codex-cli': 'openaiModel',
-  google: 'googleModel',
-  'gemini-cli': 'googleModel',
-  openrouter: 'openrouterModel',
-}
 
 export default function AIWorkspace() {
   const chat = useAIChat()
@@ -96,6 +103,8 @@ export default function AIWorkspace() {
     providerAvailability,
     analyticsContext,
   } = chat
+  const providerPending = isAiProviderPending(settings, hasApiKey)
+  const chatVisible = isAiChatVisible(hasApiKey)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<AIComposeHandle>(null)
@@ -103,6 +112,17 @@ export default function AIWorkspace() {
     // FB4: hidden by default — only an explicit "open" choice persists as '0'.
     try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) !== '0' } catch { return true }
   })
+  const [mcpActivityOpen, setMcpActivityOpen] = useState(() => {
+    try { return localStorage.getItem(MCP_ACTIVITY_OPEN_KEY) === '1' } catch { return false }
+  })
+
+  const toggleMcpActivity = useCallback(() => {
+    setMcpActivityOpen((open) => {
+      const next = !open
+      try { localStorage.setItem(MCP_ACTIVITY_OPEN_KEY, next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }, [])
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((collapsed) => {
@@ -112,9 +132,9 @@ export default function AIWorkspace() {
     })
   }, [])
 
-  // "What the AI saw" (DEV-183): which exchange's recorded context packet the
-  // inspector is open on. Opened from the citation chips or the per-answer
-  // affordance; the inspector itself is read-only.
+  // DEV-183: which exchange's recorded context packet the inspector is open on.
+  // Opened from the citation chips or the per-answer affordance; the inspector
+  // itself is read-only.
   const [inspectTarget, setInspectTarget] = useState<{ packetId: string | null; messageId: number | null } | null>(null)
   const openPacketInspector = useCallback((message: ThreadMessage) => {
     setInspectTarget({
@@ -136,6 +156,7 @@ export default function AIWorkspace() {
   const modelSources = useMemo(() => buildModelSources({
     providerAvailability,
     billing: billingAccess,
+    purpose: 'chat',
   }), [providerAvailability, billingAccess])
   useEffect(() => {
     if (!modelSelectorOpen) return
@@ -257,6 +278,39 @@ export default function AIWorkspace() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onNewChat])
 
+  // The composer paints before the provider verdict lands. Keep every early
+  // submission with the conversation that owned it, then dispatch once access
+  // is known. handleSend serializes them through its loading guard.
+  const flushQueuedPrompt = useCallback(() => {
+    if (providerPending || !hasApiKey || loading) return
+    const next = peekQueuedComposerPrompt(activeThreadId)
+    if (next == null) return
+    if (submitMessage(next.text)) takeQueuedComposerPrompt(activeThreadId)
+  }, [providerPending, hasApiKey, loading, activeThreadId, submitMessage])
+  const onComposerSubmit = useCallback((text: string) => {
+    if (hasApiKey === false) {
+      replaceQueuedComposerPrompts(activeThreadId, text)
+      return false
+    }
+    if (hasApiKey !== true || hasQueuedComposerPrompts(activeThreadId)) {
+      enqueueComposerPrompt(text, activeThreadId)
+      return true
+    }
+    if (submitMessage(text)) return true
+    enqueueComposerPrompt(text, activeThreadId)
+    return true
+  }, [hasApiKey, activeThreadId, submitMessage])
+  useEffect(() => {
+    flushQueuedPrompt()
+  }, [flushQueuedPrompt])
+  const [deniedDraft, setDeniedDraft] = useState('')
+  useEffect(() => {
+    setDeniedDraft(hasApiKey === false ? readQueuedComposerPrompts(activeThreadId) : '')
+  }, [hasApiKey, activeThreadId])
+  const preserveQueuedDraft = useCallback((text: string) => {
+    if (hasApiKey === false) replaceQueuedComposerPrompts(activeThreadId, text)
+  }, [hasApiKey, activeThreadId])
+
   // Seed a chat from another view (e.g. Settings → Memory → "Chat about your
   // memory"). Always start a NEW thread, then SEND the seed as its first
   // message so the person lands in a conversation that has visibly started
@@ -272,7 +326,8 @@ export default function AIWorkspace() {
       if (hasApiKey) {
         submitMessage(prompt)
       } else {
-        composerRef.current?.setValue(prompt)
+        enqueueComposerPrompt(prompt, null)
+        setDeniedDraft(readQueuedComposerPrompts(null))
       }
       composerRef.current?.focus()
     })
@@ -281,10 +336,10 @@ export default function AIWorkspace() {
   // This view mounts only after navigation, so a seed queued before navigate
   // (Settings stashes it, then navigates here) is read on mount. The old
   // event-only path fired before this listener existed and dropped the prompt.
-  // Consumption waits for the access gate: on a fresh mount settings/hasApiKey
-  // are still null and the loading gate renders with no composer, so consuming
-  // then would destroy the seed for everyone. The one-shot stash means the
-  // effect firing again after the gate resolves cannot double-send.
+  // Consumption waits for the access verdict: seedChat has to choose between
+  // sending and pre-filling, and until settings/hasApiKey resolve there is no
+  // verdict to choose on — consuming then would destroy the seed. The one-shot
+  // stash means the effect firing again after it resolves cannot double-send.
   useEffect(() => {
     const pending = consumePendingChatSeedWhenReady(settings, hasApiKey)
     if (pending) seedChat(pending)
@@ -325,24 +380,28 @@ export default function AIWorkspace() {
   // (message actions when a message is focused, plus chat actions). The palette
   // renders them under "Actions for this message" and "Chat".
   useEffect(() => {
-    if (!hasApiKey) { clearCommandSurfaceActions(); return }
+    if (hasApiKey === false) { clearCommandSurfaceActions(); return }
     const list: CommandSurfaceAction[] = []
     const target = latestAssistant
     const small = (node: ReactNode) => node
     if (target) {
       list.push({ id: 'msg-copy', group: 'message', label: 'Copy response', accelerator: accel('C', true), icon: small(<Copy size={15} strokeWidth={1.8} />), perform: () => handleCopy(target.message.id, target.message.content, target.message.answerKind) })
-      list.push({ id: 'msg-regenerate', group: 'message', label: 'Regenerate', accelerator: accel('R'), icon: small(<RefreshCw size={15} strokeWidth={1.8} />), perform: () => handleRetry(target.index, target.message) })
-      alternateProviders.forEach((alt, i) => {
-        list.push({ id: `msg-regen-${alt.provider}`, group: 'message', label: `Regenerate with ${alt.label}`, hint: 'Switch provider and rerun', accelerator: i === 0 ? accel('R', true) : undefined, icon: small(<RefreshCw size={15} strokeWidth={1.8} />), perform: () => switchProviderAndRetry(target.message, alt.provider) })
-      })
+      if (!providerPending) {
+        list.push({ id: 'msg-regenerate', group: 'message', label: 'Regenerate', accelerator: accel('R'), icon: small(<RefreshCw size={15} strokeWidth={1.8} />), perform: () => handleRetry(target.index, target.message) })
+        alternateProviders.forEach((alt, i) => {
+          list.push({ id: `msg-regen-${alt.provider}`, group: 'message', label: `Regenerate with ${alt.label}`, hint: 'Switch provider and rerun', accelerator: i === 0 ? accel('R', true) : undefined, icon: small(<RefreshCw size={15} strokeWidth={1.8} />), perform: () => switchProviderAndRetry(target.message, alt.provider) })
+        })
+      }
       list.push({ id: 'msg-good', group: 'message', label: 'Good response', accelerator: accel('=', true), icon: small(<ThumbsUp size={15} strokeWidth={1.8} />), perform: () => handleRate(target.message, target.message.rating === 'up' ? null : 'up') })
       list.push({ id: 'msg-bad', group: 'message', label: 'Bad response', accelerator: accel('-', true), icon: small(<ThumbsDown size={15} strokeWidth={1.8} />), perform: () => handleRate(target.message, target.message.rating === 'down' ? null : 'down') })
-      for (const transform of ANSWER_TRANSFORMS) {
-        list.push({ id: `msg-transform-${transform.kind}`, group: 'message', label: transform.label, hint: 'Transform the answer', icon: small(<Wand2 size={15} strokeWidth={1.8} />), perform: () => transformAnswer(transform.kind) })
+      if (!providerPending) {
+        for (const transform of ANSWER_TRANSFORMS) {
+          list.push({ id: `msg-transform-${transform.kind}`, group: 'message', label: transform.label, hint: 'Transform the answer', icon: small(<Wand2 size={15} strokeWidth={1.8} />), perform: () => transformAnswer(transform.kind) })
+        }
       }
     }
     list.push({ id: 'chat-new', group: 'chat', label: 'New chat', accelerator: accel('N'), icon: small(<IconNewChat />), perform: onNewChat })
-    list.push({ id: 'chat-model', group: 'chat', label: 'Change model…', hint: 'Pick the model for this chat', icon: small(<SlidersHorizontal size={15} strokeWidth={1.8} />), perform: () => setModelSelectorOpen(true) })
+    if (!providerPending) list.push({ id: 'chat-model', group: 'chat', label: 'Change model…', hint: 'Pick the model for this chat', icon: small(<SlidersHorizontal size={15} strokeWidth={1.8} />), perform: () => setModelSelectorOpen(true) })
     if (messages.length > 0) {
       list.push({ id: 'chat-copy-all', group: 'chat', label: 'Copy chat', hint: 'Copy the whole conversation', icon: small(<Copy size={15} strokeWidth={1.8} />), perform: () => copyChat() })
     }
@@ -351,7 +410,7 @@ export default function AIWorkspace() {
       list.push({ id: 'chat-settings', group: 'chat', label: 'Chat settings…', icon: small(<SlidersHorizontal size={15} strokeWidth={1.8} />), perform: () => setSettingsOpen(true) })
     }
     setCommandSurfaceActions(list)
-  }, [hasApiKey, latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, transformAnswer, onNewChat, copyChat, activeThreadId, messages.length, startHeaderRename])
+  }, [providerPending, hasApiKey, latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, transformAnswer, onNewChat, copyChat, activeThreadId, messages.length, startHeaderRename])
 
   // Drop our actions when the AI view unmounts so the palette doesn't show stale
   // chat actions from another tab.
@@ -359,16 +418,17 @@ export default function AIWorkspace() {
 
   // Direct accelerators on the focused message (⌘R, ⇧⌘C, etc.). ⌘K is owned by
   // the app shell (App.tsx) — it always opens the one palette, never a chat.
-  const accelStateRef = useRef({ hasApiKey, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry })
-  accelStateRef.current = { hasApiKey, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry }
+  const accelStateRef = useRef({ providerPending, hasApiKey, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry })
+  accelStateRef.current = { providerPending, hasApiKey, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const state = accelStateRef.current
-      if (!state.hasApiKey) return
+      if (state.hasApiKey === false) return
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
       const key = event.key.toLowerCase()
       const target = state.latestAssistant
+      if (state.providerPending && (!event.shiftKey || key !== 'c')) return
       if (!event.shiftKey && key === 'r') { if (target) { event.preventDefault(); void state.handleRetry(target.index, target.message) } return }
       if (event.shiftKey && key === 'r') {
         if (target) {
@@ -426,50 +486,43 @@ export default function AIWorkspace() {
     }
     if (provider && model) {
       try {
-        await ipc.settings.set({ aiChatProvider: provider, [PROVIDER_MODEL_KEY[provider]]: model })
+        await ipc.settings.set({
+          aiProvider: provider,
+          aiChatProvider: null,
+          [modelSettingForProvider(provider)]: model,
+        })
         await refreshProvider()
       } catch { /* best-effort */ }
+      return
     }
+    try {
+      await ipc.settings.set({ aiChatProvider: null })
+      await refreshProvider()
+    } catch { /* best-effort */ }
   }, [activeThreadId, threadSettings.instructions, refreshProvider])
 
-  // ── Load gate ──────────────────────────────────────────────────────────────
-  if (settings == null || hasApiKey == null) {
-    if (loadError && !initialLoading) {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, height: '100%', padding: 24 }}>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
-            Couldn't load AI settings. {loadError}
-          </p>
-          <button type="button" onClick={() => { void refreshProvider() }} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
-            Retry
-          </button>
-        </div>
-      )
-    }
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Loading AI…</p>
-      </div>
-    )
-  }
+  // The probe behind `settings` / `hasApiKey` reads settings, detects keys and
+  // CLI tools and asks the billing service, so it can take seconds. Nothing on
+  // this screen waits for it: the shell, the header and the composer paint on
+  // the first frame and the pieces that genuinely need the verdict fill in when
+  // it arrives.
+  const probeFailure = providerProbeFailureKind(loadError, initialLoading, providerPending)
 
-  const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
-  const providerMeta = AI_PROVIDER_META[activeChatProvider]
-  const modelLabel = providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
-  // D4: when this thread overrides the model, the subline shows THAT model.
-  const overrideActive = Boolean(threadSettings.provider && threadSettings.model)
-  const displayProviderMeta = AI_PROVIDER_META[overrideActive ? threadSettings.provider! : activeChatProvider]
-  const displayModelId = overrideActive ? threadSettings.model! : activeModel
-  const displayModelLabel = displayProviderMeta.models.find((m) => m.id === displayModelId)?.label ?? displayModelId ?? displayProviderMeta.shortLabel
-  const cliTool = activeChatProvider === 'claude-cli'
-    ? 'claude'
-    : activeChatProvider === 'chatgpt-cli'
-      ? 'chatgpt'
-      : activeChatProvider === 'gemini-cli'
-        ? 'gemini'
-        : activeChatProvider === 'codex-cli'
-          ? 'codex'
-          : null
+  const activeChatProvider = settings ? chatProvider(settings) : null
+  const providerMeta = activeChatProvider ? AI_PROVIDER_META[activeChatProvider] : null
+  const modelLabel = providerMeta
+    ? providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
+    : null
+  const selection = settings
+    ? resolveChatSelection({ settings, thread: threadSettings, providerAvailability })
+    : null
+  const overrideActive = selection?.source === 'thread'
+  const displayProviderMeta = selection ? AI_PROVIDER_META[selection.provider] : providerMeta
+  const displayModelId = selection?.model ?? activeModel
+  const displayModelLabel = displayProviderMeta
+    ? displayProviderMeta.models.find((m) => m.id === displayModelId)?.label ?? displayModelId ?? displayProviderMeta.shortLabel
+    : null
+  const cliTool = cliToolForProvider(activeChatProvider)
   const isCliProvider = Boolean(cliTool)
   const cliMissing = cliTool ? !cliTools?.[cliTool] : false
   const hasMessages = messages.length > 0
@@ -479,7 +532,7 @@ export default function AIWorkspace() {
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* ── D1: time-grouped, searchable conversation list with Archive.
             FB4: always mounted, width-animated so open/close slides smoothly. ── */}
-      {hasApiKey && (
+      {chatVisible && (
         <div
           style={{
             flexShrink: 0,
@@ -503,7 +556,7 @@ export default function AIWorkspace() {
       {/* ── Top bar: sidebar toggle + thread title + model subline (U2/D2/FB8),
             ⌘K (opens the one palette), chat settings, new chat. ── */}
       <header style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: '1px solid var(--color-border-ghost)' }}>
-        {hasApiKey && (
+        {chatVisible && (
           <button
             type="button"
             onClick={toggleSidebar}
@@ -543,7 +596,7 @@ export default function AIWorkspace() {
               {activeThreadLabel ?? 'New chat'}
             </button>
           )}
-          {hasApiKey && (
+          {hasApiKey && displayProviderMeta && (
             <button
               type="button"
               onClick={() => setModelSelectorOpen(true)}
@@ -569,7 +622,7 @@ export default function AIWorkspace() {
           <span style={{ display: 'inline-flex', color: 'var(--color-text-tertiary)' }}><IconSparkleSearch /></span>
           <span style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em' }}>{isMac ? '⌘K' : 'Ctrl K'}</span>
         </button>
-        {activeThreadId != null && !managedAccess && (
+        {activeThreadId != null && !managedAccess && providerMeta && (
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
@@ -580,6 +633,16 @@ export default function AIWorkspace() {
             <SlidersHorizontal size={16} strokeWidth={1.8} aria-hidden="true" />
           </button>
         )}
+        <button
+          type="button"
+          onClick={toggleMcpActivity}
+          title={mcpActivityOpen ? 'Hide MCP activity' : 'Show MCP activity'}
+          aria-label={mcpActivityOpen ? 'Hide MCP activity' : 'Show MCP activity'}
+          aria-pressed={mcpActivityOpen}
+          style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: mcpActivityOpen ? 'var(--color-surface-high)' : 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >
+          <Activity size={16} strokeWidth={1.8} aria-hidden="true" />
+        </button>
         <button
           type="button"
           onClick={onNewChat}
@@ -594,7 +657,24 @@ export default function AIWorkspace() {
       {/* ── Conversation ──────────────────────────────────────────────────── */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: '28px 24px 24px', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
-          {!hasApiKey ? (
+          {probeFailure === 'banner' && (
+            <div role="alert" style={{ marginBottom: 16, padding: '10px 12px', borderRadius: 8, background: 'var(--color-surface-high)', color: 'var(--color-text-secondary)', fontSize: 12.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span>Couldn't refresh AI settings. {loadError}</span>
+              <button type="button" onClick={() => { void refreshProvider() }} style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>
+                Retry
+              </button>
+            </div>
+          )}
+          {probeFailure === 'blocking' ? (
+            <div style={{ margin: 'auto 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+              <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
+                Couldn't load AI settings. {loadError}
+              </p>
+              <button type="button" onClick={() => { void refreshProvider() }} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
+                Retry
+              </button>
+            </div>
+          ) : settings && hasApiKey === false ? (
             <div style={{ margin: 'auto 0' }}>
               <ConnectAI
                 variant="hero"
@@ -602,7 +682,22 @@ export default function AIWorkspace() {
                 hasSavedAccess={false}
                 onConnected={() => { void refreshProvider() }}
               />
-              {isCliProvider && cliMissing && (
+              {deniedDraft && (
+                <div style={{ width: '100%', maxWidth: 620, margin: '20px auto 0', textAlign: 'left' }}>
+                  <AICompose
+                    key={activeThreadId ?? 'new'}
+                    ref={composerRef}
+                    onSubmit={onComposerSubmit}
+                    onCancel={cancelGeneration}
+                    onPause={pauseGeneration}
+                    loading={loading}
+                    initialValue={deniedDraft}
+                    onValueChange={preserveQueuedDraft}
+                    placeholder="Your message is saved while you connect AI"
+                  />
+                </div>
+              )}
+              {isCliProvider && cliMissing && providerMeta && (
                 <div style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)' }}>
                   {providerMeta.label} is selected right now, but it is not installed on this machine yet.
                 </div>
@@ -624,6 +719,7 @@ export default function AIWorkspace() {
                 onErrorRetry={handleErrorRetry}
                 onSwitchProvider={switchProviderAndRetry}
                 onTransform={transformAnswer}
+                providerActionsDisabled={providerPending}
                 onMessageAction={handleMessageAction}
                 onCommitActionWidget={commitActionWidget}
                 onUndoActionWidget={undoActionWidget}
@@ -674,7 +770,7 @@ export default function AIWorkspace() {
                 </p>
               </div>
               <div style={{ width: '100%', maxWidth: 620, marginTop: 4, textAlign: 'left' }}>
-                <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} variant="starter" placeholder="Ask anything" />
+                <AICompose ref={composerRef} onSubmit={onComposerSubmit} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} variant="starter" placeholder="Ask anything" />
               </div>
               <div style={{ width: '100%', maxWidth: 620, textAlign: 'left' }}>
                 {starterPrompts.map((suggestion, index) => (
@@ -709,15 +805,15 @@ export default function AIWorkspace() {
       </div>
 
       {/* ── Docked composer ───────────────────────────────────────────────── */}
-      {hasApiKey && (hasMessages || threadLoading) && (
+      {chatVisible && probeFailure !== 'blocking' && (hasMessages || threadLoading) && (
         <div style={{ flexShrink: 0, padding: '12px 24px 20px' }}>
           <div style={{ maxWidth: 760, margin: '0 auto' }}>
-            <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} />
+            <AICompose ref={composerRef} onSubmit={onComposerSubmit} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} />
           </div>
         </div>
       )}
       </div>
-      {modelSelectorOpen && (
+      {modelSelectorOpen && providerMeta && displayProviderMeta && (
         <ModelSelector
           sources={modelSources}
           costs={modelCosts}
@@ -730,7 +826,7 @@ export default function AIWorkspace() {
           onClose={() => setModelSelectorOpen(false)}
         />
       )}
-      {settingsOpen && activeThreadId != null && !managedAccess && (
+      {settingsOpen && activeThreadId != null && !managedAccess && providerMeta && (
         <ThreadSettingsPanel
           threadId={activeThreadId}
           initial={threadSettings}
@@ -740,6 +836,17 @@ export default function AIWorkspace() {
           onSaved={(next) => setThreadSettings(next)}
         />
       )}
+      <div
+        style={{
+          flexShrink: 0,
+          width: mcpActivityOpen ? 280 : 0,
+          overflow: 'hidden',
+          transition: 'width 200ms cubic-bezier(0.22, 0.61, 0.36, 1)',
+        }}
+        aria-hidden={!mcpActivityOpen}
+      >
+        {mcpActivityOpen && <McpActivityPanel />}
+      </div>
     </div>
   )
 }

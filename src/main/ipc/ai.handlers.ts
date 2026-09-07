@@ -1,4 +1,5 @@
 import { app, ipcMain } from 'electron'
+import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AgentTurnCheckpointView, AIAgentQuestionEvent } from '@shared/types'
 import { cancelAIRequest, pauseAIRequest } from '../lib/aiCancellation'
@@ -52,7 +53,9 @@ import {
   renameThread,
   setThreadSettings,
 } from '../services/artifacts'
-import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIStarterSuggestionResult, type AIThreadDetail, type AIThreadPageRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedAskRequest, type WrappedPeriod } from '@shared/types'
+import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIStarterSuggestionResult, type AIThreadDetail, type AIThreadPageRequest, type AIThreadSettings, type AIThreadSummary, type McpActivityLog, type WorkContextBlock, type WrappedAskRequest, type WrappedPeriod } from '@shared/types'
+import { mcpActivityLogPath, readMcpActivity } from '@shared/mcpActivityLog'
+import { isRealDayHarness } from '../lib/realDayHarness'
 
 // Opening a conversation loads only this many of its newest messages; the
 // renderer pages older ones in with "Load earlier messages".
@@ -96,7 +99,7 @@ export function registerAIHandlers(): void {
     return listContextPackets(getDb(), payload)
   })
 
-  // DEV-183: the read-only inspection behind "What the AI saw" — the recorded
+  // DEV-183: the read-only inspection behind Sources for this answer — the recorded
   // packet grouped per kind, with plain-language omissions and each item
   // checked against the evidence backing it today. Null when no packet was
   // recorded for the reference; the renderer states that honestly.
@@ -394,5 +397,11 @@ export function registerAIHandlers(): void {
   // ─── Artifacts ────────────────────────────────────────────────────────────
   ipcMain.handle(IPC.AI.OPEN_ARTIFACT, async (_e, payload: { artifactId: number }) => {
     return openArtifact(payload.artifactId)
+  })
+
+  ipcMain.handle(IPC.AI.GET_MCP_ACTIVITY, (): McpActivityLog => {
+    if (isRealDayHarness()) return { entries: [] }
+    const dbPath = path.join(app.getPath('userData'), 'daylens.sqlite')
+    return { entries: readMcpActivity(mcpActivityLogPath(dbPath)) }
   })
 }
