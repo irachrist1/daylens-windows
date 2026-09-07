@@ -4557,6 +4557,7 @@ function usefulDerivedLabel(value: string | null | undefined): string | null {
   if (GENERIC_LABELS.has(natural)) return null
   // §3.5 / invariant 3: never surface a raw file / machine identifier as a name.
   if (looksLikeRawArtifactLabel(natural)) return null
+  if (workNameGuardLabelViolation(natural, { storedLabel: true })) return null
   return natural
 }
 
@@ -4867,6 +4868,10 @@ function finalizedLabelForBlock(
       if (tier !== 'invariants' && finding.rule === 'no-verbatim-window-title') return null
       if (tier === 'interpreted' && finding.rule === 'activity-not-software') return null
     }
+    // Same vocabulary the generation validators and startup repair use: a
+    // compacted tool surface ("Cursor Agents") is not a verbatim window title
+    // and is not the app name, so the voice rules above miss it.
+    if (workNameGuardLabelViolation(label, { storedLabel: true })) return null
     return label
   }
 
@@ -6543,9 +6548,9 @@ export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?
 }
 
 function rawWorkLabelForBlock(block: WorkContextBlock): string {
-  const preferred = block.aiLabel
-  if (preferred && preferred.trim() && !GENERIC_LABELS.has(preferred.trim())) {
-    return preferred.trim()
+  const preferred = block.aiLabel?.trim()
+  if (preferred && !GENERIC_LABELS.has(preferred) && !workNameGuardLabelViolation(preferred, { storedLabel: true })) {
+    return preferred
   }
 
   // The finalized label (artifact / workflow / memory / corrected) is the name
@@ -6555,12 +6560,18 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
   // category floor. This is what lets earlier intent name the block instead of
   // the block reading "Development" / "Writing" / "Productivity".
   const current = block.label.current?.trim()
-  if (current && !GENERIC_LABELS.has(current) && current !== 'Untitled block') {
+  if (
+    current
+    && !GENERIC_LABELS.has(current)
+    && current !== 'Untitled block'
+    && !workNameGuardLabelViolation(current, { storedLabel: true })
+  ) {
     return current
   }
 
-  if (block.ruleBasedLabel.trim() && !GENERIC_LABELS.has(block.ruleBasedLabel.trim())) {
-    return block.ruleBasedLabel.trim()
+  const rule = block.ruleBasedLabel.trim()
+  if (rule && !GENERIC_LABELS.has(rule) && !workNameGuardLabelViolation(rule, { storedLabel: true })) {
+    return rule
   }
 
   // Subject-driven fallback: when the deterministic label is only a category
@@ -6569,7 +6580,11 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
   // "subject should drive the label" rule — a browser-hosted productivity block
   // reads "Roadmap board", not "Productivity".
   const intentSubject = inferWorkIntent(block).subject?.trim()
-  if (intentSubject && !GENERIC_LABELS.has(intentSubject)) {
+  if (
+    intentSubject
+    && !GENERIC_LABELS.has(intentSubject)
+    && !workNameGuardLabelViolation(intentSubject, { storedLabel: true })
+  ) {
     return intentSubject
   }
 

@@ -98,8 +98,11 @@ inferred from content signals, then never the tool.
   OFF by default. The open work is not wiring it — it is turning it on and proving it beats
   the legacy path on the eval, then making that the default. This is still the build that
   moves primary-work naming.
-- **DEV-288 / #110** — labels stored before the name guards still say "Cursor Agents". Guards
-  run on read and do not rewrite the database. Needs a backfill.
+- **DEV-288 / #110** — **the backfill is in place.** `labelGuardRepair` rewrites stored
+  `timeline_blocks` labels that fail today's work-name guards on startup, once per
+  `WORK_NAME_GUARD_VERSION`. The finalize ladder also rejects those labels on read, so a
+  compacted window title (`Cursor Agents — daylens …`) cannot persist as the block name
+  after the stamp. Remaining naming work is DEV-287 (turn the interpretation agent on).
 - **DEV-223 / #21** — Timeline, Apps, chat and exports disagree about the same day.
 
 **Done when:** `npm run eval:days` reports primary work ≥95% and tool-surface clean ≥99%, and

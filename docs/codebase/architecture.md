@@ -126,7 +126,6 @@ The desktop can call a configured provider directly with a person’s own key. M
 - **Interpretation agent runtime** — flag exists, runtime unwired (see above). Highest-leverage next build.
 - **Block segmentation can bridge untracked gaps** (a lunch inside one "block") and gaps are not yet first-class facts for the narrative — the rules are in [Timeline §Segmentation](../specs/timeline.md) and [Day recap §Gaps](../specs/day-recap-and-analysis.md).
 - **`apps/web` + Convex sync is frozen** pending the encrypted companion replacement (docs/product/v2.md).
-- **Stored AI block labels predating the name guards** still carry tool-y names ("Working on Cursor Agents"); they heal on re-analysis, not retroactively.
 - **Plaintext API key** found in the LEGACY app-data dir (`~/Library/Application Support/Daylens/config.json`, old GRDB-era app): rotate that key and delete the file; the current app keeps keys in the OS secure store.
 
 ## Current architectural risks
