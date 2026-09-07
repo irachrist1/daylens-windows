@@ -35,7 +35,7 @@ macOS / Windows / Linux signals      consented external signals
 | Range worker | `packages/range-worker` | Apps-view range reads off the main thread |
 | Embed worker | `packages/embed-worker` | MiniLM ONNX inference |
 | Capture relay | `packages/capture-relay` | drains the on-disk focus-event spool |
-| Native helpers | `src/native/capture-helper` (Swift), `windows-capture-helper` (C#) | foreground/title/idle events |
+| Native helpers | `src/native/capture-helper` (Swift), `calendar-helper` (EventKit), `windows-capture-helper` (C#) | foreground/title/idle events; macOS calendar |
 
 The four `packages/*/src/index.ts` entries are referenced by vite configs and fork sites — knip flags them as unused; they are not.
 
@@ -115,7 +115,7 @@ The desktop can call a configured provider directly with a person’s own key. M
 
 ## Decisions recorded 2026-07-26
 
-- **Connector framework removed.** `src/main/connectors/` (OAuth adapters: Google/Outlook Calendar, GitHub, Linear, Granola + settings UI + IPC) was dropped as a product decision: developer-credential setup, zero real-world connections, DEV-256. Tables and migrations remain; readers of `connector_records` degrade to empty. Calendar/git enrichment continues via `externalSignals.ts` (zero-setup local probes), which is also the intended future home of any reborn integration — as agent-pluggable evidence, not a settings page.
+- **Connector framework removed.** `src/main/connectors/` (OAuth adapters: Google/Outlook Calendar, GitHub, Linear, Granola + settings UI + IPC) was dropped as a product decision: developer-credential setup, zero real-world connections, DEV-256. Tables and migrations remain; readers of `connector_records` degrade to empty. Calendar/git enrichment continues via `externalSignals.ts` (zero-setup local probes: EventKit on macOS, Outlook COM on Windows). OAuth remains fallback-only. See [native calendar research](../research/native-calendar.md).
 - **Old recap stack removed** (`renderer/lib/recap.ts`, `getRecapRange` IPC, recap sync-allowlist keys) — superseded by the wrap deck.
 - **Dead report generators removed** (`reportArtifacts.ts`, `reportFormats.ts`) — live export is `interactionTools` xlsx/csv + `weeklyExport`.
 - **Screen-context capture** (`services/screenContext/`) stays: consent-gated sampler + encrypted store + lifecycle, no shipped extractor yet. It now also serves the agent's Tier-3 live capture. Reconcile marketing copy ("no screenshots, ever") with this before any release that enables it.

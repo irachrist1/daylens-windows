@@ -12,7 +12,7 @@ Daylens is an npm-workspaces monorepo with one root lockfile. Run `npm install` 
 | `src/preload`              | Typed bridge between the renderer and Electron main process                                                                                  |
 | `src/renderer`             | React desktop interface for Timeline, Apps, AI, Settings, onboarding, and review surfaces                                                    |
 | `src/shared`               | Types and pure helpers shared by desktop processes                                                                                           |
-| `src/native`               | macOS and Windows native capture-helper source                                                                                               |
+| `src/native`               | macOS and Windows native helpers: capture plus the EventKit calendar helper                                                                  |
 | `apps/web`                 | Next.js and Convex marketing site and linked web companion                                                                                   |
 | `packages/remote-contract` | Shared desktop and web wire contract                                                                                                         |
 | `packages/mcp-server`      | Local stdio MCP server over Daylens data; read-only, same tool executors as the in-app agent                                                 |

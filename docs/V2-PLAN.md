@@ -183,8 +183,9 @@ Real, required to release, felt by nobody until release day.
   **Shipped.** `services/permissionWatcher.ts` verifies with real reads and
   `getCaptureVerificationState` exposes it. Linear says Done; GitHub #51 is still open and
   should be closed.
-- **DEV-255 / #77** — calendar depends on icalBuddy, a third-party CLI most users will not
-  have. **Urgent in Linear.** It works on the owner's machine by accident. Native EventKit.
+- **DEV-255 / #77** — calendar on macOS now reads EventKit through `calendar-helper`
+  instead of icalBuddy. Windows still uses Outlook COM; Linux has no store. Needs
+  acceptance on a Mac: events after one Calendar prompt, no CLI installed.
 - **DEV-289 / #111** — focus score and distraction alerter are spec-removed but fully live.
   Needs a decision, not code.
 - **DEV-207** — the V2 acceptance run. The gate itself; it cannot pass until the five close.

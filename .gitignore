@@ -10,6 +10,8 @@ private/
 
 # Compiled native helpers — built by scripts/build-capture-helper.sh
 build/capture-helper
+build/calendar-helper
+build/calendar-helper.app
 
 # AI agent working files — ephemeral planning docs, not part of the source record
 PLAN.md
