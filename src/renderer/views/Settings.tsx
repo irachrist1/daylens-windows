@@ -4120,12 +4120,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'enrichment':
       content = (
-        <SectionPage title="Enrichment sources" description="Optional local sources that make your Wrapped richer: what you shipped, what meetings you had, when you focused. Everything stays on this machine. Git and calendar are read automatically when the tools exist; focus apps and MCP servers stay off until you turn them on.">
+        <SectionPage title="Enrichment sources" description="Optional local sources that make your Wrapped richer: what you shipped, what meetings you had, when you focused. Everything stays on this machine. Git and calendar are read automatically from this computer; focus apps and MCP servers stay off until you turn them on.">
           <div style={{ display: 'grid', gap: 24 }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>Always available</div>
               <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
-                Git commits and calendar events are read automatically when the tools exist on this machine (git, the gh CLI, icalBuddy). Nothing to configure.
+                Git commits are read when git (and optionally the gh CLI) exist on this machine. Calendar events come from this computer's calendars — Apple Calendar on macOS after one permission prompt, Outlook on Windows when it is installed. Nothing to configure.
               </div>
             </div>
             <div>

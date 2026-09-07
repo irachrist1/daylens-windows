@@ -75,6 +75,23 @@ function verifyPackage(asarPath) {
     }
   }
 
+  const appBundle = path.dirname(path.dirname(resourcesDir))
+  if (path.extname(appBundle) === '.app') {
+    const calendarHelper = path.join(
+      resourcesDir,
+      'build',
+      'calendar-helper.app',
+      'Contents',
+      'MacOS',
+      'calendar-helper',
+    )
+    try {
+      fs.accessSync(calendarHelper, fs.constants.X_OK)
+    } catch {
+      fail(`${path.relative(process.cwd(), asarPath)} is missing executable Calendar helper at ${calendarHelper}`)
+    }
+  }
+
   console.log(`[packaged-natives] ok ${path.relative(process.cwd(), asarPath)}`)
 }
 

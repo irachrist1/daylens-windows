@@ -87,10 +87,10 @@ export function getExternalSignal<T>(
 // it cannot distinguish "collected, nothing found" from "never collected". The
 // scan ledger records that a connector RAN TO COMPLETION for a settled day,
 // even when it found nothing — without it, on-demand backfill would re-run
-// git/icalBuddy on every wrap regeneration of a commit-less historical day.
+// git/EventKit on every wrap regeneration of a commit-less historical day.
 // Only a connector that genuinely ran and came back empty is ledgered: an
 // unavailable or failed connector THROWS (see gitSignals/calendarSignals) and
-// is never marked, so installing icalBuddy later still enriches old days.
+// is never marked, so granting Calendar later still enriches old days.
 
 export function recordExternalSignalScan(
   db: Database.Database,
@@ -295,15 +295,15 @@ export async function collectExternalSignals(
     const { db, collectGit, collectCalendar, collectFocus, enrichmentSources, invalidateTimeline } =
       options.deps ?? defaultDeps()
 
-    // Git and calendar are ALWAYS-ON: read whenever the underlying tools exist
-    // (git/gh/icalBuddy/Outlook), no toggle. Focus apps are opt-in per app via
-    // the Settings enrichment toggles (`focus:<app>`) — read only what's enabled.
+    // Git and calendar are ALWAYS-ON: read whenever the underlying source
+    // exists (git/gh, EventKit, Outlook COM), no toggle. Focus apps are
+    // opt-in per app via the Settings enrichment toggles (`focus:<app>`).
     const focusEnabledFor = (app: string) => enrichmentSources[`focus:${app}`] === true
 
     // Tombstone rule (Gap 2): a connector that comes back empty must not keep
     // serving stale data — BUT only on an explicit forced refresh (the user
     // asking to replace truth). A background run that returns empty could just
-    // be a transient timeout (git/icalBuddy slow or missing), so it leaves any
+    // be a transient timeout (git/EventKit slow or missing), so it leaves any
     // prior row intact rather than risk deleting good data.
     const tombstoneIfForced = (source: ExternalSignalSource) => {
       if (options.force) deleteExternalSignal(db, date, source)
@@ -392,7 +392,7 @@ export async function collectExternalSignals(
 // of a 73-commit release day couldn't mention a single commit. Backfill runs
 // the SAME production collection path for one date when a wrap or Analyze
 // touches it: git log --since/--until works arbitrarily far back, and the
-// calendar readers (icalBuddy / Outlook COM) accept any date the local store
+// calendar readers (EventKit / Outlook COM) accept any date the local store
 // still has synced. Idempotent via the stored rows + scan ledger; bounded so a
 // slow repo scan can't hold the wrap hostage (a timed-out collection finishes
 // in the background and its rows are there for the next open).

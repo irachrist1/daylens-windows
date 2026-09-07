@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds platform capture helpers into build/.
-# macOS: Swift capture-helper
+# Builds platform native helpers into build/.
+# macOS: Swift capture-helper + EventKit calendar-helper.app
 # Windows: .NET UIA windows-capture-helper.exe
 set -euo pipefail
 
@@ -12,6 +12,14 @@ if [[ "$(uname)" == "Darwin" ]]; then
   OUT="$ROOT/build/capture-helper"
   swiftc -O -o "$OUT" "$SRC"
   echo "[build-capture-helper] built $OUT"
+
+  CAL_SRC="$ROOT/src/native/calendar-helper/main.swift"
+  CAL_PLIST="$ROOT/src/native/calendar-helper/Info.plist"
+  CAL_APP="$ROOT/build/calendar-helper.app"
+  mkdir -p "$CAL_APP/Contents/MacOS"
+  cp "$CAL_PLIST" "$CAL_APP/Contents/Info.plist"
+  swiftc -O -o "$CAL_APP/Contents/MacOS/calendar-helper" "$CAL_SRC"
+  echo "[build-capture-helper] built $CAL_APP"
   exit 0
 fi
 
