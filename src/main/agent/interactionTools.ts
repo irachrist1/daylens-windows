@@ -131,7 +131,7 @@ export function buildInteractionTools(deps: InteractionDeps) {
 export function buildExportTools(db: Database.Database, deps: InteractionDeps) {
   return {
     export_week_excel: tool({
-      description: 'Build the real weekly Excel export: a styled workbook with a per-day week summary (active time, top apps, top sites, honest gaps), a totals row, and a by-app sheet whose numbers are computed from the same corrected facts as the Timeline, never from values you type. Use this for every "export my week / timesheet Excel" request. Returns the saved file plus the computed totals so your answer can quote the same numbers.',
+      description: 'Build the real weekly Excel export: a styled workbook with a per-day week summary (active time, top apps, top sites, project/client, notes, honest gaps), a totals row, and a by-app sheet whose numbers are computed from the same corrected facts as the Timeline, never from values you type. Filename is Daylens-week-YYYY-MM-DD-to-DD.xlsx. Use this for every "export my week / timesheet Excel" request. Returns the saved file plus the computed totals so your answer can quote the same numbers.',
       inputSchema: z.object({
         weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
           .describe('Any date inside the target week (local, YYYY-MM-DD); it is snapped to that week\'s Monday'),
@@ -140,7 +140,7 @@ export function buildExportTools(db: Database.Database, deps: InteractionDeps) {
         if (deps.signal?.aborted) throw new Error('aborted')
         const data = collectWeeklyExportData(db, weekStartDate)
         await fs.mkdir(deps.artifactDir, { recursive: true })
-        const filename = weeklyExportFilename(data.weekStart)
+        const filename = weeklyExportFilename(data.weekStart, data.weekEnd)
         const filePath = path.join(deps.artifactDir, filename)
         await writeWeeklyWorkbook(data, filePath)
         const artifact: AIMessageArtifact = {
