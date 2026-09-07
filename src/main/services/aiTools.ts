@@ -205,6 +205,7 @@ export interface DaySummaryResult {
   _evidence: {
     topApps: AppUsageStat[]
     topWebsiteDomains: { domain: string; totalSeconds: number }[]
+    secondaryDisplay: { appName: string | null; seconds: number; presence: 'visible' }[]
     deepWorkSessionCount: number
     longestStreakSeconds: number
   }
@@ -214,6 +215,7 @@ export interface DaySummaryResult {
   topApps: AppUsageStat[]
   /** @deprecated — present for back-compat. Use `_evidence.topWebsiteDomains`. */
   topWebsiteDomains: { domain: string; totalSeconds: number }[]
+  secondaryDisplay: { appName: string | null; seconds: number; presence: 'visible' }[]
   /** @deprecated — present for back-compat. Use `_evidence.deepWorkSessionCount`. */
   deepWorkSessionCount: number
   /** @deprecated — present for back-compat. Use `_evidence.longestStreakSeconds`. */
@@ -235,10 +237,8 @@ export interface GetAppUsageResult {
   endDate: string
   dailyBreakdown: AppUsageDailyBreakdown[]
   recentWindowTitles: string[]  // up to 10 most recent distinct window titles
-  /** True when the answer came from website_visits (a site, e.g. youtube.com)
-   *  rather than app sessions. Site time sums every visit, which includes a tab
-   *  left open/playing in the background while other work was in the foreground —
-   *  so the phrase step discloses that rather than implying pure active watching. */
+  /** True when the answer came from reconciled website facts (a site, e.g. coursera.org)
+   *  rather than app sessions. Same ledger the Apps view totals. */
   fromWebsiteVisits?: boolean
   /** Present when the matched app is a browser whose page-level detail covers
    *  materially less time than the app itself — the answer must quote it
@@ -873,6 +873,13 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     }
   })
   const topWebsiteDomains = websites.slice(0, 5).map((w) => ({ domain: w.domain, totalSeconds: w.totalSeconds }))
+  const secondaryDisplay = (livePayload.secondaryDisplay ?? [])
+    .map((span) => ({
+      appName: span.appName,
+      seconds: Math.max(0, Math.round((span.endTime - span.startTime) / 1000)),
+      presence: 'visible' as const,
+    }))
+    .filter((span) => span.seconds > 0)
 
   return {
     date: params.date,
@@ -882,6 +889,7 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     _evidence: {
       topApps,
       topWebsiteDomains,
+      secondaryDisplay,
       deepWorkSessionCount: focusScore.deepWorkSessionCount,
       longestStreakSeconds: focusScore.longestStreakSeconds,
     },
@@ -890,6 +898,7 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     timelineBlockLabels: [...seenLabels].slice(0, 20),
     topApps,
     topWebsiteDomains,
+    secondaryDisplay,
     deepWorkSessionCount: focusScore.deepWorkSessionCount,
     longestStreakSeconds: focusScore.longestStreakSeconds,
   }
