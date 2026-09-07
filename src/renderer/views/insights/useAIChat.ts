@@ -68,6 +68,20 @@ function firstActiveThreadId(rows: AIThreadSummary[]): number | null {
 // `null` = you were on a new chat (stay empty).
 let rememberedThreadId: number | null | undefined = undefined
 
+type ProviderSnapshot = {
+  settings: AppSettings
+  cliTools: { claude: string | null; chatgpt: string | null; gemini: string | null; codex: string | null }
+  hasProviderAccess: boolean
+  providerAvailability: Partial<Record<AIProviderMode, boolean>>
+  activeFocusSession: FocusSession | null
+  billingAccess: BillingAccessSnapshot
+}
+
+// The provider probe re-runs on every mount. Its slowest leg is a billing
+// network fetch (15s abort). Remember the last verdict so a tab switch does
+// not drop the view back to "provider unknown" for as long as that call takes.
+let lastProviderSnapshot: ProviderSnapshot | null = null
+
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
   trigger?: 'freeform' | 'suggested' | 'retry' | 'resume'
@@ -153,16 +167,7 @@ export function useAIChat() {
   // pulled on mount — those are the expensive projections the perf map flags.
   // CLI detection (which spawns child processes) only runs when a CLI provider
   // is actually selected.
-  const providerResource = useProjectionResource<{
-    settings: AppSettings
-    cliTools: { claude: string | null; chatgpt: string | null; gemini: string | null; codex: string | null }
-    hasProviderAccess: boolean
-    // Per-provider key/tool availability, so the error card can offer a
-    // concrete one-tap switch on a hard wall.
-    providerAvailability: Partial<Record<AIProviderMode, boolean>>
-    activeFocusSession: FocusSession | null
-    billingAccess: BillingAccessSnapshot
-  }>({
+  const providerResource = useProjectionResource<ProviderSnapshot>({
     scope: 'insights',
     load: async () => {
       const currentSettings = await ipc.settings.get()
@@ -207,11 +212,16 @@ export function useAIChat() {
     dependencies: [],
   })
 
-  const settings = providerResource.data?.settings ?? null
-  const cliTools = providerResource.data?.cliTools ?? null
-  const hasApiKey = providerResource.data ? providerResource.data.hasProviderAccess : null
-  const activeFocusSession = providerResource.data?.activeFocusSession ?? null
-  const billingAccess = providerResource.data?.billingAccess ?? null
+  const providerData = providerResource.data ?? lastProviderSnapshot
+  useEffect(() => {
+    if (providerResource.data) lastProviderSnapshot = providerResource.data
+  }, [providerResource.data])
+
+  const settings = providerData?.settings ?? null
+  const cliTools = providerData?.cliTools ?? null
+  const hasApiKey = providerData ? providerData.hasProviderAccess : null
+  const activeFocusSession = providerData?.activeFocusSession ?? null
+  const billingAccess = providerData?.billingAccess ?? null
   // `refresh` is stable across renders (useProjectionResource memoizes it), so
   // handlers can depend on it without churning their own identity each render.
   const refreshProvider = providerResource.refresh
@@ -229,7 +239,7 @@ export function useAIChat() {
 
   // Other configured providers we can offer as a one-tap switch when the
   // selected one hits a hard wall (quota/credit/auth). Never auto-routed.
-  const providerAvailability = providerResource.data?.providerAvailability ?? {}
+  const providerAvailability = providerData?.providerAvailability ?? {}
   const alternateProviders = useMemo<AltProvider[]>(() => {
     if (!activeProvider) return []
     return SWITCHABLE_PROVIDERS
@@ -677,7 +687,11 @@ export function useAIChat() {
   // trigger should be `loading`, not a fresh callback identity each render.
   const handleSendRef = useRef(handleSend)
   handleSendRef.current = handleSend
-  const submitMessage = useCallback((text: string) => { void handleSendRef.current(text) }, [])
+  const submitMessage = useCallback((text: string) => {
+    if (loadingRef.current) return false
+    void handleSendRef.current(text)
+    return true
+  }, [])
 
   // Stop aborts the in-flight provider request in the main process
   // (ai:cancel-message → AbortController → SDK abort) and flips the pending
@@ -1068,8 +1082,9 @@ export function useAIChat() {
     agentQuestion,
     turnPhase,
     latestCompletedAssistantId,
-    // resource status (for the load gate + ConnectAI refresh)
-    initialLoading: providerResource.loading && !providerResource.data,
+    // resource status (for the error card + ConnectAI refresh). A remembered
+    // verdict counts as data, so remounts are not treated as a first load.
+    initialLoading: providerResource.loading && !providerData,
     loadError: providerResource.error,
     refreshProvider,
     // actions
