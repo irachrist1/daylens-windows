@@ -23,7 +23,14 @@ test('Gemini uses the GA flash-lite default, never the shut-down preview id', ()
 test('flagship ids are refreshed (OpenAI 5.5, Anthropic Opus 4.8)', () => {
   assert.equal(AI_PROVIDER_META.openai.defaultModel, 'gpt-5.5')
   assert.ok(AI_PROVIDER_META.openai.models.some((m) => m.id === 'gpt-5.5'))
-  assert.equal(AI_PROVIDER_META.anthropic.defaultModel, 'claude-opus-4-8')
+  assert.ok(AI_PROVIDER_META.anthropic.models.some((m) => m.id === 'claude-opus-4-8'))
   assert.ok(AI_PROVIDER_META.anthropic.models.some((m) => m.id === 'claude-sonnet-5'))
   assert.ok(!AI_PROVIDER_META.anthropic.models.some((m) => m.id === 'claude-opus-4-6'), 'opus 4.6 should be replaced by 4.8')
+})
+
+test('shipping default is Claude Haiku 4.5 on Anthropic and Claude CLI', () => {
+  assert.equal(AI_PROVIDER_META.anthropic.defaultModel, 'claude-haiku-4-5')
+  assert.equal(AI_PROVIDER_META['claude-cli'].defaultModel, 'claude-haiku-4-5')
+  assert.ok(AI_PROVIDER_META.anthropic.models.some((m) => m.id === 'claude-haiku-4-5'))
+  assert.ok(AI_PROVIDER_META['claude-cli'].models.some((m) => m.id === 'claude-haiku-4-5'))
 })

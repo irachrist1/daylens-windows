@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { ChevronDown, Search } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
+import { cliToolForProvider } from '@shared/aiProviderState'
 import type {
   AppCategory,
   AppSettings,
@@ -1417,14 +1418,6 @@ type CLIToolDetection = {
   chatgpt: string | null
   gemini: string | null
   codex: string | null
-}
-
-function cliToolForProvider(provider: string): keyof CLIToolDetection | null {
-  if (provider === 'claude-cli') return 'claude'
-  if (provider === 'chatgpt-cli') return 'chatgpt'
-  if (provider === 'gemini-cli') return 'gemini'
-  if (provider === 'codex-cli') return 'codex'
-  return null
 }
 
 // The provider's display name, or null when we don't have a friendly label —

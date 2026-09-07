@@ -113,6 +113,8 @@ The current sync path sends live presence and selected day-level facts. Raw capt
 
 The desktop can call a configured provider directly with a person’s own key. Managed AI access uses `services/billing`, which tracks entitlements and provider cost without storing prompts, answers, or raw activity. See [Billing operations](../operations/billing.md).
 
+Settings `aiProvider` plus the per-provider model is the account default. Chat follows that unless a thread override is still usable. The shipping default model is Claude Haiku 4.5 (`src/shared/aiProviderState.ts`). Claude CLI can answer chat when installed; other local CLIs are listed in Settings but are not offered as chat sources.
+
 ## Decisions recorded 2026-07-26
 
 - **Connector framework removed.** `src/main/connectors/` (OAuth adapters: Google/Outlook Calendar, GitHub, Linear, Granola + settings UI + IPC) was dropped as a product decision: developer-credential setup, zero real-world connections, DEV-256. Tables and migrations remain; readers of `connector_records` degrade to empty. Calendar/git enrichment continues via `externalSignals.ts` (zero-setup local probes), which is also the intended future home of any reborn integration — as agent-pluggable evidence, not a settings page.

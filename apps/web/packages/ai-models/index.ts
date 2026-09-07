@@ -6,7 +6,7 @@ export const MODEL_IDS = [
 
 export type ModelId = (typeof MODEL_IDS)[number];
 
-export const DEFAULT_MODEL_ID: ModelId = "claude-sonnet-4-6";
+export const DEFAULT_MODEL_ID: ModelId = "claude-haiku-4-5-20251001";
 
 export const MODEL_OPTIONS: ReadonlyArray<{
   id: ModelId;
@@ -21,12 +21,12 @@ export const MODEL_OPTIONS: ReadonlyArray<{
   {
     id: "claude-sonnet-4-6",
     label: "Claude Sonnet 4.6",
-    hint: "Recommended — strong quality, fast",
+    hint: "Strong quality, fast",
   },
   {
     id: "claude-haiku-4-5-20251001",
     label: "Claude Haiku 4.5",
-    hint: "Fastest + cheapest — lighter answers",
+    hint: "Default — fastest + cheapest for typical Daylens questions",
   },
 ];
 

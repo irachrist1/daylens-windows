@@ -17,6 +17,12 @@
 // only when the provider explicitly permits that use — the descriptor gate
 // (`available`) is where that check surfaces to the person.
 
+import {
+  CLI_NOT_INSTALLED_REASON,
+  isCliProvider,
+  subscriptionSourceAvailability,
+  type CLIProvider,
+} from './aiProviderState'
 import type { AIProviderMode, BillingAccessSnapshot } from './types'
 
 export type AIModelSourceKind = 'managed' | 'byok' | 'subscription'
@@ -51,10 +57,10 @@ const SOURCE_DEFS: SourceDef[] = [
   { provider: 'openai', kind: 'byok', label: 'OpenAI — your API key', unavailableReason: 'No OpenAI API key saved. Add one in Settings → AI.' },
   { provider: 'google', kind: 'byok', label: 'Google — your API key', unavailableReason: 'No Google AI Studio key saved. Add one in Settings → AI.' },
   { provider: 'openrouter', kind: 'byok', label: 'OpenRouter — your API key', unavailableReason: 'No OpenRouter API key saved. Add one in Settings → AI.' },
-  { provider: 'claude-cli', kind: 'subscription', label: 'Claude CLI — your subscription', unavailableReason: 'Claude CLI is not installed on this machine.' },
-  { provider: 'chatgpt-cli', kind: 'subscription', label: 'ChatGPT CLI — your subscription', unavailableReason: 'ChatGPT CLI is not installed on this machine.' },
-  { provider: 'codex-cli', kind: 'subscription', label: 'Codex CLI — your subscription', unavailableReason: 'Codex CLI is not installed on this machine.' },
-  { provider: 'gemini-cli', kind: 'subscription', label: 'Gemini CLI — your subscription', unavailableReason: 'Gemini CLI is not installed on this machine.' },
+  { provider: 'claude-cli', kind: 'subscription', label: 'Claude CLI — your subscription', unavailableReason: CLI_NOT_INSTALLED_REASON['claude-cli'] },
+  { provider: 'chatgpt-cli', kind: 'subscription', label: 'ChatGPT CLI — your subscription', unavailableReason: CLI_NOT_INSTALLED_REASON['chatgpt-cli'] },
+  { provider: 'codex-cli', kind: 'subscription', label: 'Codex CLI — your subscription', unavailableReason: CLI_NOT_INSTALLED_REASON['codex-cli'] },
+  { provider: 'gemini-cli', kind: 'subscription', label: 'Gemini CLI — your subscription', unavailableReason: CLI_NOT_INSTALLED_REASON['gemini-cli'] },
 ]
 
 export function buildModelSources(input: {
@@ -62,6 +68,8 @@ export function buildModelSources(input: {
   providerAvailability: Partial<Record<AIProviderMode, boolean>>
   /** The validated billing snapshot; null when unknown. */
   billing: Pick<BillingAccessSnapshot, 'mode' | 'canUseAI' | 'message'> | null
+  /** Chat hides CLIs that cannot drive the agent loop; Settings lists every CLI. */
+  purpose?: 'chat' | 'all'
 }): AIModelSource[] {
   const sources: AIModelSource[] = []
 
@@ -80,15 +88,23 @@ export function buildModelSources(input: {
     })
   }
 
+  const purpose = input.purpose ?? 'all'
   for (const def of SOURCE_DEFS) {
-    const available = input.providerAvailability[def.provider] ?? false
+    const installed = input.providerAvailability[def.provider] ?? false
+    const subscription = def.kind === 'subscription' && isCliProvider(def.provider)
+      ? subscriptionSourceAvailability({
+          provider: def.provider as CLIProvider,
+          installed,
+          purpose,
+        })
+      : { available: installed, unavailableReason: installed ? null : def.unavailableReason }
     sources.push({
       id: `${def.kind}:${def.provider}`,
       kind: def.kind,
       provider: def.provider,
       label: def.label,
-      available,
-      unavailableReason: available ? null : def.unavailableReason,
+      available: subscription.available,
+      unavailableReason: subscription.unavailableReason,
       costBasis: def.kind === 'byok' ? 'metered_usd' : 'subscription_included',
     })
   }
