@@ -1058,7 +1058,7 @@ export interface AIMessageCitation {
 }
 
 // ─── Context packet inspection (DEV-183) ─────────────────────────────────────
-// The renderer-facing shape of "what the AI saw" for one exchange: the
+// The renderer-facing shape of the sources inspector for one exchange: the
 // recorded packet re-read from the local ledger, grouped per kind, with each
 // item checked against the evidence that backs it today. Read-only — the
 // inspector shows the record, it never edits it.
@@ -1170,6 +1170,8 @@ export interface AIThreadMessageMetadata {
     contextPacketId?: string | null
     /** Verified packet citations in the answer, in display order. */
     citations?: AIMessageCitation[]
+    /** Wall-clock length of the agent turn, for the collapsed "Worked for" line. */
+    durationMs?: number | null
   }
   answerKind?: AIAnswerKind | null
   suggestedFollowUps?: FollowUpSuggestion[]
@@ -3221,7 +3223,7 @@ export const IPC = {
     GET: 'context-packets:get',
     GET_FOR_MESSAGE: 'context-packets:get-for-message',
     LIST: 'context-packets:list',
-    // DEV-183: the assembled read-only inspection behind "What the AI saw" —
+    // DEV-183: the assembled read-only inspection behind Sources for this answer —
     // the recorded packet grouped per kind, with omissions in plain language
     // and each item checked against the evidence backing it today.
     INSPECT: 'context-packets:inspect',

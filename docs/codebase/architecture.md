@@ -95,7 +95,7 @@ The desktop AI surface sends a typed request over IPC to the main process. `src/
 - **Tier 2 (cheap, permission-carded):** `read_file`/`list_dir`/`search_files` (deny-by-default grants, disclosure ledger), read-only `git`, `discover_repositories`.
 - **Tier 3 (expensive, consent-gated):** `capture_screen` — one downscaled still of the active display via the screen-context frame source; pixels go to the model as an image part and are never stored; the mandatory `reason` appears in the activity trail. Gated on the Screen context experiment toggle + OS permission; refuses honestly otherwise. (Added 2026-07-26.)
 
-Plus: context packets with an inspector ("what the AI saw"), grounding verification with one corrective retry, clarifying questions, pause/resume checkpoints, previewed/undoable corrections, confirmed-memory proposals, user-configured MCP servers.
+Plus: context packets with a sources inspector, grounding verification with one corrective retry, clarifying questions, pause/resume checkpoints, previewed/undoable corrections, confirmed-memory proposals, user-configured MCP servers.
 
 Agent tools read Daylens data through existing services and queries. A tool should expose a product-level fact or explicit command, not raw tables or a second definition of time and attribution. Provider choice, retries, streaming, cancellation, and rate limits belong to agent infrastructure. Recorded activity remains product data rather than model output. The tier model and its policy gate are specified in [agent runtime and context](../specs/agent-runtime-and-context.md).
 

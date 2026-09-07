@@ -181,28 +181,95 @@ export interface AgentTurnSummary {
   /** Distinct files whose contents were disclosed this turn. */
   fileCount: number
   citationCount: number
-  /** Quiet settle line, e.g. "Used 4 sources · 1 file". Empty when the turn
-   *  touched nothing worth summarizing. */
+  durationMs: number | null
+  /** Collapsed Codex-style line, e.g. "Worked for 12s". Empty when the turn
+   *  did no visible work. */
   label: string
+}
+
+/** Compact duration for the collapsed "Worked for Xm Ys" line. */
+export function formatWorkedDuration(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
+  if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+  return `${seconds}s`
+}
+
+/** Collapsed settle line. Duration wins when recorded; otherwise "Worked" if
+ *  tools ran. A greeting with no tools and no duration stays blank. */
+export function workedSummaryLabel(
+  durationMs: number | null | undefined,
+  hasWork: boolean,
+): string {
+  if (typeof durationMs === 'number' && durationMs > 0) {
+    return `Worked for ${formatWorkedDuration(durationMs)}`
+  }
+  return hasWork ? 'Worked' : ''
+}
+
+const TOOL_CHIP_LABELS: Record<string, string> = {
+  get_moment: 'Moment',
+  get_time_chunks: 'Intervals',
+  get_day_overview: 'Day',
+  search_history: 'Search',
+  list_page_visits: 'Pages',
+  get_app_usage: 'App time',
+  get_week_summary: 'Week',
+  get_calendar_events: 'Calendar',
+  get_git_activity: 'Commits',
+  read_meeting_notes: 'Meetings',
+  get_attribution: 'Attribution',
+  list_clients: 'Clients',
+  discover_repositories: 'Repos',
+  search_files: 'Files',
+  git: 'Git',
+  read_file: 'Read',
+  list_dir: 'Folder',
+  create_artifact: 'File',
+  export_week_excel: 'Excel',
+  capture_screen: 'Screen',
+  run_command: 'Command',
+  ask_user: 'Question',
+  propose_memory: 'Memory',
+  propose_correction: 'Correction',
+  undo_correction: 'Undo',
+  forget_memory: 'Forget',
+}
+
+/** Settled trail (or a lone Sources chip) when the turn did visible work
+ *  or a recorded packet can be inspected. */
+export function showSettledActivity(input: {
+  hasSteps: boolean
+  citationCount: number
+  canInspect: boolean
+}): boolean {
+  return input.hasSteps || input.citationCount > 0 || input.canInspect
+}
+
+/** Short inline chip for a consulted tool — a status, not a file path. */
+export function shortToolChip(tool: string): string {
+  if (tool.startsWith('mcp_')) return 'Connected source'
+  return TOOL_CHIP_LABELS[tool] ?? tool.replace(/[_-]+/g, ' ')
 }
 
 export function summarizeAgentTurn(agent: {
   toolTrace?: AgentToolTraceEntryLike[]
   fileDisclosures?: Array<Pick<AIMessageFileDisclosure, 'path'>>
   citations?: AIMessageCitation[]
+  durationMs?: number | null
 } | null | undefined): AgentTurnSummary | null {
   if (!agent) return null
   const toolsConsulted = aggregateToolsConsulted(agent.toolTrace) ?? []
   const sourceCount = toolsConsulted.filter((consulted) => !NON_SOURCE_TOOLS.has(consulted.tool)).length
   const fileCount = new Set((agent.fileDisclosures ?? []).map((disclosure) => disclosure.path)).size
   const citationCount = agent.citations?.length ?? 0
-  const parts: string[] = []
-  if (sourceCount > 0) parts.push(`${sourceCount} source${sourceCount === 1 ? '' : 's'}`)
-  if (fileCount > 0) parts.push(`${fileCount} file${fileCount === 1 ? '' : 's'}`)
-  const label = parts.length > 0
-    ? `Used ${parts.join(' · ')}`
-    : citationCount > 0
-      ? 'Answered from your day record'
-      : ''
-  return { toolsConsulted, sourceCount, fileCount, citationCount, label }
+  const durationMs = typeof agent.durationMs === 'number' && Number.isFinite(agent.durationMs)
+    ? Math.max(0, agent.durationMs)
+    : null
+  const hasWork = toolsConsulted.length > 0 || fileCount > 0 || citationCount > 0
+  const label = workedSummaryLabel(durationMs, hasWork)
+  return { toolsConsulted, sourceCount, fileCount, citationCount, durationMs, label }
 }
