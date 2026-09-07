@@ -2,10 +2,10 @@
 //
 // macOS: a bundled EventKit helper (src/native/calendar-helper). One Calendar
 // permission prompt on Daylens.app; every account already in Apple Calendar
-// is visible. Windows: Outlook COM via PowerShell (fallback until a
-// package-identity WinRT path is proven — docs/research/native-calendar.md).
-// Linux: no universal store; this function returns null. Neither live path
-// touches the network. OAuth is fallback-only and is not wired here.
+// is visible. Windows: Outlook COM via PowerShell until a package-identity
+// WinRT path is proven. Linux: no universal store; this function returns
+// null. Neither live path touches the network. OAuth is fallback-only and
+// is not wired here.
 //
 // The result contract distinguishes two very different "nothing"s for the
 // scan ledger (externalSignals.ts), exactly like gitSignals.ts: an
