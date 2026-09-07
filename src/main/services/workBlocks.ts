@@ -2744,6 +2744,20 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
 // Exported so tests can build real live-day PageRefs from focus_events
 // through the actual producer, rather than hand-rolling a shape that could
 // drift from what this function really returns.
+// Exported so the index-plan coverage explains the statement the Timeline
+// actually runs, not a copy of it: this is the read that pays for the
+// (event_type, ts_ms) index, once per block.
+export const TAB_EVIDENCE_SQL = `
+      SELECT ts_ms, url, page_title, app_bundle_id
+      FROM focus_events
+      WHERE event_type IN ('tab_changed', 'tab_sampled')
+        AND url IS NOT NULL
+        AND trim(url) <> ''
+        AND ts_ms >= ?
+        AND ts_ms < ?
+      ORDER BY ts_ms ASC, id ASC
+    `
+
 export function buildTabEvidenceFromFocusEvents(
   db: Database.Database,
   startTime: number,
@@ -2757,16 +2771,7 @@ export function buildTabEvidenceFromFocusEvents(
   }
   let rows: TabRow[] = []
   try {
-    rows = db.prepare(`
-      SELECT ts_ms, url, page_title, app_bundle_id
-      FROM focus_events
-      WHERE event_type IN ('tab_changed', 'tab_sampled')
-        AND url IS NOT NULL
-        AND trim(url) <> ''
-        AND ts_ms >= ?
-        AND ts_ms < ?
-      ORDER BY ts_ms ASC, id ASC
-    `).all(startTime, endTime) as TabRow[]
+    rows = db.prepare(TAB_EVIDENCE_SQL).all(startTime, endTime) as TabRow[]
   } catch {
     return []
   }

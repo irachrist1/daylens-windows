@@ -3448,6 +3448,18 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 81,
+    description:
+      'Index focus_events by (event_type, ts_ms). Every read that asks for one kind of event inside a window — the per-block tab evidence the Timeline builds, the machine-state lookback a day opens with — could only use the event_type index, so it scanned every event of that kind across all history and sorted the result in a temp B-tree. On a 506k-event profile the Timeline day payload spent 651ms there. The single-column event_type index is dropped: the composite serves everything it served, so insert cost is unchanged.',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_focus_events_type_ts ON focus_events(event_type, ts_ms);
+        DROP INDEX IF EXISTS idx_focus_events_type;
+      `)
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0
