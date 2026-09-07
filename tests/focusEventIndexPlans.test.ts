@@ -6,28 +6,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
-import { insertFocusEvents } from '../src/main/db/focusEventRepository.ts'
+import {
+  MACHINE_STATE_EVENTS_BEFORE_SQL,
+  insertFocusEvents,
+} from '../src/main/db/focusEventRepository.ts'
+import { TAB_EVIDENCE_SQL } from '../src/main/services/workBlocks.ts'
 import type { FocusEventInsert } from '../src/main/core/evidence/focusEvent.ts'
 
-// Exactly the shape buildTabEvidenceFromFocusEvents runs once per block.
-const TAB_EVIDENCE_SQL = `
-  SELECT ts_ms, url, page_title, app_bundle_id
-  FROM focus_events
-  WHERE event_type IN ('tab_changed', 'tab_sampled')
-    AND url IS NOT NULL
-    AND trim(url) <> ''
-    AND ts_ms >= ? AND ts_ms < ?
-  ORDER BY ts_ms ASC, id ASC
-`
-
-// The machine-state lookback every day open runs.
-const MACHINE_STATE_SQL = `
-  SELECT ts_ms, event_type
-  FROM focus_events
-  WHERE ts_ms < ? AND event_type IN ('sleep', 'wake', 'lock', 'unlock')
-  ORDER BY ts_ms DESC
-  LIMIT ?
-`
+// The statements below are imported, not copied: a plan assertion against a
+// test-owned duplicate would keep passing after the real query stopped using
+// the index.
 
 function plan(db: ReturnType<typeof createProductionTestDatabase>, sql: string, ...params: unknown[]): string {
   return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>)
@@ -85,7 +73,7 @@ test('the per-block tab-evidence read seeks on event_type AND ts_ms', () => {
 test('the machine-state lookback seeks on event_type AND ts_ms', () => {
   const db = createProductionTestDatabase()
   try {
-    const detail = plan(db, MACHINE_STATE_SQL, 0, 20)
+    const detail = plan(db, MACHINE_STATE_EVENTS_BEFORE_SQL, 0, 20)
     assert.match(detail, /idx_focus_events_type_ts/)
     assert.match(detail, /ts_ms</, `the boundary must narrow the index seek: ${detail}`)
   } finally {

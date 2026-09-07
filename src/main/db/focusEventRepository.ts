@@ -156,18 +156,20 @@ export interface FocusEventTimeAndType {
 /** The most recent machine-state transitions strictly before a boundary —
  *  lets a day reconstruct whether it began asleep or locked. Returned
  *  newest-first, capped. */
-export function listMachineStateEventsBefore(
-  db: Database.Database,
-  beforeMs: number,
-  limit = 20,
-): FocusEventTimeAndType[] {
-  return db.prepare(`
+export const MACHINE_STATE_EVENTS_BEFORE_SQL = `
     SELECT ts_ms, event_type
     FROM focus_events
     WHERE ts_ms < ? AND event_type IN ('sleep', 'wake', 'lock', 'unlock')
     ORDER BY ts_ms DESC
     LIMIT ?
-  `).all(beforeMs, limit) as FocusEventTimeAndType[]
+  `
+
+export function listMachineStateEventsBefore(
+  db: Database.Database,
+  beforeMs: number,
+  limit = 20,
+): FocusEventTimeAndType[] {
+  return db.prepare(MACHINE_STATE_EVENTS_BEFORE_SQL).all(beforeMs, limit) as FocusEventTimeAndType[]
 }
 
 /** Event timestamps and types for a window, chronological. */
