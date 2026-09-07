@@ -99,6 +99,13 @@ test('a usable thread override wins; an unusable one falls back to Settings', ()
     providerAvailability: { openai: false, 'claude-cli': true },
   })
   assert.deepEqual(fallen, { provider: 'claude-cli', model: 'claude-haiku-4-5', source: 'account' })
+
+  const unsupportedCli = resolveChatSelection({
+    settings,
+    thread: { provider: 'codex-cli', model: 'gpt-5.5' },
+    providerAvailability: { 'codex-cli': true, 'claude-cli': true },
+  })
+  assert.deepEqual(unsupportedCli, { provider: 'claude-cli', model: 'claude-haiku-4-5', source: 'account' })
 })
 
 test('switching Settings provider clears a leftover chat pin', () => {

@@ -105,7 +105,12 @@ export function resolveChatSelection(input: {
 }): { provider: AIProviderMode; model: string; source: ChatSelectionSource } {
   const threadProvider = input.thread?.provider ?? null
   const threadModel = input.thread?.model ?? null
-  if (threadProvider && threadModel && providerIsUsable(threadProvider, input.providerAvailability)) {
+  if (
+    threadProvider
+    && threadModel
+    && providerIsUsable(threadProvider, input.providerAvailability)
+    && cliProviderCanServeChat(threadProvider)
+  ) {
     return { provider: threadProvider, model: threadModel, source: 'thread' }
   }
   const provider = chatProvider(input.settings)
