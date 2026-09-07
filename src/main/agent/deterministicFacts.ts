@@ -25,7 +25,7 @@ import type { ResolvedContextTimeRange } from '../services/contextPacket'
 import { queryCorrectedActivityFactsForDay } from '../core/query/activityFactsQuery'
 import { aggregateAppSummaries, getCorrectedWebsiteSummariesForRange } from '../services/activityFacts'
 import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
-import { ownedDayBounds } from '../lib/dayOwnership'
+import { localDayBounds } from '../lib/localDate'
 import { namedUsageSubject, siteMatchesLookup } from '../lib/usageLookup'
 import { websiteDisplayLabel } from '../lib/appIdentity'
 import { renderDuration, scanDurations } from './factClaims'
@@ -165,7 +165,7 @@ function readScope(db: Database.Database, dates: readonly string[], nowMs: numbe
 
   const siteTotals = new Map<string, number>()
   for (const date of dates) {
-    const [fromMs, toMs] = ownedDayBounds(db, date)
+    const [fromMs, toMs] = localDayBounds(date)
     for (const summary of getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)) {
       if (summary.totalSeconds <= 0) continue
       const domain = summary.domain.toLowerCase()

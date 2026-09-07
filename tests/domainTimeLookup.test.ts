@@ -9,7 +9,9 @@ import { buildDaylensTools } from '../src/main/agent/daylensTools.ts'
 import {
   namedUsageSubject,
   resolveUsageLookupKind,
+  siteMatchesLookup,
 } from '../src/main/lib/usageLookup.ts'
+import { deterministicFactsForQuestion } from '../src/main/agent/deterministicFacts.ts'
 
 const DATE = '2026-07-15'
 const COURSERA_SECONDS = (3 * 3600) + (43 * 60)
@@ -112,6 +114,13 @@ test('resolveUsageLookupKind: a website name is not a loose app match', () => {
   assert.equal(resolveUsageLookupKind({ lookup: 'Dia', apps, siteDomains: sites }), 'app')
 })
 
+test('siteMatchesLookup: dotted lookups include subdomains without matching their parent', () => {
+  assert.equal(siteMatchesLookup('mail.google.com', 'google.com'), true)
+  assert.equal(siteMatchesLookup('google.com', 'mail.google.com'), false)
+  assert.equal(siteMatchesLookup('notgoogle.com', 'google.com'), false)
+  assert.equal(siteMatchesLookup('coursera.org', 'Coursera'), true)
+})
+
 test('namedUsageSubject: domain-time wording routes to the site, app names stay apps', () => {
   const apps = ['Course', 'Slack', 'Dia', 'Google Chrome']
   const sites = ['coursera.org', 'youtube.com', 'github.com', 'slack.com']
@@ -165,6 +174,35 @@ test('get_app_usage: Coursera returns website time, not the 10m Course app', asy
   )
   assert.equal(courseApp.fromWebsiteVisits, undefined)
   assert.equal(courseApp.totalSeconds, COURSE_APP_SECONDS)
+  db.close()
+})
+
+test('site totals use the same calendar-day bounds as get_app_usage', async () => {
+  const db = createProductionTestDatabase()
+  const chrome = { bundleId: 'com.google.Chrome', appName: 'Google Chrome', canonicalAppId: 'chrome', category: 'browsing' }
+  seedSession(db, chrome, localMs(23), localMs(25))
+  seedVisit(db, {
+    domain: 'coursera.org',
+    title: 'Late course | Coursera',
+    url: 'https://www.coursera.org/learn/late',
+    browserBundleId: chrome.bundleId,
+    canonicalBrowserId: chrome.canonicalAppId,
+  }, localMs(23))
+
+  const tools = buildDaylensTools(db)
+  const usage = await (tools.get_app_usage as any).execute(
+    { appName: 'Coursera', startDate: DATE, endDate: DATE },
+    {} as any,
+  )
+  const facts = deterministicFactsForQuestion(
+    db,
+    `How much time did I spend on Coursera on ${DATE}?`,
+    { dates: [DATE] },
+    { nowMs: localMs(30) },
+  )
+
+  assert.equal(facts[0]?.kind, 'site_total_time')
+  assert.equal(facts[0]?.value, usage.totalSeconds)
   db.close()
 })
 

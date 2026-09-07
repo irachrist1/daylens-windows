@@ -51,14 +51,17 @@ export function appMatchesLoosely(app: AppLookupIdentity, lookup: string): boole
 }
 
 export function siteMatchesLookup(domain: string, lookupRaw: string): boolean {
-  const needle = normalizeUsageLookup(lookupRaw)
-  if (!needle || needle.length < 3) return false
-  const dn = normalizeUsageLookup(domain)
-  if (!dn) return false
-  if (dn === needle) return true
-  if (needle.length >= 4 && dn.includes(needle)) return true
-  if (dn.length >= 4 && needle.includes(dn)) return true
-  return false
+  const normalizedDomain = domain.trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '')
+  const normalizedLookup = lookupRaw.trim().toLowerCase().replace(/^www\./, '').replace(/\.$/, '')
+  const needle = normalizeUsageLookup(normalizedLookup)
+  if (!normalizedDomain || !needle || needle.length < 3) return false
+
+  if (normalizedLookup.includes('.')) {
+    return normalizedDomain === normalizedLookup || normalizedDomain.endsWith(`.${normalizedLookup}`)
+  }
+
+  return siteLookupNames(normalizedDomain)
+    .some((name) => normalizeUsageLookup(name) === needle)
 }
 
 export function siteLookupNames(domain: string): string[] {
