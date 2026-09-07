@@ -23,6 +23,7 @@ import { collectFocusAppSignals } from './enrichmentDiscovery'
 import { localDateString, shiftLocalDateString } from '../lib/localDate'
 import { isCaptureConsentCurrent } from '@shared/captureConsent'
 import { adoptExternalSignalEntities } from './entities/entityAdoption'
+import { invalidateProjectionScope } from '../core/projections/invalidation'
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -125,11 +126,23 @@ export function hasExternalSignalScan(
  *  A finished (past) day's signals never go stale — the day can't change. */
 const LIVE_DAY_STALE_MS = 30 * 60 * 1000
 
+/** In-process completion of today's calendar read (empty or persisted). */
+const liveCalendarCompletedAt = new Map<string, number>()
+const calendarInFlight = new Map<string, Promise<CalendarCollectOutcome>>()
+
+export type CalendarCollectOutcome = 'persisted' | 'empty' | 'skipped' | 'failed' | 'blocked'
+
 function isFresh(db: Database.Database, date: string, source: ExternalSignalSource): boolean {
   const stored = getExternalSignal(db, date, source)
   if (stored) {
     if (date < localDateString()) return true
     return Date.now() - stored.capturedAt < LIVE_DAY_STALE_MS
+  }
+  // An empty live-day calendar completion is remembered in-process for the
+  // same stale window as a stored row. The scan ledger is never used for today.
+  if (source === 'calendar' && date === localDateString()) {
+    const completedAt = liveCalendarCompletedAt.get(date)
+    if (completedAt !== undefined && Date.now() - completedAt < LIVE_DAY_STALE_MS) return true
   }
   // No stored row: a finished day the connectors already scanned came back
   // empty ("collected, nothing found") and cannot change — don't re-run its
@@ -148,6 +161,7 @@ export interface CollectExternalSignalsDeps {
   collectFocus: (date: string) => Promise<import('@shared/types').FocusAppSignal[] | null>
   enrichmentSources: Record<string, boolean>
   isConsentCurrent: () => boolean
+  invalidateTimeline?: (reason: string, date: string) => void
 }
 
 function currentConsentIsGranted(): boolean {
@@ -167,7 +181,97 @@ function defaultDeps(): CollectExternalSignalsDeps {
     collectFocus: (date) => collectFocusAppSignals(date, {}, (app) => enrichmentSources[`focus:${app}`] === true),
     enrichmentSources,
     isConsentCurrent: currentConsentIsGranted,
+    invalidateTimeline: (reason, date) => {
+      invalidateProjectionScope('timeline', reason, { date })
+    },
   }
+}
+
+function markLiveCalendarComplete(date: string): void {
+  if (date === localDateString()) liveCalendarCompletedAt.set(date, Date.now())
+}
+
+function notifyCalendarPersisted(deps: CollectExternalSignalsDeps, date: string): void {
+  const invalidate = deps.invalidateTimeline ?? ((reason, dateStr) => {
+    invalidateProjectionScope('timeline', reason, { date: dateStr })
+  })
+  try {
+    invalidate('calendar-collected', date)
+  } catch { /* no renderer yet; the next Timeline open reads the stored row */ }
+}
+
+function markCalendarScanned(db: Database.Database, date: string): void {
+  const ledgerCutoff = shiftLocalDateString(localDateString(), -1)
+  if (date < ledgerCutoff) recordExternalSignalScan(db, date, 'calendar')
+}
+
+async function collectAndPersistCalendar(
+  date: string,
+  options: { force?: boolean; deps: CollectExternalSignalsDeps },
+): Promise<CalendarCollectOutcome> {
+  const existing = calendarInFlight.get(date)
+  if (existing) return existing
+
+  const run = (async (): Promise<CalendarCollectOutcome> => {
+    const { db, collectCalendar, isConsentCurrent } = options.deps
+    if (!isConsentCurrent()) return 'blocked'
+    if (!options.force && isFresh(db, date, 'calendar')) return 'skipped'
+    try {
+      const calendar = await collectCalendar(date)
+      if (!isConsentCurrent()) return 'blocked'
+      if (calendar && calendar.events.length > 0) {
+        putExternalSignal(db, date, 'calendar', calendar)
+        markCalendarScanned(db, date)
+        markLiveCalendarComplete(date)
+        notifyCalendarPersisted(options.deps, date)
+        return 'persisted'
+      }
+      if (options.force) deleteExternalSignal(db, date, 'calendar')
+      markCalendarScanned(db, date)
+      markLiveCalendarComplete(date)
+      return 'empty'
+    } catch {
+      return 'failed'
+    }
+  })()
+
+  calendarInFlight.set(date, run)
+  try {
+    return await run
+  } finally {
+    if (calendarInFlight.get(date) === run) calendarInFlight.delete(date)
+  }
+}
+
+/** Today's local calendar, before git/focus and without blocking Timeline.
+ *  Persistence of events invalidates the mounted Timeline so they appear
+ *  without a reopen. Never throws. */
+export async function collectTodayCalendarContext(
+  options: { date?: string; deps?: CollectExternalSignalsDeps } = {},
+): Promise<CalendarCollectOutcome> {
+  const isConsentCurrent = options.deps?.isConsentCurrent ?? currentConsentIsGranted
+  if (!isConsentCurrent()) return 'blocked'
+  const date = options.date ?? localDateString()
+  try {
+    const outcome = await collectAndPersistCalendar(date, {
+      deps: options.deps ?? defaultDeps(),
+      force: false,
+    })
+    if (outcome === 'persisted' && isConsentCurrent()) {
+      capture(ANALYTICS_EVENT.WRAPPED_EXTERNAL_SOURCES, {
+        external_sources: ['calendar'],
+        source_count: 1,
+      })
+    }
+    return outcome
+  } catch {
+    return 'failed'
+  }
+}
+
+export function __resetCalendarProgressiveLoadForTests(): void {
+  liveCalendarCompletedAt.clear()
+  calendarInFlight.clear()
 }
 
 /** Run every available connector for a date and persist what they found.
@@ -183,7 +287,7 @@ export async function collectExternalSignals(
   collecting = true
   const fired: ExternalSignalSource[] = []
   try {
-    const { db, collectGit, collectCalendar, collectFocus, enrichmentSources } =
+    const { db, collectGit, collectCalendar, collectFocus, enrichmentSources, invalidateTimeline } =
       options.deps ?? defaultDeps()
 
     // Git and calendar are ALWAYS-ON: read whenever the underlying tools exist
@@ -237,17 +341,12 @@ export async function collectExternalSignals(
 
     if (options.force || !isFresh(db, date, 'calendar')) {
       if (!isConsentCurrent()) return fired
-      try {
-        const calendar = await collectCalendar(date)
-        if (!isConsentCurrent()) return fired
-        if (calendar && calendar.events.length > 0) {
-          putExternalSignal(db, date, 'calendar', calendar)
-          fired.push('calendar')
-        } else {
-          tombstoneIfForced('calendar')
-        }
-        markScanned('calendar')
-      } catch { /* optional source — connector threw; leave any prior row intact */ }
+      const calendarOutcome = await collectAndPersistCalendar(date, {
+        force: options.force,
+        deps: { db, collectGit, collectCalendar, collectFocus, enrichmentSources, isConsentCurrent, invalidateTimeline },
+      })
+      if (calendarOutcome === 'blocked') return fired
+      if (calendarOutcome === 'persisted') fired.push('calendar')
     }
 
     if (options.force || !isFresh(db, date, 'focus_app')) {
@@ -343,11 +442,12 @@ export async function runExternalSignalBackfill(date: string): Promise<void> {
 let scheduled: ReturnType<typeof setInterval> | null = null
 let initialScheduled: ReturnType<typeof setTimeout> | null = null
 
-/** Background cadence: first pass a couple of minutes after launch (today and
- *  yesterday), then a refresh every 6 hours. Cheap: connectors early-exit when
- *  the stored signal is fresh. */
+/** Today's calendar starts immediately; git/focus and yesterday wait a couple
+ *  of minutes, then a refresh every 6 hours. Cheap: connectors early-exit
+ *  when the stored signal is fresh. */
 export function startExternalSignalCollection(): void {
   if (scheduled || initialScheduled) return
+  void collectTodayCalendarContext()
   const run = () => {
     const today = localDateString()
     const yesterday = shiftLocalDateString(localDateString(), -1)
