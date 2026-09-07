@@ -33,11 +33,11 @@ export const BANNED_PHRASES = [
 
 // Carryover / homework / guilt the wrap must never speak (locked decision +
 // voice.md §2.9). No "pick it up tomorrow", no drift, no focus grades.
+// "distraction" is a live product noun (profile, alerts) and is not banned.
 export const HOMEWORK_GUILT_PATTERNS = [
   /needs?\b[^.]{0,24}\breview\b/i,
   /\bpick (?:it|this|that|them) (?:back )?up\b/i,
   /\bcarry(?:ing)?\b[^.]{0,16}\b(?:forward|over|into (?:tomorrow|next))\b/i,
-  /\bdistraction(?:s)?\b/i,
   /\bfocus(?:ed)?\s+(?:score|percentage|signal)\b/i,
   /\bdrift\b/i,
   /\bproductiv(?:e|ity)\s+score\b/i,
@@ -312,7 +312,7 @@ export function wrapLineViolation(value: string, ctx: LineGuardContext, opts?: W
   const guilt = HOMEWORK_GUILT_PATTERNS.find((p) => p.test(value))
   if (guilt) {
     const matched = value.match(guilt)?.[0] ?? ''
-    return `contains banned homework/guilt/grading language ("${matched}"); never mention drift, distraction, carryover, or focus scores, not even to negate them`
+    return `contains banned homework/guilt/grading language ("${matched}"); never mention drift, carryover, or focus scores, not even to negate them`
   }
   const overclaim = findOverclaimViolation(value)
   if (overclaim) return `${overclaim}; state only what the tracked data observed, plainly`

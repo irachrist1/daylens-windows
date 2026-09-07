@@ -133,6 +133,17 @@ test('midday and other part-of-day words are free prose, never clock tokens', ()
   assert.equal(wrapLineViolation('The morning carried the close and the evening stayed quiet.', ctx), null)
 })
 
+test('wrapLineViolation allows the live distraction noun and still rejects focus-score grading', () => {
+  assert.equal(
+    wrapLineViolation('YouTube was the main distraction surface, and it sat in the evening where it belonged.', ctx),
+    null,
+  )
+  const drift = wrapLineViolation('The afternoon was just drift after the morning engine work.', ctx)
+  assert.ok(drift && /drift/.test(drift))
+  const score = wrapLineViolation('Your focus score landed well above the rest of the week.', ctx)
+  assert.ok(score && /focus score/.test(score))
+})
+
 // ─── Coverage slide ───────────────────────────────────────────────────────────
 
 function dayFacts(overrides: Partial<DayWrapFacts> = {}): DayWrapFacts {

@@ -126,7 +126,7 @@ Settings `aiProvider` plus the per-provider model is the account default. Chat f
 
 ## Known contradictions and open work
 
-- **Focus score / distraction alerter** are marked "Removed" in `docs/product/v2.md` but fully live (`focusScore.ts`, `distractionAlerter` started at boot, Settings UI, MCP tool). Decide: revive the spec or remove the feature. Left in place because it is live product surface, not dead code.
+- **Focus score / distraction alerter** are in-scope V2 product (DEV-289, 2026-09-07): `focusScore.ts`, `distractionAlerter` started at boot, Settings UI, and the MCP `getDistractionProfile` tool stay. See [V2 feature dispositions](../product/v2.md) and [Focus score and distraction alerts](../specs/focus-and-distraction.md).
 - **Interpretation agent runtime** — flag exists, runtime unwired (see above). Highest-leverage next build.
 - **Block segmentation can bridge untracked gaps** (a lunch inside one "block") and gaps are not yet first-class facts for the narrative — the rules are in [Timeline §Segmentation](../specs/timeline.md) and [Day recap §Gaps](../specs/day-recap-and-analysis.md).
 - **`apps/web` + Convex sync is frozen** pending the encrypted companion replacement (docs/product/v2.md).

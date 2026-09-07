@@ -98,7 +98,7 @@ Managed AI access is paid because its answers use paid model APIs. Core capture,
 
 ## Product boundaries
 
-Daylens is not a productivity score. It should not turn incomplete observation into a judgment about whether someone was focused, distracted, or productive.
+Daylens reports an honest deep-work percentage (focus score) from measured session length, and can send a distraction alert when configured leisure interrupts inferred work. Those are measured facts, not a verdict about personal worth. Narrative surfaces still must not turn incomplete observation into a scolding about focus or productivity. See [Focus score and distraction alerts](../specs/focus-and-distraction.md).
 
 Daylens is not organizational surveillance. Any organizational value must be built from information a person has reviewed and deliberately chosen to share.
 
