@@ -2,13 +2,15 @@
 // roles / §Two consumers, one loop): for ONE low-confidence timeline block,
 // run the same packet-based AI SDK runtime as chat instead of a single direct
 // relabel call. The agent may pull Tier-1 context (window titles, calendar,
-// git, entities) before naming the historical block. Same evidence prompt as
-// the direct relabel (workBlockPrompt), same voice rules, same output contract.
+// git, entities) before naming a historical block. Live screen capture is
+// registered only when the block is still current, and the executor re-checks
+// that authorization. Same evidence prompt as the direct relabel
+// (workBlockPrompt), same voice rules, same output contract.
 //
 // Boundaries, deliberately identical to the chat agent's:
 //   - the turn starts from a recorded interpret-purpose Context packet;
 //   - tools reuse the SAME executors as the wrap/MCP/chat surfaces
-//     (executeWrappedTool, executeTool, buildContextTools);
+//     (executeWrappedTool, executeTool, buildContextTools, buildScreenTools);
 //   - no ask_user / interaction / correction tools — interpretation proposes
 //     over evidence in the background, it never talks to the person;
 //   - usage meters through recordInterpretationAgentUsage (its own
@@ -28,6 +30,7 @@ import { stripCodeFence } from '../lib/wrapNarrativeShared'
 import { languageModelFor } from '../agent/providerModel'
 import { AISdkAgentRuntime } from '../agent/agentRuntime'
 import { buildContextTools } from '../agent/contextTools'
+import { buildScreenTools } from '../agent/screenTools'
 import {
   recordInterpretationAgentUsage,
   resolveProviderConfigsForJob,
@@ -88,6 +91,18 @@ const INTERPRETATION_TOOL_DESCRIPTORS: AgentToolDescriptor[] = [
     permissionState: 'available',
   },
 ]
+
+const LIVE_CAPTURE_DESCRIPTOR: AgentToolDescriptor = {
+  name: 'capture_screen',
+  description: 'One consented still of the live screen, never stored',
+  source: 'daylens',
+  permissionState: 'requires_permission',
+}
+
+function interpretationToolDescriptors(block: WorkContextBlock): AgentToolDescriptor[] {
+  if (!block.isLive) return INTERPRETATION_TOOL_DESCRIPTORS
+  return [...INTERPRETATION_TOOL_DESCRIPTORS, LIVE_CAPTURE_DESCRIPTOR]
+}
 
 /** The agent's output contract: the direct relabel's {label, narrative} plus
  *  the agent's own confidence and reasoning (logged and versioned, never
@@ -240,8 +255,13 @@ async function assembleInterpretPacket(
 // Tier-1 read-only context. Calendar, git, and meeting notes come from the SAME
 // builders the chat agent uses; window titles
 // and entity lookup reuse the wrap/MCP executors so every result crosses the
-// same privacy boundaries before reaching the model.
-function buildInterpretationTools(db: Database.Database, options: { allowCollect: boolean }) {
+// same privacy boundaries before reaching the model. Live screen capture is
+// registered only for a current block, and the executor re-checks that the
+// block is still current.
+function buildInterpretationTools(
+  db: Database.Database,
+  options: { allowCollect: boolean; block: WorkContextBlock },
+) {
   const run = async (fn: () => Promise<unknown> | unknown): Promise<unknown> => {
     try {
       const result = await fn()
@@ -264,6 +284,9 @@ function buildInterpretationTools(db: Database.Database, options: { allowCollect
       execute: ({ entityName }) =>
         run(() => executeTool('getAttributionContext', { entityName }, db)),
     }),
+    ...(options.block.isLive
+      ? buildScreenTools({ isAuthorized: () => options.block.isLive })
+      : {}),
   }
 }
 
@@ -275,7 +298,9 @@ function markContextPacketFailure(error: Error): ContextPacketFailure {
   return Object.assign(error, { contextPacketFailure: true })
 }
 
-export function isInterpretationContextPacketFailure(error: unknown): boolean {
+export function isInterpretationContextPacketFailure(
+  error: unknown,
+): error is ContextPacketFailure {
   return error instanceof Error && (error as ContextPacketFailure).contextPacketFailure === true
 }
 
@@ -322,7 +347,7 @@ export async function runInterpretationAgentRelabel(
       block,
       date,
       destination,
-      INTERPRETATION_TOOL_DESCRIPTORS,
+      interpretationToolDescriptors(block),
     )
   } catch (error) {
     recordInterpretationAgentUsage({
@@ -336,7 +361,12 @@ export async function runInterpretationAgentRelabel(
     VOICE_SYSTEM_PROMPT,
     'You are Daylens.',
     'You label productivity timeline blocks from local activity evidence.',
-    'This block\'s evidence was too weak for a confident name, so you may call the provided read-only tools to pull more context (window titles, calendar, git, known clients/projects) before answering.',
+    block.isLive
+      ? 'This block\'s evidence was too weak for a confident name, so you may call the provided read-only tools to pull more context (window titles, calendar, git, known clients/projects, consented screen) before answering.'
+      : 'This block\'s evidence was too weak for a confident name, so you may call the provided read-only tools to pull more context (window titles, calendar, git, known clients/projects) before answering.',
+    block.isLive
+      ? 'Exhaust cheaper tools first. Escalate to capture_screen only when the block is happening now, naming confidence is still low, and the database cannot resolve the ambiguity — and say why in the required reason.'
+      : 'Do not request a live screen capture. This block is historical; name it from recorded evidence and the read-only tools.',
     'Call a tool only when it can plausibly resolve the ambiguity; answer directly when the evidence already suffices.',
     'Do not use emoji. Be concrete, restrained, and evidence-led. Never mention the model provider.',
     'When you have enough context, reply with ONLY strict JSON:',
@@ -361,7 +391,7 @@ export async function runInterpretationAgentRelabel(
 
   try {
     const runtime = new AISdkAgentRuntime(options.model ?? languageModelFor(config))
-    const tools = buildInterpretationTools(db, { allowCollect: options.allowCollect ?? true })
+    const tools = buildInterpretationTools(db, { allowCollect: options.allowCollect ?? true, block })
     let finalText = ''
     let stepText = ''
     let stepUsedTool = false

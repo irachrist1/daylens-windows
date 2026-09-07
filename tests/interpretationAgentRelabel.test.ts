@@ -12,6 +12,7 @@ import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { setTestDb, clearTestDb } from './support/database-stub.mjs'
 import { __resetSettings, __setSettings, setApiKey } from './support/settings-stub.mjs'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
+import { shouldReanalyzeBlockWithAI } from '../src/main/services/workBlocks.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
 import { listContextPackets } from '../src/main/services/contextPacket.ts'
 import {
@@ -252,6 +253,35 @@ test('flag on: a valid agent label (after a tool call) lands with source ai and 
     assert.equal(usageRows.length, 1)
     assert.equal(usageRows[0].success, 1)
     assert.ok((usageRows[0].input_tokens ?? 0) > 0)
+  } finally {
+    __resetSettings()
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('a live block may advertise capture_screen; day analysis never sends one', async () => {
+  const db = createProductionTestDatabase()
+  seedLowConfidenceDay(db)
+  setTestDb(db)
+  __setSettings({ interpretationAgentEnabled: true, aiProvider: 'anthropic', aiChatProvider: 'anthropic' })
+  await setApiKey('anthropic', 'test-key')
+  const historical = materializeTimelineDayProjection(db, TEST_DATE, null)
+    .blocks.find((block) => !block.isLive)
+  assert.ok(historical, 'seed must produce a historical block')
+  try {
+    await runInterpretationAgentRelabel(db, { ...historical, isLive: true }, {
+      model: answerModel({
+        label: 'Coordinating a release across tools',
+        narrative: 'Live block names from recorded evidence.',
+        confidence: 0.7,
+      }),
+      allowCollect: false,
+    })
+    const packets = listContextPackets(db, { exchangeKind: 'day_analysis', scopeKey: TEST_DATE })
+    const toolNames = new Set(packets.at(-1)?.packet.tools.map((tool) => tool.name))
+    assert.ok(toolNames.has('capture_screen'), 'a current block may advertise consented live capture')
+    assert.equal(shouldReanalyzeBlockWithAI({ ...historical, isLive: true }), false)
   } finally {
     __resetSettings()
     clearTestDb()

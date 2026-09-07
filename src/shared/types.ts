@@ -2465,9 +2465,11 @@ export interface AppSettings {
   activityFreeNotificationText?: boolean
   /** The interpretation-agent live switch (agent-runtime-and-context.md,
    *  DEV-206 / DEV-287). When true, low-confidence day-analysis relabels run
-   *  through the packet-based interpretation agent (same runtime and tiered
-   *  tools as chat). The direct regroup/relabel pipeline remains the floor
-   *  and the fallback when an agent turn fails. */
+   *  through the packet-based interpretation agent. Historical relabels use
+   *  the read-only title, calendar, git, meeting-note, and entity tools.
+   *  Disclosure recording is fail-closed: if the interpret packet cannot be
+   *  stored, Daylens keeps the local label instead of making an unrecorded
+   *  remote call. The direct regroup/relabel pipeline remains the floor. */
   interpretationAgentEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean

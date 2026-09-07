@@ -95,7 +95,9 @@ inferred from content signals, then never the tool.
 - **DEV-287 / #109** — the packet-based interpretation runtime is wired.
   `analyzeDay.ts` reads `interpretationAgentEnabled(getSettings())` and calls
   `runInterpretationAgentRelabel`, which assembles an interpret-purpose context
-  packet and runs `AISdkAgentRuntime` over the same tiered tools as chat. The
+  packet and runs `AISdkAgentRuntime` over the read-only title, calendar, git,
+  meeting-note, and entity tools. Historical relabels do not capture the live
+  screen. If disclosure recording cannot persist, the local label stands. The
   Settings toggle defaults on. The remaining work is proving it beats the
   legacy path on `npm run eval:days`, then treating that as the default naming
   path. This is still the build that moves primary-work naming.

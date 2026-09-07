@@ -30,6 +30,14 @@ test('capture_screen degrades honestly without a capture runtime', async () => {
   assert.ok(result.reason.length > 0)
 })
 
+test('capture_screen refuses when the caller is not authorized for a live capture', async () => {
+  __setSettings({ screenContextExperimentEnabled: true, screenContextPaused: false })
+  const tools = buildScreenTools({ isAuthorized: () => false })
+  const result = await tools.capture_screen.execute!({ reason: 'checking what is on screen right now' }, { toolCallId: 't-auth', messages: [] })
+  assert.equal(result.captured, false)
+  assert.match(result.reason, /historical block/)
+})
+
 test('a refusal maps to a JSON tool result, never image content', async () => {
   __setSettings({ screenContextExperimentEnabled: false, screenContextPaused: false })
   const tools = buildScreenTools()
