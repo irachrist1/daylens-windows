@@ -115,9 +115,9 @@ at a time. Anything that credits more seconds to a domain than the browser was f
 wrong by construction. Netflix once took 1249s inside a block where the browsers held ~800
 foreground seconds.
 
-- **DEV-246 / #68** — "how long was I on Coursera this week" returns the wrong number.
-  `DeterministicFactKind` has no `site_total_time`, so per-site duration is the one fact kind
-  the model is left to guess.
+- **DEV-246 / #68** — "how long was I on Coursera this week" returned the wrong first number
+  because the name was looked up as an app and per-site duration was left to the model.
+  Domain-time questions now resolve through website lookup and a computed `site_total_time`.
 - **DEV-290 / #112** — `HISTORY_FILL_MAX_MS` lets a titleless browser credit up to 4h to its
   last-visited page, usually Netflix or YouTube. **The ticket's proposed fix is dead:** it
   says to populate `browser_context_events`, and that table was dropped
@@ -200,7 +200,7 @@ per-slide wrap export · screen-context honesty pane · corrupt-database recover
 restore/fresh/quit · readable memory mirror · the 5.7s startup integrity scan, fixed.
 
 **Half-built.**
-- `site_total_time` missing from `DeterministicFactKind` — #68
+- ~~`site_total_time` missing from `DeterministicFactKind`~~ — #68; domain-time questions now compute and enforce a site total
 - interpretation-agent runtime behind a flag that logs "not wired yet" — #109
 - Context Inspector: backend fills `ChatAgentResult.evidence`, no UI reads it
 - ~~command palette never reaches `planRetrieval`~~ — **not true**;
