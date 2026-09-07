@@ -1,3 +1,4 @@
+import { accountProvider, chatProvider } from '@shared/aiProviderState'
 import type { AIProviderMode, AppSettings } from '@shared/types'
 
 // Invariant #12: every AI surface runs on the provider the user picked in
@@ -11,24 +12,26 @@ export function selectJobProvider(
   usesChatOverride: boolean,
   settings: Pick<AppSettings, 'aiProvider' | 'aiChatProvider'>,
 ): AIProviderMode {
-  if (usesChatOverride) {
-    return settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
-  }
-  return settings.aiProvider ?? 'anthropic'
+  return usesChatOverride ? chatProvider(settings) : accountProvider(settings)
 }
 
 /** The settings write to actually persist, given what is being changed.
  *
  *  Changing the provider retires a chat pin set earlier, unless the same write
- *  states a new one. The chat picker only offers API providers, so a pin left
- *  behind after switching to a CLI provider is unreachable from the chat UI:
- *  Settings would say Claude CLI while chat kept billing the old account. */
+ *  states a new one. A leftover pin after a Settings switch is how Settings
+ *  can say Claude CLI while chat keeps calling the previous account. */
 export function applyProviderChangeToSettings(
   previous: Pick<AppSettings, 'aiProvider' | 'aiChatProvider'>,
   partial: Partial<AppSettings>,
 ): Partial<AppSettings> {
   const providerChanged = partial.aiProvider != null && partial.aiProvider !== previous.aiProvider
   const statesItsOwnPin = partial.aiChatProvider != null
-  if (!providerChanged || statesItsOwnPin || previous.aiChatProvider === undefined) return partial
-  return { ...partial, aiChatProvider: undefined }
+  const clearsPin = partial.aiChatProvider === null || partial.aiChatProvider === undefined
+  if (providerChanged && !statesItsOwnPin && previous.aiChatProvider !== undefined) {
+    return { ...partial, aiChatProvider: undefined }
+  }
+  if ('aiChatProvider' in partial && clearsPin) {
+    return { ...partial, aiChatProvider: undefined }
+  }
+  return partial
 }

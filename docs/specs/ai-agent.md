@@ -159,6 +159,8 @@ The proposal shows the exact fact and how it will be used. Saving requires confi
 
 ## Models
 
+The shipping default is Claude Haiku 4.5 (`claude-haiku-4-5` on desktop, `claude-haiku-4-5-20251001` on the web companion). Settings and the chat picker resolve the same account provider and model. A thread may override that choice for one conversation; otherwise the next answer uses the Settings selection.
+
 People choose their managed model. The model picker shows:
 
 - provider and model name
