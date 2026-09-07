@@ -162,6 +162,7 @@ export interface CollectExternalSignalsDeps {
   enrichmentSources: Record<string, boolean>
   isConsentCurrent: () => boolean
   invalidateTimeline?: (reason: string, date: string) => void
+  captureExternalSources?: (sources: ExternalSignalSource[]) => void
 }
 
 function currentConsentIsGranted(): boolean {
@@ -208,9 +209,9 @@ function markCalendarScanned(db: Database.Database, date: string): void {
 async function collectAndPersistCalendar(
   date: string,
   options: { force?: boolean; deps: CollectExternalSignalsDeps },
-): Promise<CalendarCollectOutcome> {
+): Promise<{ outcome: CalendarCollectOutcome; owner: boolean }> {
   const existing = calendarInFlight.get(date)
-  if (existing) return existing
+  if (existing) return { outcome: await existing, owner: false }
 
   const run = (async (): Promise<CalendarCollectOutcome> => {
     const { db, collectCalendar, isConsentCurrent } = options.deps
@@ -237,7 +238,7 @@ async function collectAndPersistCalendar(
 
   calendarInFlight.set(date, run)
   try {
-    return await run
+    return { outcome: await run, owner: true }
   } finally {
     if (calendarInFlight.get(date) === run) calendarInFlight.delete(date)
   }
@@ -253,15 +254,19 @@ export async function collectTodayCalendarContext(
   if (!isConsentCurrent()) return 'blocked'
   const date = options.date ?? localDateString()
   try {
-    const outcome = await collectAndPersistCalendar(date, {
-      deps: options.deps ?? defaultDeps(),
+    const deps = options.deps ?? defaultDeps()
+    const { outcome, owner } = await collectAndPersistCalendar(date, {
+      deps,
       force: false,
     })
-    if (outcome === 'persisted' && isConsentCurrent()) {
-      capture(ANALYTICS_EVENT.WRAPPED_EXTERNAL_SOURCES, {
-        external_sources: ['calendar'],
-        source_count: 1,
+    if (owner && outcome === 'persisted' && isConsentCurrent()) {
+      const captureExternalSources = deps.captureExternalSources ?? ((sources: ExternalSignalSource[]) => {
+        capture(ANALYTICS_EVENT.WRAPPED_EXTERNAL_SOURCES, {
+          external_sources: sources,
+          source_count: sources.length,
+        })
       })
+      captureExternalSources(['calendar'])
     }
     return outcome
   } catch {
@@ -341,12 +346,12 @@ export async function collectExternalSignals(
 
     if (options.force || !isFresh(db, date, 'calendar')) {
       if (!isConsentCurrent()) return fired
-      const calendarOutcome = await collectAndPersistCalendar(date, {
+      const { outcome: calendarOutcome, owner } = await collectAndPersistCalendar(date, {
         force: options.force,
         deps: { db, collectGit, collectCalendar, collectFocus, enrichmentSources, isConsentCurrent, invalidateTimeline },
       })
       if (calendarOutcome === 'blocked') return fired
-      if (calendarOutcome === 'persisted') fired.push('calendar')
+      if (owner && calendarOutcome === 'persisted') fired.push('calendar')
     }
 
     if (options.force || !isFresh(db, date, 'focus_app')) {

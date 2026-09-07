@@ -190,12 +190,16 @@ test('overlapping first-open and cadence collects share one in-flight calendar r
   const gate = new Promise<void>((resolve) => { release = resolve })
   let calendarCalls = 0
   const invalidations: Array<{ reason: string; date: string }> = []
+  const analyticsSources: string[][] = []
   const injected = deps(db, {
     invalidations,
     calendar: async () => {
       calendarCalls += 1
       await gate
       return STANDUP
+    },
+    captureExternalSources: (sources) => {
+      analyticsSources.push(sources)
     },
   })
 
@@ -205,5 +209,6 @@ test('overlapping first-open and cadence collects share one in-flight calendar r
   assert.deepEqual(await Promise.all([first, second]), ['persisted', 'persisted'])
   assert.equal(calendarCalls, 1)
   assert.equal(invalidations.length, 1)
+  assert.deepEqual(analyticsSources, [['calendar']], 'one shared read emits analytics once')
   db.close()
 })
