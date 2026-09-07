@@ -251,3 +251,69 @@ test('scanDurations treats raw seconds as a duration so 608 seconds cannot hide'
   assert.equal(found.length, 1)
   assert.equal(found[0].seconds, 608)
 })
+
+test('sealed cross-midnight site time follows owned-day bounds, not calendar midnight', () => {
+  const db = createProductionTestDatabase()
+  const sittingStart = new Date(2026, 5, 20, 23, 50, 0, 0).getTime()
+  const sittingEnd = new Date(2026, 5, 21, 2, 45, 0, 0).getTime()
+  const laterStart = new Date(2026, 5, 21, 4, 0, 0, 0).getTime()
+  const laterEnd = new Date(2026, 5, 21, 5, 0, 0, 0).getTime()
+  const nowMs = new Date(2026, 5, 21, 12, 0, 0, 0).getTime()
+  const sittingSeconds = Math.round((sittingEnd - sittingStart) / 1000)
+
+  db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES ('com.google.Chrome', 'Google Chrome', ?, ?, ?, 'browsing', 1, 'Example Domain',
+      'Google Chrome', 'chrome', 'com.google.Chrome', 'test', 1)
+  `).run(sittingStart, sittingEnd, sittingSeconds)
+  db.prepare(`
+    INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source)
+    VALUES ('example.com', 'Example Domain', 'https://example.com/', ?, ?, 30,
+      'com.google.Chrome', 'chrome', 'chrome_history')
+  `).run(sittingStart, sittingStart * 1000)
+  db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES ('com.todesktop.230313mzl4w4u92', 'Cursor', ?, ?, ?, 'development', 1, 'daylens',
+      'Cursor', 'cursor', 'com.todesktop.230313mzl4w4u92', 'test', 1)
+  `).run(laterStart, laterEnd, Math.round((laterEnd - laterStart) / 1000))
+
+  const june20 = getTimelineDayPayload(db, '2026-06-20', null)
+  const june21 = getTimelineDayPayload(db, '2026-06-21', null)
+  const june20Site = june20.websites.find((site) => site.domain.replace(/^www\./, '') === 'example.com')
+  const june21Site = june21.websites.find((site) => site.domain.replace(/^www\./, '') === 'example.com')
+  assert.ok(june20Site, 'Timeline must keep the sealed sitting on June 20')
+  assert.equal(june20Site.totalSeconds, sittingSeconds)
+  assert.equal(june21Site?.totalSeconds ?? 0, 0, 'Timeline June 21 must not take the overnight site')
+
+  const june20Facts = deterministicFactsForQuestion(
+    db,
+    'how long was I on example.com?',
+    { dates: ['2026-06-20'] },
+    { nowMs },
+  )
+  const june21Facts = deterministicFactsForQuestion(
+    db,
+    'how long was I on example.com?',
+    { dates: ['2026-06-21'] },
+    { nowMs },
+  )
+  const june20Count = deterministicFactsForQuestion(db, 'how many sites?', { dates: ['2026-06-20'] }, { nowMs })
+  const june21Count = deterministicFactsForQuestion(db, 'how many sites?', { dates: ['2026-06-21'] }, { nowMs })
+
+  assert.equal(june20Facts[0]?.kind, 'site_total_time')
+  assert.equal(june20Facts[0].value, june20Site.totalSeconds)
+  assert.equal(
+    june21Facts.find((fact) => fact.kind === 'site_total_time')?.value ?? 0,
+    june21Site?.totalSeconds ?? 0,
+  )
+  assert.equal(june20Count[0]?.kind, 'site_count')
+  assert.equal(june20Count[0]?.value, 1)
+  assert.equal(june21Count[0]?.kind, 'site_count')
+  assert.equal(june21Count[0]?.value, 0)
+  db.close()
+})

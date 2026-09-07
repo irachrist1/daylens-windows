@@ -164,7 +164,7 @@ For a full-day question, the initial packet may include:
 - the sequence of corrected Timeline blocks
 - resolved meetings and whether evidence supports that they occurred
 - project, client, person, repository, file, page, and application relationships
-- deterministic durations and meaningful transitions, including per-site totals from the same reconciled website ledger Apps reads (not a history-row guess, and not raw seconds)
+- deterministic durations and meaningful transitions, including per-site totals from the same reconciled website ledger and owned-day bounds Apps and Timeline read (not a history-row guess, not a calendar-midnight split, and not raw seconds)
 - significant connected events such as a pull request, issue change, or meeting note
 - capture gaps, exclusions that affect completeness, and material source conflicts
 

@@ -31,7 +31,7 @@ import {
   browserPageCoverageNoteText,
 } from '../services/activityFacts'
 import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
-import { localDayBounds } from '../lib/localDate'
+import { ownedDayBounds } from '../lib/dayOwnership'
 import { namedUsageSubject, siteMatchesLookup } from '../lib/usageLookup'
 import { websiteDisplayLabel } from '../lib/appIdentity'
 import { renderDuration, scanDurations } from './factClaims'
@@ -197,7 +197,10 @@ function readScope(db: Database.Database, dates: readonly string[], nowMs: numbe
   const siteBrowserIds = new Map<string, Set<string>>()
   const coverageNotesByBrowser = new Map<string, string[]>()
   for (const date of dates) {
-    const [fromMs, toMs] = localDayBounds(date)
+    // Timeline and Apps assign a sealed late-night sitting to the day it
+    // started. Calendar midnight would split that sitting and make chat
+    // site totals disagree with the product UI.
+    const [fromMs, toMs] = ownedDayBounds(db, date, { nowMs })
     for (const summary of getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)) {
       if (summary.totalSeconds <= 0) continue
       const domain = normalizeSiteDomain(summary.domain)

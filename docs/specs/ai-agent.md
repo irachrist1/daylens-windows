@@ -50,7 +50,7 @@ Every factual answer contains:
 4. Inspectable sources and privacy indicators.
 5. A clarification or specific uncertainty only when it changes the answer.
 
-The agent never invents a duration, page, file, meeting, person, project, outcome, or completion state. Site totals (“how long on Coursera?”) and app totals are computed facts from the same corrected ledger Timeline and Apps read — including page time filled onto a second-monitor full-screen browser span. An application being in front is evidence of activity, not automatic proof that an article was fully absorbed or a task was finished. Stronger language requires supporting page dwell, repeated interaction, connected records, an explicit statement, or another accepted signal.
+The agent never invents a duration, page, file, meeting, person, project, outcome, or completion state. Site totals (“how long on Coursera?”) and app totals are computed facts from the same corrected ledger Timeline and Apps read — same owned-day window, including page time filled onto a second-monitor full-screen browser span. An application being in front is evidence of activity, not automatic proof that an article was fully absorbed or a task was finished. Stronger language requires supporting page dwell, repeated interaction, connected records, an explicit statement, or another accepted signal.
 
 ## Agent flow
 

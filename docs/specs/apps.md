@@ -99,7 +99,7 @@ Projects and clients remain reusable filters and entity links rather than top-le
 
 ### Day
 
-Shows applications and their activity for one local calendar day, matching Timeline exactly.
+Shows applications and their activity for one local day — the same owned-day window Timeline uses, so a sitting that crosses midnight stays on the day that started it.
 
 ### Week
 
