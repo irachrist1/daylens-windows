@@ -22,12 +22,13 @@ export function consumePendingChatSeed(): string | null {
   return value
 }
 
-/** The AI tab's access gate starts unresolved on every mount (settings and
- *  hasApiKey are null until the provider resource loads) and the tab renders
- *  a loading gate with no composer. Consuming the one-shot stash then would
- *  destroy the seed before anything could send or show it, so this consumes
- *  only once the gate has resolved; until then the stash survives untouched
- *  for a later effect run. */
+/** The AI tab's access verdict starts unresolved on every mount (settings and
+ *  hasApiKey are null until the provider resource loads). Seeding has to choose
+ *  between sending the prompt and pre-filling it, and with no verdict there is
+ *  nothing to choose on, so consuming the one-shot stash then would destroy the
+ *  seed before anything could send or show it. This consumes only once the
+ *  verdict resolves; until then the stash survives untouched for a later effect
+ *  run. */
 export function consumePendingChatSeedWhenReady(
   settings: unknown,
   hasApiKey: boolean | null,

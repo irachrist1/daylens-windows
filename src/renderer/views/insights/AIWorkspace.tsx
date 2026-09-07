@@ -257,6 +257,24 @@ export default function AIWorkspace() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onNewChat])
 
+  // The composer paints before the provider verdict lands, so a send fired in
+  // that window would hit the hook's access check and vanish. Hold it here and
+  // dispatch it the moment access is known.
+  const queuedSubmitRef = useRef<string | null>(null)
+  const onComposerSubmit = useCallback((text: string) => {
+    if (hasApiKey == null) {
+      queuedSubmitRef.current = text
+      return
+    }
+    submitMessage(text)
+  }, [hasApiKey, submitMessage])
+  useEffect(() => {
+    const queued = queuedSubmitRef.current
+    if (hasApiKey == null || queued == null) return
+    queuedSubmitRef.current = null
+    if (hasApiKey) submitMessage(queued)
+  }, [hasApiKey, submitMessage])
+
   // Seed a chat from another view (e.g. Settings → Memory → "Chat about your
   // memory"). Always start a NEW thread, then SEND the seed as its first
   // message so the person lands in a conversation that has visibly started
@@ -281,10 +299,10 @@ export default function AIWorkspace() {
   // This view mounts only after navigation, so a seed queued before navigate
   // (Settings stashes it, then navigates here) is read on mount. The old
   // event-only path fired before this listener existed and dropped the prompt.
-  // Consumption waits for the access gate: on a fresh mount settings/hasApiKey
-  // are still null and the loading gate renders with no composer, so consuming
-  // then would destroy the seed for everyone. The one-shot stash means the
-  // effect firing again after the gate resolves cannot double-send.
+  // Consumption waits for the access verdict: seedChat has to choose between
+  // sending and pre-filling, and until settings/hasApiKey resolve there is no
+  // verdict to choose on — consuming then would destroy the seed. The one-shot
+  // stash means the effect firing again after it resolves cannot double-send.
   useEffect(() => {
     const pending = consumePendingChatSeedWhenReady(settings, hasApiKey)
     if (pending) seedChat(pending)
@@ -432,35 +450,30 @@ export default function AIWorkspace() {
     }
   }, [activeThreadId, threadSettings.instructions, refreshProvider])
 
-  // ── Load gate ──────────────────────────────────────────────────────────────
-  if (settings == null || hasApiKey == null) {
-    if (loadError && !initialLoading) {
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, height: '100%', padding: 24 }}>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
-            Couldn't load AI settings. {loadError}
-          </p>
-          <button type="button" onClick={() => { void refreshProvider() }} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
-            Retry
-          </button>
-        </div>
-      )
-    }
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Loading AI…</p>
-      </div>
-    )
-  }
+  // ── Provider verdict ───────────────────────────────────────────────────────
+  // The probe behind `settings` / `hasApiKey` reads settings, detects keys and
+  // CLI tools and asks the billing service, so it can take seconds. Nothing on
+  // this screen waits for it: the shell, the header and the composer paint on
+  // the first frame and the pieces that genuinely need the verdict fill in when
+  // it arrives.
+  const providerPending = settings == null || hasApiKey == null
+  const providerFailed = providerPending && Boolean(loadError) && !initialLoading
+  // Access is only DENIED once the probe says so; an unresolved verdict keeps
+  // showing the chat rather than flashing the connect prompt at everyone.
+  const chatVisible = hasApiKey ?? true
 
-  const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
-  const providerMeta = AI_PROVIDER_META[activeChatProvider]
-  const modelLabel = providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
+  const activeChatProvider = settings ? (settings.aiChatProvider ?? settings.aiProvider) : null
+  const providerMeta = activeChatProvider ? AI_PROVIDER_META[activeChatProvider] : null
+  const modelLabel = providerMeta
+    ? providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
+    : null
   // D4: when this thread overrides the model, the subline shows THAT model.
   const overrideActive = Boolean(threadSettings.provider && threadSettings.model)
-  const displayProviderMeta = AI_PROVIDER_META[overrideActive ? threadSettings.provider! : activeChatProvider]
+  const displayProviderMeta = overrideActive ? AI_PROVIDER_META[threadSettings.provider!] : providerMeta
   const displayModelId = overrideActive ? threadSettings.model! : activeModel
-  const displayModelLabel = displayProviderMeta.models.find((m) => m.id === displayModelId)?.label ?? displayModelId ?? displayProviderMeta.shortLabel
+  const displayModelLabel = displayProviderMeta
+    ? displayProviderMeta.models.find((m) => m.id === displayModelId)?.label ?? displayModelId ?? displayProviderMeta.shortLabel
+    : null
   const cliTool = activeChatProvider === 'claude-cli'
     ? 'claude'
     : activeChatProvider === 'chatgpt-cli'
@@ -479,7 +492,7 @@ export default function AIWorkspace() {
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* ── D1: time-grouped, searchable conversation list with Archive.
             FB4: always mounted, width-animated so open/close slides smoothly. ── */}
-      {hasApiKey && (
+      {chatVisible && (
         <div
           style={{
             flexShrink: 0,
@@ -503,7 +516,7 @@ export default function AIWorkspace() {
       {/* ── Top bar: sidebar toggle + thread title + model subline (U2/D2/FB8),
             ⌘K (opens the one palette), chat settings, new chat. ── */}
       <header style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: '1px solid var(--color-border-ghost)' }}>
-        {hasApiKey && (
+        {chatVisible && (
           <button
             type="button"
             onClick={toggleSidebar}
@@ -543,7 +556,7 @@ export default function AIWorkspace() {
               {activeThreadLabel ?? 'New chat'}
             </button>
           )}
-          {hasApiKey && (
+          {hasApiKey && displayProviderMeta && (
             <button
               type="button"
               onClick={() => setModelSelectorOpen(true)}
@@ -594,7 +607,16 @@ export default function AIWorkspace() {
       {/* ── Conversation ──────────────────────────────────────────────────── */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: '28px 24px 24px', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
-          {!hasApiKey ? (
+          {providerFailed ? (
+            <div style={{ margin: 'auto 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+              <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
+                Couldn't load AI settings. {loadError}
+              </p>
+              <button type="button" onClick={() => { void refreshProvider() }} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
+                Retry
+              </button>
+            </div>
+          ) : settings && !hasApiKey ? (
             <div style={{ margin: 'auto 0' }}>
               <ConnectAI
                 variant="hero"
@@ -602,7 +624,7 @@ export default function AIWorkspace() {
                 hasSavedAccess={false}
                 onConnected={() => { void refreshProvider() }}
               />
-              {isCliProvider && cliMissing && (
+              {isCliProvider && cliMissing && providerMeta && (
                 <div style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)' }}>
                   {providerMeta.label} is selected right now, but it is not installed on this machine yet.
                 </div>
@@ -674,7 +696,7 @@ export default function AIWorkspace() {
                 </p>
               </div>
               <div style={{ width: '100%', maxWidth: 620, marginTop: 4, textAlign: 'left' }}>
-                <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} variant="starter" placeholder="Ask anything" />
+                <AICompose ref={composerRef} onSubmit={onComposerSubmit} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} variant="starter" placeholder="Ask anything" />
               </div>
               <div style={{ width: '100%', maxWidth: 620, textAlign: 'left' }}>
                 {starterPrompts.map((suggestion, index) => (
@@ -709,15 +731,15 @@ export default function AIWorkspace() {
       </div>
 
       {/* ── Docked composer ───────────────────────────────────────────────── */}
-      {hasApiKey && (hasMessages || threadLoading) && (
+      {chatVisible && !providerFailed && (hasMessages || threadLoading) && (
         <div style={{ flexShrink: 0, padding: '12px 24px 20px' }}>
           <div style={{ maxWidth: 760, margin: '0 auto' }}>
-            <AICompose ref={composerRef} onSubmit={submitMessage} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} />
+            <AICompose ref={composerRef} onSubmit={onComposerSubmit} onCancel={cancelGeneration} onPause={pauseGeneration} loading={loading} />
           </div>
         </div>
       )}
       </div>
-      {modelSelectorOpen && (
+      {modelSelectorOpen && providerMeta && displayProviderMeta && (
         <ModelSelector
           sources={modelSources}
           costs={modelCosts}
@@ -730,7 +752,7 @@ export default function AIWorkspace() {
           onClose={() => setModelSelectorOpen(false)}
         />
       )}
-      {settingsOpen && activeThreadId != null && !managedAccess && (
+      {settingsOpen && activeThreadId != null && !managedAccess && providerMeta && (
         <ThreadSettingsPanel
           threadId={activeThreadId}
           initial={threadSettings}
