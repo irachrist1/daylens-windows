@@ -26,7 +26,7 @@ function localMs(hour: number, minute = 0): number {
 
 function seedSession(
   db: Database.Database,
-  app: { bundleId: string; appName: string; canonicalAppId: string; category: string },
+  app: { bundleId: string; appName: string; canonicalAppId: string; category: string; windowTitle?: string | null },
   startMs: number,
   endMs: number,
 ): void {
@@ -34,7 +34,7 @@ function seedSession(
     INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
       category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
       capture_source, capture_version)
-    VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 'test', 1)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'test', 1)
   `).run(
     app.bundleId,
     app.appName,
@@ -42,6 +42,7 @@ function seedSession(
     endMs,
     Math.round((endMs - startMs) / 1000),
     app.category,
+    app.windowTitle ?? null,
     app.appName,
     app.canonicalAppId,
     app.bundleId,
@@ -64,7 +65,13 @@ function seedDomainDay(db: Database.Database): void {
   const dia = { bundleId: 'company.thebrowser.dia', appName: 'Dia', canonicalAppId: 'dia', category: 'browsing' }
   const course = { bundleId: 'edu.course.app', appName: 'Course', canonicalAppId: 'course', category: 'productivity' }
   const slack = { bundleId: 'com.tinyspeck.slackmacgap', appName: 'Slack', canonicalAppId: 'slack', category: 'communication' }
-  const chrome = { bundleId: 'com.google.Chrome', appName: 'Google Chrome', canonicalAppId: 'chrome', category: 'browsing' }
+  const chrome = {
+    bundleId: 'com.google.Chrome',
+    appName: 'Google Chrome',
+    canonicalAppId: 'chrome',
+    category: 'browsing',
+    windowTitle: 'Lecture - YouTube',
+  }
 
   seedSession(db, dia, localMs(9, 0), localMs(12, 43))
   seedVisit(db, {
