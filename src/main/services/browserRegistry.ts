@@ -76,11 +76,67 @@ function appBundlePath(value: string | null | undefined): string | null {
   return match?.[1] ?? (raw.toLowerCase().endsWith('.app') ? raw : null)
 }
 
+// Reading an Info.plist costs a plutil subprocess (~4ms), and the read paths
+// that ask "is this a browser?" ask it about every distinct app a person has
+// ever focused — hundreds on a real profile, re-resolved from cold on every
+// launch. The answer only changes when the bundle does, so it is remembered
+// against the Info.plist's own mtime and size: a reinstall or an update is
+// still re-read, a repeat lookup of an unchanged bundle spawns nothing.
+const plistByAppPath = new Map<string, { stamp: string; plist: Record<string, unknown> | null }>()
+const PLIST_CACHE_LIMIT = 2_000
+const MISSING_PLIST_STAMP = 'missing'
+
+let plistSpawnCount = 0
+
+/** How many times a bundle was actually inspected on disk. Test-only: the
+ *  point of the cache is that this does not grow with repeated lookups. */
+export function macBundleInspectionCountForTest(): number {
+  return plistSpawnCount
+}
+
+/** Test-only: forget every remembered bundle so a case starts from cold. */
+export function resetMacBundleInspectionCacheForTest(): void {
+  plistByAppPath.clear()
+  bundleIdentifierByAppPath.clear()
+  plistSpawnCount = 0
+}
+
+function infoPlistStamp(infoPlistPath: string): string {
+  try {
+    const stat = fs.statSync(infoPlistPath)
+    return `${stat.mtimeMs}:${stat.size}`
+  } catch {
+    return MISSING_PLIST_STAMP
+  }
+}
+
+function rememberPlist(key: string, stamp: string, plist: Record<string, unknown> | null): void {
+  plistByAppPath.delete(key)
+  plistByAppPath.set(key, { stamp, plist })
+  while (plistByAppPath.size > PLIST_CACHE_LIMIT) {
+    const oldest = plistByAppPath.keys().next().value
+    if (oldest === undefined) break
+    plistByAppPath.delete(oldest)
+  }
+}
+
 function plistJson(appPath: string): Record<string, unknown> | null {
+  const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist')
+  const stamp = infoPlistStamp(infoPlistPath)
+  const key = normalizedPath(appPath)
+  const remembered = plistByAppPath.get(key)
+  if (remembered && remembered.stamp === stamp) return remembered.plist
+  // No readable Info.plist: plutil would fail the same way, so skip the spawn.
+  if (stamp === MISSING_PLIST_STAMP) {
+    rememberPlist(key, stamp, null)
+    return null
+  }
+  plistSpawnCount += 1
+  let plist: Record<string, unknown> | null = null
   try {
     const raw = execFileSync(
       'plutil',
-      ['-convert', 'json', '-o', '-', path.join(appPath, 'Contents', 'Info.plist')],
+      ['-convert', 'json', '-o', '-', infoPlistPath],
       {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -88,10 +144,12 @@ function plistJson(appPath: string): Record<string, unknown> | null {
       },
     )
     const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    plist = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
   } catch {
-    return null
+    plist = null
   }
+  rememberPlist(key, stamp, plist)
+  return plist
 }
 
 function plistString(plist: Record<string, unknown>, key: string): string | null {
