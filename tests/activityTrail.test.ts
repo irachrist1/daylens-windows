@@ -8,7 +8,9 @@ import { createProductionTestDatabase } from './support/testDatabase.ts'
 import {
   aggregateToolsConsulted,
   collapseTrail,
+  formatWorkedDuration,
   liveTrailRows,
+  shortToolChip,
   statusForTool,
   stepsFromToolTrace,
   summarizeAgentTurn,
@@ -227,14 +229,15 @@ test('export_week_excel builds a file — it is consulted but not counted as a s
     ],
     fileDisclosures: [],
     citations: [],
+    durationMs: 12_000,
   })
   assert.equal(summary?.sourceCount, 1)
-  assert.equal(summary?.label, 'Used 1 source')
+  assert.equal(summary?.label, 'Worked for 12s')
   // Still listed among tools consulted, so the inspector shows the call.
   assert.deepEqual(summary?.toolsConsulted.map((t) => t.tool), ['get_week_summary', 'export_week_excel'])
 })
 
-test('the settle summary reads "Used N sources · M files" and counts match the inspector aggregation', () => {
+test('the settle summary is a collapsed Worked-for line and counts match the inspector aggregation', () => {
   const toolTrace = [
     { tool: 'get_day_overview', input: { date: '2026-07-06' }, output: '{}' },
     { tool: 'search_history', input: { query: 'coursera' }, output: '{}' },
@@ -250,13 +253,16 @@ test('the settle summary reads "Used N sources · M files" and counts match the 
       { path: '/home/u/roadmap.md' },
     ],
     citations: [],
+    durationMs: 64_000,
   }
   const summary = summarizeAgentTurn(agent)
   assert.ok(summary)
   // ask_user interacts with the person; it is consulted but not a source.
   assert.equal(summary.sourceCount, 4)
   assert.equal(summary.fileCount, 1)
-  assert.equal(summary.label, 'Used 4 sources · 1 file')
+  assert.equal(summary.label, 'Worked for 1m 4s')
+  assert.equal(shortToolChip('read_meeting_notes'), 'Meetings')
+  assert.equal(shortToolChip('mcp_notion_search'), 'Connected source')
 
   // Consistency with the inspector: the summary derives from the SAME
   // aggregation the inspector's tools-consulted list uses on the persisted
@@ -282,23 +288,38 @@ test('summary label degrades honestly when the turn touched less', () => {
   assert.equal(summarizeAgentTurn(null), null)
   assert.equal(summarizeAgentTurn(undefined), null)
 
-  const filesOnly = summarizeAgentTurn({ toolTrace: [], fileDisclosures: [{ path: '/a' }], citations: [] })
-  assert.equal(filesOnly?.label, 'Used 1 file')
+  const filesOnly = summarizeAgentTurn({
+    toolTrace: [],
+    fileDisclosures: [{ path: '/a' }],
+    citations: [],
+    durationMs: 900,
+  })
+  assert.equal(filesOnly?.label, 'Worked for 1s')
 
   const oneSource = summarizeAgentTurn({
     toolTrace: [{ tool: 'get_week_summary', input: {}, output: '{}' }],
     fileDisclosures: [],
     citations: [],
   })
-  assert.equal(oneSource?.label, 'Used 1 source')
+  assert.equal(oneSource?.label, 'Worked')
 
   const packetOnly = summarizeAgentTurn({
     toolTrace: [],
     fileDisclosures: [],
     citations: [{ marker: 1, identity: 'block:1', kind: 'day_fact', statement: 'x' }],
+    durationMs: 2_400,
   })
-  assert.equal(packetOnly?.label, 'Answered from your day record')
+  assert.equal(packetOnly?.label, 'Worked for 2s')
 
   const nothing = summarizeAgentTurn({ toolTrace: [], fileDisclosures: [], citations: [] })
   assert.equal(nothing?.label, '')
+})
+
+test('formatWorkedDuration matches the Codex Xm Ys line', () => {
+  assert.equal(formatWorkedDuration(400), '1s')
+  assert.equal(formatWorkedDuration(12_000), '12s')
+  assert.equal(formatWorkedDuration(60_000), '1m')
+  assert.equal(formatWorkedDuration(65_000), '1m 5s')
+  assert.equal(formatWorkedDuration(3_600_000), '1h')
+  assert.equal(formatWorkedDuration(3_720_000), '1h 2m')
 })

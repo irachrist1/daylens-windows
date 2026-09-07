@@ -1,19 +1,21 @@
 // The live activity trail on AI answers: while a turn runs, a calm stack of
 // human one-liners under the question — one in-progress row, finished rows
 // check-marked, failures stated plainly. When the turn settles, completed
-// answers show a quiet summary ("Used 4 sources · 1 file") next to the
-// existing "What the AI saw" pill; both open the context-packet inspector.
-// Persisted answers reconstruct the same trail from their tool trace.
+// answers collapse to a Codex-style "Worked for Xm Ys" line that expands on
+// demand into the same narration plus inline tool-status chips. The sources
+// inspector opens from a Sources chip, not a file-chip wall.
 //
 // Labels arrive pre-built from the whitelist in shared/agentTrail — this file
 // renders them and must never reach into tool inputs or outputs itself.
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { AIAgentStep } from '@shared/types'
 import {
   collapseTrail,
   liveTrailRows,
+  shortToolChip,
   stepsFromToolTrace,
   summarizeAgentTurn,
+  formatWorkedDuration,
 } from '@shared/agentTrail'
 import { getStreamingStatus, getStreamingSteps, subscribeStreaming } from './streamingStore'
 import type { ThreadMessage } from './types'
@@ -87,6 +89,17 @@ function TrailStack({ steps, reducedMotion }: { steps: AIAgentStep[]; reducedMot
   )
 }
 
+function useElapsedMs(active: boolean): number {
+  const startedAtRef = useRef(Date.now())
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [active])
+  return Math.max(0, now - startedAtRef.current)
+}
+
 /**
  * The trail under an in-flight answer. Subscribes to the streaming store per
  * message (same pattern as <StreamingMessage>), so step arrivals re-render
@@ -104,9 +117,13 @@ export function LiveActivityTrail({ messageId, reducedMotion }: { messageId: str
     () => '',
   )
   const rows = liveTrailRows(steps, status)
+  const elapsedMs = useElapsedMs(rows.length > 0)
   if (rows.length === 0) return null
   return (
-    <div style={{ marginBottom: 10 }}>
+    <div style={{ marginBottom: 10, display: 'grid', gap: 6 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-tertiary)' }}>
+        {elapsedMs >= 1000 ? `Working · ${formatWorkedDuration(elapsedMs)}` : 'Working…'}
+      </div>
       <TrailStack steps={rows} reducedMotion={reducedMotion} />
     </div>
   )
@@ -143,10 +160,9 @@ const pillStyle: React.CSSProperties = {
 }
 
 /**
- * The settled trail on a completed answer: a summary pill whose counts come
- * from the same aggregation the inspector uses, an expandable static trail
- * reconstructed from the persisted tool trace, and the existing
- * "What the AI saw" pill. Renders nothing for non-agent answers.
+ * The settled trail on a completed answer: a collapsed "Worked for…" line
+ * that expands into one-line tool narration and inline tool-status chips.
+ * Renders nothing for a greeting that did no visible work.
  */
 export function SettledActivityTrail({
   message,
@@ -164,39 +180,33 @@ export function SettledActivityTrail({
   if (!agent) return null
   const steps = stepsFromToolTrace(agent.toolTrace)
   const summary = summarizeAgentTurn(agent)
-  if (steps.length === 0 && !summary?.label && !canInspect) return null
+  const worked = summary?.label ?? ''
+  const hasVisibleWork = steps.length > 0 || (summary?.citationCount ?? 0) > 0
+  if (!hasVisibleWork) return null
+  const chips = summary?.toolsConsulted ?? []
   return (
     <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-        {steps.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowSteps((value) => !value)}
-            aria-expanded={showSteps}
-            title={showSteps ? 'Hide the steps this answer took' : 'Show the steps this answer took'}
-            style={{ ...pillStyle, cursor: 'pointer' }}
-          >
-            {showSteps ? '▾' : '▸'} {steps.length} step{steps.length === 1 ? '' : 's'}
-          </button>
-        )}
-        {summary?.label && (
-          <button
-            type="button"
-            onClick={canInspect ? onInspect : () => setShowSteps((value) => !value)}
-            title={canInspect ? 'Open everything the AI was shown for this answer' : 'Show the steps this answer took'}
-            style={{ ...pillStyle, color: 'var(--color-text-secondary)', cursor: 'pointer' }}
-          >
-            {summary.label}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => setShowSteps((value) => !value)}
+          aria-expanded={showSteps}
+          title={showSteps ? 'Hide the steps this answer took' : 'Show the steps this answer took'}
+          style={{ ...pillStyle, cursor: 'pointer', color: 'var(--color-text-secondary)' }}
+        >
+          {showSteps ? '▾' : '▸'} {worked || 'Worked'}
+        </button>
+        {showSteps && chips.map((consulted) => (
+          <span key={consulted.tool} style={pillStyle}>{shortToolChip(consulted.tool)}</span>
+        ))}
         {canInspect && (
           <button
             type="button"
             onClick={onInspect}
-            title="Open the recorded context packet for this answer"
+            title="Open the recorded sources for this answer"
             style={{ ...pillStyle, cursor: 'pointer' }}
           >
-            What the AI saw
+            Sources
           </button>
         )}
       </div>

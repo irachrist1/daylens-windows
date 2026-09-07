@@ -3465,7 +3465,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             <SuppliedMemorySection reloadToken={suppliedReloadToken} />
 
             {/* DEV-183: the recorded-context browser — every AI exchange's
-                packet, openable into the read-only "What the AI saw" view. */}
+                packet, openable into the read-only sources inspector. */}
             <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
               <ContextPacketSection />
             </div>
