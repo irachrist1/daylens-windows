@@ -1,8 +1,8 @@
 // AI service — runs in the main process only and routes to the selected provider.
 // Renderer communicates via IPC (never direct SDK access)
-import Anthropic from '@anthropic-ai/sdk'
-import OpenAI from 'openai'
-import { GoogleGenAI, type Content as GoogleContent } from '@google/genai'
+import { createRequire } from 'node:module'
+import type OpenAI from 'openai'
+import type { Content as GoogleContent } from '@google/genai'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -158,6 +158,30 @@ import { getAmbientAbortSignal } from '../lib/aiCancellation'
 import { app } from 'electron'
 import type { LanguageModel } from 'ai'
 import { assertRealDayExternalAccessAllowed } from '../lib/realDayHarness'
+
+
+
+const nodeRequire = createRequire(__filename)
+
+// Each provider SDK costs 30-50ms of require, and a launch that never asks a
+// question needs none of them. Loaded on the first request to that provider.
+let anthropicSdk: typeof import('@anthropic-ai/sdk').default | null = null
+function AnthropicClient(): typeof import('@anthropic-ai/sdk').default {
+  anthropicSdk ??= (nodeRequire('@anthropic-ai/sdk') as { default: typeof import('@anthropic-ai/sdk').default }).default
+  return anthropicSdk
+}
+
+let openAiSdk: typeof import('openai').default | null = null
+function OpenAIClient(): typeof import('openai').default {
+  openAiSdk ??= (nodeRequire('openai') as { default: typeof import('openai').default }).default
+  return openAiSdk
+}
+
+let googleSdk: typeof import('@google/genai').GoogleGenAI | null = null
+function GoogleGenAIClient(): typeof import('@google/genai').GoogleGenAI {
+  googleSdk ??= (nodeRequire('@google/genai') as typeof import('@google/genai')).GoogleGenAI
+  return googleSdk
+}
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 // Block labeling now runs on the user's chosen model (e.g. Sonnet), not a fixed
@@ -855,7 +879,7 @@ async function sendWithAnthropic(
   userMessage: string,
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
-  const client = new Anthropic({ apiKey: config.apiKey ?? '', maxRetries: 4 })
+  const client = new (AnthropicClient())({ apiKey: config.apiKey ?? '', maxRetries: 4 })
   const promptInput = buildAnthropicPromptInput(systemPrompt, prior, userMessage, options)
   const stream = client.messages.stream({
     model: config.model,
@@ -890,7 +914,7 @@ const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 // optional but recommended by OpenRouter.
 function createOpenAICompatibleClient(apiKey: string, provider: AIProviderMode): OpenAI {
   if (provider === 'openrouter') {
-    return new OpenAI({
+    return new (OpenAIClient())({
       apiKey,
       baseURL: OPENROUTER_BASE_URL,
       defaultHeaders: {
@@ -899,7 +923,7 @@ function createOpenAICompatibleClient(apiKey: string, provider: AIProviderMode):
       },
     })
   }
-  return new OpenAI({ apiKey })
+  return new (OpenAIClient())({ apiKey })
 }
 
 // OpenRouter only implements /chat/completions (not OpenAI's Responses API), so
@@ -954,7 +978,7 @@ async function sendWithManagedProxy(
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
   if (!config.baseUrl || !config.apiKey) throw new Error('Daylens managed AI session is unavailable.')
-  const client = new OpenAI({
+  const client = new (OpenAIClient())({
     apiKey: config.apiKey,
     baseURL: config.baseUrl,
     defaultHeaders: { 'X-Daylens-Feature': config.feature ?? 'ai' },
@@ -1013,7 +1037,7 @@ async function sendWithOpenAI(
   userMessage: string,
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
-  const client = new OpenAI({ apiKey: config.apiKey ?? '' })
+  const client = new (OpenAIClient())({ apiKey: config.apiKey ?? '' })
   const responseStream = await withProviderRateLimit(
     'openai',
     () => client.responses.create({
@@ -1071,7 +1095,7 @@ async function sendWithGoogle(
   userMessage: string,
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
-  const ai = new GoogleGenAI({
+  const ai = new (GoogleGenAIClient())({
     apiKey: config.apiKey ?? '',
     httpOptions: {
       headers: {

@@ -2,12 +2,27 @@
 // same corrected day payloads the Timeline renders — the model never types the
 // numbers. Sheet 1 is the per-day week summary with a totals row; sheet 2 is
 // the by-app rollup whose total equals sheet 1's week total by construction.
-import ExcelJS from 'exceljs'
+import { createRequire } from 'node:module'
+import type ExcelJS from 'exceljs'
 import type Database from 'better-sqlite3'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import type { DayTimelinePayload, TimelineGapSegment } from '@shared/types'
 import { localDateString } from '../lib/localDate'
 import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
+
+
+
+const nodeRequire = createRequire(__filename)
+
+// exceljs is the heaviest module in the main process (~170ms of require) and
+// it is only ever needed when someone exports a workbook. Load it then.
+let excelJsModule: typeof import('exceljs') | null = null
+function excelJs(): typeof import('exceljs') {
+  if (!excelJsModule) {
+    excelJsModule = nodeRequire('exceljs') as typeof import('exceljs')
+  }
+  return excelJsModule
+}
 
 export interface WeeklyExportDay {
   date: string
@@ -201,7 +216,7 @@ function stripeRow(row: ExcelJS.Row, index: number): void {
 }
 
 export async function writeWeeklyWorkbook(data: WeeklyExportData, filePath: string): Promise<void> {
-  const workbook = new ExcelJS.Workbook()
+  const workbook = new (excelJs().Workbook)()
 
   const summary = workbook.addWorksheet('Week summary')
   summary.columns = [

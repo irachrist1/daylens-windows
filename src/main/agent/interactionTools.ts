@@ -3,12 +3,12 @@
 // bench's scripted answerer) and real downloadable file artifacts (CSV, Excel,
 // Markdown). Both take injected handlers so the IPC path and the terminal
 // bench share this exact code.
+import { createRequire } from 'node:module'
 import { tool } from 'ai'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import ExcelJS from 'exceljs'
 import type Database from 'better-sqlite3'
 import type { AIMessageArtifact } from '@shared/types'
 import {
@@ -16,6 +16,20 @@ import {
   weeklyExportFilename,
   writeWeeklyWorkbook,
 } from '../services/weeklyExport'
+
+
+
+const nodeRequire = createRequire(__filename)
+
+// exceljs is the heaviest module in the main process (~170ms of require) and
+// it is only ever needed when someone exports a workbook. Load it then.
+let excelJsModule: typeof import('exceljs') | null = null
+function excelJs(): typeof import('exceljs') {
+  if (!excelJsModule) {
+    excelJsModule = nodeRequire('exceljs') as typeof import('exceljs')
+  }
+  return excelJsModule
+}
 
 export interface AgentQuestion {
   question: string
@@ -49,7 +63,7 @@ function safeFilename(title: string, extension: string): string {
 }
 
 async function writeXlsx(filePath: string, sheetName: string, columns: string[], rows: Array<Array<string | number | null>>): Promise<void> {
-  const workbook = new ExcelJS.Workbook()
+  const workbook = new (excelJs().Workbook)()
   const sheet = workbook.addWorksheet(sheetName.slice(0, 31) || 'Export')
   sheet.columns = columns.map((header) => ({ header, key: header, width: Math.min(60, Math.max(12, header.length + 2)) }))
   sheet.getRow(1).font = { bold: true }
