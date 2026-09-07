@@ -13,6 +13,7 @@ import {
   getCorrectedWebsiteSummariesForRange,
 } from '../src/main/services/activityFacts.ts'
 import { ownedDayBounds } from '../src/main/lib/dayOwnership.ts'
+import { localDayBounds } from '../src/main/lib/localDate.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 import {
   detectDeterministicFactRequests,
@@ -271,9 +272,9 @@ test('sealed cross-midnight site time follows owned-day bounds, not calendar mid
   db.prepare(`
     INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec,
       browser_bundle_id, canonical_browser_id, source)
-    VALUES ('example.com', 'Example Domain', 'https://example.com/', ?, ?, 30,
+    VALUES ('example.com', 'Example Domain', 'https://example.com/', ?, ?, ?,
       'com.google.Chrome', 'chrome', 'chrome_history')
-  `).run(sittingStart, sittingStart * 1000)
+  `).run(sittingStart, sittingStart * 1000, sittingSeconds)
   db.prepare(`
     INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
       category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
@@ -289,6 +290,13 @@ test('sealed cross-midnight site time follows owned-day bounds, not calendar mid
   assert.ok(june20Site, 'Timeline must keep the sealed sitting on June 20')
   assert.equal(june20Site.totalSeconds, sittingSeconds)
   assert.equal(june21Site?.totalSeconds ?? 0, 0, 'Timeline June 21 must not take the overnight site')
+  const [calendarFrom, calendarTo] = localDayBounds('2026-06-20')
+  const calendarJune20 = getCorrectedWebsiteSummariesForRange(db, calendarFrom, calendarTo)
+    .find((site) => site.domain.replace(/^www\./, '') === 'example.com')
+  assert.ok(
+    (calendarJune20?.totalSeconds ?? 0) < sittingSeconds,
+    'calendar midnight would split the sitting; owned-day bounds must not',
+  )
 
   const june20Facts = deterministicFactsForQuestion(
     db,
