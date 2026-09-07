@@ -116,7 +116,7 @@ const TOOL_STATUS: Record<string, string> = {
   getDaySummary: 'Reading your day',
   getWeekSummary: 'Reading your week',
   getDayComparison: 'Comparing your days',
-  getAppUsage: 'Checking time in your apps',
+  getAppUsage: 'Checking time in your apps and sites',
   searchSessions: 'Searching your timeline',
   searchArtifacts: 'Looking through files and pages',
   searchFileMentions: 'Looking for that file',

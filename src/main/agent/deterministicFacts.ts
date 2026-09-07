@@ -26,6 +26,8 @@ import { queryCorrectedActivityFactsForDay } from '../core/query/activityFactsQu
 import { aggregateAppSummaries, getCorrectedWebsiteSummariesForRange } from '../services/activityFacts'
 import { getStoredCanonicalAppLinks } from '../core/inference/appIdentityRegistry'
 import { ownedDayBounds } from '../lib/dayOwnership'
+import { namedUsageSubject, siteMatchesLookup } from '../lib/usageLookup'
+import { websiteDisplayLabel } from '../lib/appIdentity'
 import { renderDuration, scanDurations } from './factClaims'
 
 /** Widest span the enforcer will compute over. Matches the page-visit tool's
@@ -41,6 +43,7 @@ export type DeterministicFactKind =
   | 'total_tracked_time'
   | 'focus_time'
   | 'app_total_time'
+  | 'site_total_time'
   | 'app_count'
   | 'site_count'
 
@@ -71,6 +74,8 @@ export interface DeterministicFactRequest {
   dates: string[]
   /** Set only for app_total_time. */
   appNeedle?: string
+  /** Set only for site_total_time. */
+  siteNeedle?: string
 }
 
 // ─── Detection ───────────────────────────────────────────────────────────────
@@ -104,6 +109,7 @@ export function detectDeterministicFactRequests(
   question: string,
   timeRange: Pick<ResolvedContextTimeRange, 'dates'>,
   appNames: readonly string[] = [],
+  siteDomains: readonly string[] = [],
 ): DeterministicFactRequest[] {
   const dates = [...new Set(timeRange.dates ?? [])].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort()
   if (dates.length === 0 || dates.length > MAX_RANGE_DAYS) return []
@@ -111,13 +117,11 @@ export function detectDeterministicFactRequests(
   const requests: DeterministicFactRequest[] = []
 
   if (asksDuration(question)) {
-    // Longest name first so "Google Chrome" wins over a bare "Chrome" entry.
-    const named = [...appNames]
-      .filter((name) => name.trim().length >= 3)
-      .sort((left, right) => right.length - left.length)
-      .find((name) => new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i').test(question))
-    if (named) {
-      requests.push({ kind: 'app_total_time', dimension: 'duration', dates, appNeedle: named })
+    const named = namedUsageSubject(question, appNames, siteDomains)
+    if (named?.kind === 'site') {
+      requests.push({ kind: 'site_total_time', dimension: 'duration', dates, siteNeedle: named.domain })
+    } else if (named?.kind === 'app') {
+      requests.push({ kind: 'app_total_time', dimension: 'duration', dates, appNeedle: named.name })
     } else if (FOCUS_SUBJECT.test(question)) {
       requests.push({ kind: 'focus_time', dimension: 'duration', dates })
     } else {
@@ -133,10 +137,6 @@ export function detectDeterministicFactRequests(
   return requests
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 // ─── Computation ─────────────────────────────────────────────────────────────
 
 interface ScopeFacts {
@@ -144,6 +144,7 @@ interface ScopeFacts {
   totalSeconds: number
   focusSeconds: number
   appSummaries: AppUsageSummary[]
+  siteSummaries: Array<{ domain: string; totalSeconds: number }>
   siteCount: number
 }
 
@@ -162,15 +163,18 @@ function readScope(db: Database.Database, dates: readonly string[], nowMs: numbe
   }
   const appSummaries = aggregateAppSummaries(sessions, getStoredCanonicalAppLinks(db))
 
-  const domains = new Set<string>()
+  const siteTotals = new Map<string, number>()
   for (const date of dates) {
     const [fromMs, toMs] = ownedDayBounds(db, date)
     for (const summary of getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)) {
-      if (summary.totalSeconds > 0) domains.add(summary.domain.toLowerCase())
+      if (summary.totalSeconds <= 0) continue
+      const domain = summary.domain.toLowerCase()
+      siteTotals.set(domain, (siteTotals.get(domain) ?? 0) + summary.totalSeconds)
     }
   }
+  const siteSummaries = [...siteTotals.entries()].map(([domain, totalSeconds]) => ({ domain, totalSeconds }))
 
-  return { sessions, totalSeconds, focusSeconds, appSummaries, siteCount: domains.size }
+  return { sessions, totalSeconds, focusSeconds, appSummaries, siteSummaries, siteCount: siteSummaries.length }
 }
 
 function scopeLabel(dates: readonly string[]): string {
@@ -235,6 +239,7 @@ export function deterministicFactsForQuestion(
     question,
     { dates },
     scope.appSummaries.map((entry) => entry.appName),
+    scope.siteSummaries.map((entry) => entry.domain),
   )
   return factsFromScope(scope, requests, dates)
 }
@@ -296,6 +301,31 @@ function factsFromScope(
           statement: summary.totalSeconds > 0
             ? `${summary.appName} totals ${renderDuration(summary.totalSeconds)} (${summary.totalSeconds} seconds) for ${label}, from the corrected activity facts the Apps view reads.`
             : `No ${summary.appName} time was captured for ${label} (0 seconds), from the corrected activity facts the Apps view reads.`,
+        })
+        break
+      }
+      case 'site_total_time': {
+        const needle = request.siteNeedle ?? ''
+        const matching = scope.siteSummaries.filter((entry) => siteMatchesLookup(entry.domain, needle))
+        const totalSeconds = matching.reduce((sum, entry) => sum + entry.totalSeconds, 0)
+        const shortest = matching.reduce<typeof matching[number] | null>(
+          (best, entry) => !best || entry.domain.length < best.domain.length ? entry : best,
+          null,
+        )
+        if (!shortest) break
+        const subjectDomain = shortest.domain
+        const siteLabel = websiteDisplayLabel(subjectDomain)
+        facts.push({
+          id: `site_total_time:${scopeId}:${subjectDomain}`,
+          kind: request.kind,
+          dimension: 'duration',
+          value: totalSeconds,
+          rendered: renderDuration(totalSeconds),
+          subject: `${siteLabel} on ${label}`,
+          identity: `facts:site:${scopeId}:${subjectDomain}`,
+          statement: totalSeconds > 0
+            ? `${siteLabel} totals ${renderDuration(totalSeconds)} (${totalSeconds} seconds) for ${label}, from the corrected website facts the Apps view reads.`
+            : `No ${siteLabel} time was captured for ${label} (0 seconds), from the corrected website facts the Apps view reads.`,
         })
         break
       }

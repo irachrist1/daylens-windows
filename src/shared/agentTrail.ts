@@ -47,7 +47,7 @@ export function statusForTool(tool: string, input: unknown): string {
     case 'get_day_overview': return `Reading ${boundedParam(params.date) || 'the day'}`
     case 'search_history': return `Searching for "${boundedParam(params.query)}"`
     case 'list_page_visits': return 'Going through your page visits'
-    case 'get_app_usage': return `Checking time in ${boundedParam(params.appName) || 'that app'}`
+    case 'get_app_usage': return `Checking time on ${boundedParam(params.appName) || 'that name'}`
     case 'get_week_summary': return 'Reading the week'
     case 'get_calendar_events': return `Checking your calendar for ${boundedParam(params.date) || 'the day'}`
     case 'get_git_activity': return `Checking your commits for ${boundedParam(params.date) || 'the day'}`
