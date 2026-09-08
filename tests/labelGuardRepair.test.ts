@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3'
 import { createProductionTestDatabase } from './support/testDatabase.ts'
 import { WORK_NAME_GUARD_VERSION } from '../src/shared/workNameGuards.ts'
 import {
+  LABEL_GUARD_SCAN_CHUNK,
   labelGuardMaintenanceKey,
   runLabelGuardRepair,
   runLabelGuardRepairIfNeeded,
@@ -609,4 +610,67 @@ test('an artifact-sourced tool-surface label_current is healed without an AI row
   )
   assert.notEqual(healed.label_source, 'ai')
   db.close()
+})
+
+// The scan runs on the thread that draws the app. It used to yield once per
+// hundred blocks, on the belief that a block cost "a few milliseconds" — on a
+// real database each one costs 3-9ms, so a slice was 300-900ms and the window
+// could not paint through it. The slice is bounded by time now, so it holds
+// the thread for a frame whatever a block turns out to cost.
+test('the scan yields on a time budget, not once per hundred blocks', async () => {
+  const db = createProductionTestDatabase()
+  try {
+    // More than one query page, so a count-based yield and a time-based yield
+    // are distinguishable.
+    const blocks = LABEL_GUARD_SCAN_CHUNK * 2 + 5
+    for (let index = 0; index < blocks; index++) {
+      seedBlock(db, {
+        id: `blk_slice_${index}`,
+        label: 'Refactoring the timeline coalescer',
+        labelSource: 'ai',
+        startHour: 6 + (index % 12),
+        endHour: 7 + (index % 12),
+      })
+    }
+
+    // A zero budget makes every block its own slice: the loop must yield
+    // between them rather than run the page straight through.
+    let turns = 0
+    const counting = setInterval(() => { turns += 1 }, 0)
+    try {
+      const result = await runLabelGuardRepair(db, { sliceMs: 0 })
+      assert.equal(result.status, 'ran')
+      assert.equal(result.scannedBlocks, blocks)
+    } finally {
+      clearInterval(counting)
+    }
+
+    assert.ok(
+      turns > 2,
+      `the loop must turn while scanning ${blocks} blocks; it turned ${turns} times`,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('a whole scan still completes and stamps its guard version', async () => {
+  const db = createProductionTestDatabase()
+  try {
+    for (let index = 0; index < LABEL_GUARD_SCAN_CHUNK + 3; index++) {
+      seedBlock(db, {
+        id: `blk_complete_${index}`,
+        label: 'Refactoring the timeline coalescer',
+        labelSource: 'ai',
+        startHour: 6 + (index % 12),
+        endHour: 7 + (index % 12),
+      })
+    }
+    const result = await runLabelGuardRepair(db, { sliceMs: 0 })
+    assert.equal(result.status, 'ran')
+    assert.equal(result.scannedBlocks, LABEL_GUARD_SCAN_CHUNK + 3)
+    assert.equal(hasMaintenanceRun(db, labelGuardMaintenanceKey()), true)
+  } finally {
+    db.close()
+  }
 })

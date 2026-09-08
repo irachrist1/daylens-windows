@@ -77,11 +77,18 @@ import {
   storedLabelViolatesWorkNameGuards,
 } from './workBlocks'
 
-// Blocks examined per scan chunk. Each scanned block now runs the category
-// recomputation (a range facts query + visit reconciliation over its own
-// span), so a chunk costs a few milliseconds per block; 100 keeps each slice
-// comfortably under the frame budget before yielding.
+// Rows fetched per scan query. This bounds the SQL, not the slice: each
+// scanned block runs the category recomputation (a range facts query and a
+// visit reconciliation over its own span), which costs 3-9ms on a real
+// database, so a hundred of them in one synchronous run is most of a second.
 export const LABEL_GUARD_SCAN_CHUNK = 100
+
+// How long the scan may hold the main thread before yielding. The work is
+// maintenance and the thread it runs on is the one drawing the app, so the
+// slice is bounded by time rather than by a count: whatever a block costs
+// today or after the next change to the recomputation, a slice stays inside
+// a frame.
+export const LABEL_GUARD_SLICE_MS = 8
 
 export function labelGuardMaintenanceKey(version = WORK_NAME_GUARD_VERSION): string {
   return `work_name_guard_repair_v${version}`
@@ -287,7 +294,7 @@ let inFlight: Promise<LabelGuardRepairResult> | null = null
  */
 export async function runLabelGuardRepair(
   db: Database.Database,
-  options: { chunkSize?: number } = {},
+  options: { chunkSize?: number; sliceMs?: number } = {},
 ): Promise<LabelGuardRepairResult> {
   const chunkSize = options.chunkSize ?? LABEL_GUARD_SCAN_CHUNK
   const result: LabelGuardRepairResult = {
@@ -309,6 +316,8 @@ export async function runLabelGuardRepair(
   // Phase 1 — scan: find affected blocks, grouped by date.
   const affectedByDate = new Map<string, AffectedBlock[]>()
   let cursor = 0
+  const sliceMs = options.sliceMs ?? LABEL_GUARD_SLICE_MS
+  let sliceStartedAt = Date.now()
   for (;;) {
     if (!db.open) return { ...result, status: 'interrupted' }
     const rows = scanChunk(db, cursor, chunkSize)
@@ -317,6 +326,11 @@ export async function runLabelGuardRepair(
     result.scannedBlocks += rows.length
 
     for (const row of rows) {
+      if (Date.now() - sliceStartedAt >= sliceMs) {
+        await yieldToEventLoop()
+        if (!db.open) return { ...result, status: 'interrupted' }
+        sliceStartedAt = Date.now()
+      }
       // Never touch a user-named block, whatever its stored label says.
       if (row.label_source === 'user' || row.has_user_label) continue
 
@@ -369,7 +383,6 @@ export async function runLabelGuardRepair(
       if (existing) existing.push(affected)
       else affectedByDate.set(row.date, [affected])
     }
-    await yieldToEventLoop()
   }
 
   // Phase 2 — heal, one date per transaction, yielding between dates.

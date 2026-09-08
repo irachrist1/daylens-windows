@@ -8,6 +8,7 @@ import { runMigrations } from '../db/migrations'
 import { ensureAIThreadSchema } from '../db/aiThreadSchema'
 import { repairStoredAppIdentityObservations } from '../core/inference/appIdentityRegistry'
 import { repairStoredIdentityColumns, syncDerivedStateMetadata } from '../core/projections/metadata'
+import { scheduleStartupMaintenance } from '../lib/startupMaintenanceGate'
 
 let _db: Database.Database | null = null
 
@@ -107,8 +108,12 @@ export function initDb(): void {
     // Synchronize versioned derived-state metadata and repair older local DBs
     // whose schema drifted before the formal metadata layer existed.
     syncDerivedStateMetadata(_db)
-    // Deferred to a background macrotask to keep cold launch instantaneous (F1 & F2 optimization)
-    setImmediate(() => {
+    // These heal historical drift. Nothing the first paint reads depends on
+    // them, and on a large database they cost seconds — so a host that owns a
+    // window holds them until it has one (see holdStartupMaintenance). With no
+    // holder — tests, workers, the CLI — they run on the next macrotask as
+    // before.
+    scheduleStartupMaintenance(() => {
       try {
         if (_db) {
           repairStoredIdentityColumns(_db)

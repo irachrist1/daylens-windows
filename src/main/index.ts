@@ -132,6 +132,7 @@ import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
 import { initDb, closeDb, getDb } from './services/database'
+import { holdStartupMaintenance } from './lib/startupMaintenanceGate'
 import { startAIUsageRetentionSchedule, stopAIUsageRetentionSchedule } from './services/aiUsageRetention'
 import { recoverInterruptedTurns } from './services/agentTurnState'
 import { runPendingDerivedStateReset } from './core/projections/metadata'
@@ -265,7 +266,12 @@ declare const MAIN_WINDOW_VITE_NAME: string
 let mainWindow: BrowserWindow | null = null
 // Set to true once the user explicitly quits via tray menu
 let isQuitting = false
+/** Longest startup maintenance waits for a window before running anyway. */
+const STARTUP_MAINTENANCE_MAX_WAIT_MS = 15_000
+
 let databaseReady = false
+/** Releases the startup-maintenance gate once the window is on screen. */
+let releaseStartupMaintenance: (() => void) | null = null
 let deferredIntegrationStartup: ReturnType<typeof setTimeout> | null = null
 let backgroundServicesStarted = false
 let captureAdapterStartupTimer: ReturnType<typeof setTimeout> | null = null
@@ -1333,6 +1339,10 @@ app.whenReady()
       app.quit()
       return
     }
+    // Held until the window is up: the repairs behind this gate scan every
+    // stored block, and on the launch they actually run that used to keep the
+    // window off screen for seconds.
+    releaseStartupMaintenance = holdStartupMaintenance()
     initDb()
     databaseReady = true
     logStartupTiming('database ready')
@@ -1394,6 +1404,18 @@ app.whenReady()
     mainWindow = createWindow()
     logStartupTiming('window created')
     const startupWindow = mainWindow
+    // Startup maintenance waits for the window and then runs whatever happens
+    // next. Released on the first of: the window being paintable, the renderer
+    // finishing its load, or a timeout — so a launch where one of those never
+    // arrives still gets its maintenance instead of postponing it forever.
+    const releaseAfterFirstPaint = (): void => {
+      const release = releaseStartupMaintenance
+      releaseStartupMaintenance = null
+      release?.()
+    }
+    startupWindow.once('ready-to-show', releaseAfterFirstPaint)
+    startupWindow.webContents.once('did-finish-load', releaseAfterFirstPaint)
+    setTimeout(releaseAfterFirstPaint, STARTUP_MAINTENANCE_MAX_WAIT_MS).unref?.()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
     setSpendAlertWindow(mainWindow)
