@@ -1404,17 +1404,19 @@ app.whenReady()
     mainWindow = createWindow()
     logStartupTiming('window created')
     const startupWindow = mainWindow
-    // Startup maintenance waits for the window and then runs whatever happens
-    // next. Released on the first of: the window being paintable, the renderer
-    // finishing its load, or a timeout — so a launch where one of those never
-    // arrives still gets its maintenance instead of postponing it forever.
+    // Startup maintenance waits for the window to be paintable and then runs
+    // behind it. `ready-to-show` and not `did-finish-load`: the window is
+    // created hidden, the load can finish before it is paintable, and starting
+    // synchronous repairs in that gap delays the first visible frame — the
+    // thing this gate exists to protect. The timeout is the recovery path for
+    // a launch where `ready-to-show` never arrives, so maintenance is deferred
+    // and never lost.
     const releaseAfterFirstPaint = (): void => {
       const release = releaseStartupMaintenance
       releaseStartupMaintenance = null
       release?.()
     }
     startupWindow.once('ready-to-show', releaseAfterFirstPaint)
-    startupWindow.webContents.once('did-finish-load', releaseAfterFirstPaint)
     setTimeout(releaseAfterFirstPaint, STARTUP_MAINTENANCE_MAX_WAIT_MS).unref?.()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
